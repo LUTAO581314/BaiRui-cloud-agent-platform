@@ -45,8 +45,24 @@ export function createPlatformServer(config = loadRegistryConfig(), storagePromi
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/server-acceptance") {
+        if (!isAuthorized(request.headers, config)) {
+          jsonResponse(response, 401, { error: "unauthorized" });
+          return;
+        }
+        const payload = await readJson(request);
+        const result = await storage.recordAcceptanceReport(payload.report ?? payload);
+        jsonResponse(response, result.status, result.accepted ? { accepted: true, report: result.report } : { accepted: false, errors: result.errors });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/servers") {
         jsonResponse(response, 200, { servers: await storage.listServers() });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/server-acceptance") {
+        jsonResponse(response, 200, { reports: await storage.listAcceptanceReports({ serverId: url.searchParams.get("server_id") ?? "" }) });
         return;
       }
 

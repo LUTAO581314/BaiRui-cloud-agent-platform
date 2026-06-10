@@ -1,6 +1,6 @@
 import { validateHeartbeat } from "../../packages/server-protocol/index.mjs";
-import { buildHeartbeatUpsertSql, buildMigrationSql, heartbeatSqlParams } from "../../packages/db/schema.mjs";
-import { summarizeServer } from "./server-registry.mjs";
+import { acceptanceSqlParams, buildAcceptanceInsertSql, buildHeartbeatUpsertSql, buildMigrationSql, heartbeatSqlParams } from "../../packages/db/schema.mjs";
+import { summarizeAcceptanceReport, summarizeServer, validateAcceptanceReport } from "./server-registry.mjs";
 
 export async function createPgPool(databaseUrl) {
   const { Pool } = await import("pg");
@@ -46,6 +46,42 @@ export function createPostgresRegistryStorage(pool) {
         from customer_servers
         order by last_seen_at desc nulls last
       `);
+      return result.rows;
+    },
+    async recordAcceptanceReport(report, options = {}) {
+      const validation = validateAcceptanceReport(report);
+      if (!validation.valid) {
+        return { accepted: false, status: 400, errors: validation.errors };
+      }
+
+      const receivedAt = options.receivedAt ?? new Date().toISOString();
+      await pool.query(buildAcceptanceInsertSql(), acceptanceSqlParams(report, receivedAt));
+      return {
+        accepted: true,
+        status: 202,
+        report: summarizeAcceptanceReport(report, receivedAt)
+      };
+    },
+    async listAcceptanceReports(options = {}) {
+      const params = [];
+      const where = options.serverId ? "where server_id = $1" : "";
+      if (options.serverId) {
+        params.push(options.serverId);
+      }
+      const result = await pool.query(`
+        select
+          server_id,
+          organization_id,
+          license_id,
+          accepted,
+          check_count,
+          failed_check_count,
+          generated_at,
+          received_at
+        from server_acceptance_reports
+        ${where}
+        order by received_at desc
+      `, params);
       return result.rows;
     }
   };

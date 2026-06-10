@@ -15,7 +15,8 @@ export function loadRegistryConfig(env = process.env) {
 function emptyRegistry() {
   return {
     servers: {},
-    heartbeats: []
+    heartbeats: [],
+    acceptance_reports: []
   };
 }
 
@@ -81,6 +82,93 @@ export async function listServers(options = {}) {
   return Object.values(registry.servers).sort((left, right) => right.last_seen_at.localeCompare(left.last_seen_at));
 }
 
+function normalizeAcceptanceCheck(check) {
+  if (!check || typeof check !== "object" || Array.isArray(check)) {
+    return null;
+  }
+  return {
+    name: typeof check.name === "string" ? check.name : "",
+    passed: Boolean(check.passed),
+    details: check.details && typeof check.details === "object" && !Array.isArray(check.details) ? check.details : {},
+    error: typeof check.error === "string" ? check.error : ""
+  };
+}
+
+export function validateAcceptanceReport(report) {
+  const errors = [];
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    return { valid: false, errors: ["acceptance report must be an object"] };
+  }
+  for (const field of ["server_id", "organization_id", "license_id", "generated_at"]) {
+    if (typeof report[field] !== "string" || report[field].trim() === "") {
+      errors.push(`${field} is required`);
+    }
+  }
+  if (typeof report.accepted !== "boolean") {
+    errors.push("accepted must be a boolean");
+  }
+  if (!Array.isArray(report.checks) || report.checks.length === 0) {
+    errors.push("checks must be a non-empty array");
+  } else {
+    for (const [index, check] of report.checks.entries()) {
+      const normalized = normalizeAcceptanceCheck(check);
+      if (!normalized || !normalized.name) {
+        errors.push(`checks[${index}].name is required`);
+      }
+      if (!check || typeof check.passed !== "boolean") {
+        errors.push(`checks[${index}].passed must be a boolean`);
+      }
+    }
+  }
+  if (Number.isNaN(Date.parse(report.generated_at))) {
+    errors.push("generated_at must be an ISO timestamp");
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export function summarizeAcceptanceReport(report, receivedAt) {
+  return {
+    server_id: report.server_id,
+    organization_id: report.organization_id,
+    license_id: report.license_id,
+    accepted: report.accepted,
+    check_count: report.checks.length,
+    failed_check_count: report.checks.filter((check) => !check.passed).length,
+    generated_at: report.generated_at,
+    received_at: receivedAt
+  };
+}
+
+export async function recordAcceptanceReport(report, options = {}) {
+  const validation = validateAcceptanceReport(report);
+  if (!validation.valid) {
+    return { accepted: false, status: 400, errors: validation.errors };
+  }
+
+  const registryPath = options.registryPath ?? DEFAULT_REGISTRY_PATH;
+  const receivedAt = options.receivedAt ?? new Date().toISOString();
+  const registry = await readRegistry(registryPath);
+  registry.acceptance_reports = Array.isArray(registry.acceptance_reports) ? registry.acceptance_reports : [];
+  const summary = summarizeAcceptanceReport(report, receivedAt);
+  registry.acceptance_reports.push({
+    ...summary,
+    report
+  });
+  registry.acceptance_reports = registry.acceptance_reports.slice(-1000);
+
+  await writeRegistry(registryPath, registry);
+  return { accepted: true, status: 202, report: summary };
+}
+
+export async function listAcceptanceReports(options = {}) {
+  const registryPath = options.registryPath ?? DEFAULT_REGISTRY_PATH;
+  const registry = await readRegistry(registryPath);
+  const reports = Array.isArray(registry.acceptance_reports) ? registry.acceptance_reports : [];
+  return reports
+    .filter((report) => !options.serverId || report.server_id === options.serverId)
+    .sort((left, right) => right.received_at.localeCompare(left.received_at));
+}
+
 export function isAuthorized(headers, config) {
   if (!config.agentToken) {
     return true;
@@ -99,6 +187,18 @@ export function createJsonRegistryStorage(options = {}) {
     },
     async listServers() {
       return listServers({ registryPath: options.registryPath });
+    },
+    async recordAcceptanceReport(report, recordOptions = {}) {
+      return recordAcceptanceReport(report, {
+        registryPath: options.registryPath,
+        ...recordOptions
+      });
+    },
+    async listAcceptanceReports(listOptions = {}) {
+      return listAcceptanceReports({
+        registryPath: options.registryPath,
+        ...listOptions
+      });
     }
   };
 }

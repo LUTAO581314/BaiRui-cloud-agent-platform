@@ -7,6 +7,13 @@ function deriveServersUrl(platformHeartbeatUrl) {
   return platformHeartbeatUrl.replace(/\/api\/server-heartbeat\/?$/, "/api/servers");
 }
 
+function deriveAcceptanceUrl(platformHeartbeatUrl) {
+  if (!platformHeartbeatUrl) {
+    return "";
+  }
+  return platformHeartbeatUrl.replace(/\/api\/server-heartbeat\/?$/, "/api/server-acceptance");
+}
+
 function withCheck(report, name, fn) {
   return fn()
     .then((details) => {
@@ -48,8 +55,34 @@ async function fetchPlatformServer(config, serverId, fetchImpl) {
 export function loadAcceptanceConfig(env = process.env) {
   return {
     ...loadAgentConfig(env),
-    platformServersUrl: env.BAIRUI_PLATFORM_SERVERS_URL ?? ""
+    platformServersUrl: env.BAIRUI_PLATFORM_SERVERS_URL ?? "",
+    platformAcceptanceUrl: env.BAIRUI_PLATFORM_ACCEPTANCE_URL ?? ""
   };
+}
+
+export async function postAcceptanceReport(config, report, fetchImpl = fetch) {
+  const acceptanceUrl = config.platformAcceptanceUrl || deriveAcceptanceUrl(config.platformHeartbeatUrl);
+  if (!acceptanceUrl) {
+    throw new Error("BAIRUI_PLATFORM_ACCEPTANCE_URL or BAIRUI_PLATFORM_HEARTBEAT_URL is required.");
+  }
+
+  const headers = {
+    accept: "application/json",
+    "content-type": "application/json"
+  };
+  if (config.agentToken) {
+    headers.authorization = `Bearer ${config.agentToken}`;
+  }
+
+  const response = await fetchImpl(acceptanceUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ report })
+  });
+  if (!response.ok) {
+    throw new Error(`Platform acceptance report failed with HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function runAcceptance(config = loadAcceptanceConfig(), fetchImpl = fetch) {
@@ -93,6 +126,12 @@ export async function runAcceptance(config = loadAcceptanceConfig(), fetchImpl =
       license_status: server.license_status,
       last_heartbeat_at: server.last_heartbeat_at
     };
+  });
+
+  const reportForUpload = { ...report, checks: [...report.checks] };
+  await withCheck(report, "platform_acceptance_record", async () => {
+    const result = await postAcceptanceReport(config, reportForUpload, fetchImpl);
+    return { accepted: Boolean(result.accepted ?? true) };
   });
 
   return report;

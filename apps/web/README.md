@@ -35,6 +35,9 @@ Endpoints:
 - `GET /health`: platform API health check.
 - `POST /api/server-heartbeat`: receive outbound heartbeat from server-agent.
 - `GET /api/servers`: list the latest known server registry state.
+- `POST /api/server-acceptance`: receive customer deployment acceptance report.
+- `GET /api/server-acceptance`: list acceptance report summaries, optionally
+  filtered by `server_id`.
 
 Environment variables:
 
@@ -44,7 +47,7 @@ Environment variables:
 - `BAIRUI_SERVER_REGISTRY_PATH`: local JSON registry path, default
   `./data/platform/server-registry.json`. Used when database URL is missing.
 - `BAIRUI_SERVER_AGENT_TOKEN`: optional bearer token required for heartbeat
-  ingestion when set.
+  and acceptance ingestion when set.
 
 Run locally:
 

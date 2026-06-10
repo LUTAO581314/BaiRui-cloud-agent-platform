@@ -31,6 +31,7 @@ vault text, model API keys, or connector tokens by default.
 - `licenses`
 - `customer_servers`
 - `server_heartbeats`
+- `server_acceptance_reports`
 
 Print the migration SQL:
 
@@ -52,6 +53,8 @@ server-agent
   -> validate heartbeat
   -> upsert customer_servers
   -> append server_heartbeats
+  -> POST /api/server-acceptance
+  -> append server_acceptance_reports
 ```
 
 The `apps/web` API uses PostgreSQL when `BAIRUI_PLATFORM_DATABASE_URL` is set

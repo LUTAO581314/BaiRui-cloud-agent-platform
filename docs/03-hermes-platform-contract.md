@@ -88,6 +88,26 @@ The platform must validate this payload before storing server state. The
 customer server should send it outbound to the platform; the platform must not
 require an unauthenticated inbound control port on the customer server.
 
+### 3.2 P0 Acceptance Report Contract
+
+After assisted deployment, `server-agent:acceptance` sends a JSON report to:
+
+```text
+POST /api/server-acceptance
+```
+
+The report contains server identity, license identity, generated timestamp,
+overall accepted status, and check summaries. It must not contain prompts,
+chat history, files, Obsidian note bodies, model keys, connector tokens,
+passwords, private keys, or unrestricted logs.
+
+The platform stores acceptance summaries for customer delivery evidence and
+support audit. Operators can query:
+
+```text
+GET /api/server-acceptance?server_id=srv_xxx
+```
+
 ## 4. Default Data Boundary
 
 Hermes must not upload by default:

@@ -50,9 +50,23 @@ create table if not exists server_heartbeats (
     received_at timestamptz not null default now()
 );
 
+create table if not exists server_acceptance_reports (
+    id bigserial primary key,
+    server_id text not null references customer_servers(id),
+    organization_id text not null references organizations(id),
+    license_id text not null references licenses(id),
+    accepted boolean not null,
+    check_count integer not null default 0,
+    failed_check_count integer not null default 0,
+    payload jsonb not null,
+    generated_at timestamptz not null,
+    received_at timestamptz not null default now()
+);
+
 create index if not exists idx_customer_servers_org on customer_servers(organization_id);
 create index if not exists idx_customer_servers_last_seen on customer_servers(last_seen_at desc);
 create index if not exists idx_server_heartbeats_server_received on server_heartbeats(server_id, received_at desc);
+create index if not exists idx_server_acceptance_reports_server_received on server_acceptance_reports(server_id, received_at desc);
 `.trim();
 
 export function buildMigrationSql() {
@@ -133,5 +147,36 @@ export function heartbeatSqlParams(heartbeat, receivedAt) {
     receivedAt,
     heartbeat.protocol_version,
     JSON.stringify(heartbeat)
+  ];
+}
+
+export function buildAcceptanceInsertSql() {
+  return `
+insert into server_acceptance_reports (
+    server_id,
+    organization_id,
+    license_id,
+    accepted,
+    check_count,
+    failed_check_count,
+    payload,
+    generated_at,
+    received_at
+)
+values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, $9::timestamptz);
+`.trim();
+}
+
+export function acceptanceSqlParams(report, receivedAt) {
+  return [
+    report.server_id,
+    report.organization_id,
+    report.license_id,
+    report.accepted,
+    report.checks.length,
+    report.checks.filter((check) => !check.passed).length,
+    JSON.stringify(report),
+    report.generated_at,
+    receivedAt
   ];
 }

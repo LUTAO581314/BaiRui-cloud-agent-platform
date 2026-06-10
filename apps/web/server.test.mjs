@@ -58,12 +58,52 @@ test("receives heartbeat and lists server", async () => {
   });
 });
 
+test("receives acceptance report and lists report summaries", async () => {
+  await withServer(async (baseUrl) => {
+    const report = {
+      accepted: true,
+      generated_at: "2026-06-10T00:00:02.000Z",
+      server_id: "srv_http",
+      organization_id: "org_1",
+      license_id: "lic_1",
+      checks: [{ name: "hermes_heartbeat", passed: true, details: {} }]
+    };
+
+    const postResponse = await fetch(`${baseUrl}/api/server-acceptance`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer token",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ report })
+    });
+    assert.equal(postResponse.status, 202);
+
+    const listResponse = await fetch(`${baseUrl}/api/server-acceptance?server_id=srv_http`);
+    const body = await listResponse.json();
+    assert.equal(body.reports.length, 1);
+    assert.equal(body.reports[0].server_id, "srv_http");
+    assert.equal(body.reports[0].accepted, true);
+  });
+});
+
 test("rejects heartbeat without agent token", async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/server-heartbeat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ heartbeat })
+    });
+    assert.equal(response.status, 401);
+  });
+});
+
+test("rejects acceptance report without agent token", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/server-acceptance`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ report: { server_id: "srv_http" } })
     });
     assert.equal(response.status, 401);
   });
