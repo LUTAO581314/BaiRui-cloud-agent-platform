@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HEARTBEAT_PROTOCOL_VERSION } from "../../packages/server-protocol/index.mjs";
-import { listAcceptanceReports, listServers, recordAcceptanceReport, recordHeartbeat } from "./server-registry.mjs";
+import { createJsonRegistryStorage, listAcceptanceReports, listServers, recordAcceptanceReport, recordHeartbeat } from "./server-registry.mjs";
 
 const heartbeat = {
   protocol_version: HEARTBEAT_PROTOCOL_VERSION,
@@ -86,5 +86,14 @@ test("rejects invalid customer acceptance report", async () => {
     assert.equal(result.accepted, false);
     assert.equal(result.status, 400);
     assert.ok(result.errors.includes("organization_id is required"));
+  });
+});
+
+test("json storage reports fallback readiness", async () => {
+  await withRegistry(async (registryPath) => {
+    const readiness = await createJsonRegistryStorage({ registryPath }).getReadiness();
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.storage_kind, "json");
+    assert.equal(readiness.checks.some((check) => check.name === "server_acceptance_reports" && check.passed), true);
   });
 });

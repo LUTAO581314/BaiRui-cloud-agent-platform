@@ -106,3 +106,45 @@ test("postgres storage lists customer acceptance reports", async () => {
   const reports = await storage.listAcceptanceReports({ serverId: "srv_pg" });
   assert.deepEqual(reports, [{ server_id: "srv_pg", accepted: true }]);
 });
+
+test("postgres storage reports readiness from required tables", async () => {
+  const storage = createPostgresRegistryStorage({
+    async query(sql, params) {
+      assert.match(sql, /information_schema\.tables/);
+      assert.deepEqual(params[0], ["organizations", "licenses", "customer_servers", "server_heartbeats", "server_acceptance_reports"]);
+      return {
+        rows: [
+          { table_name: "organizations" },
+          { table_name: "licenses" },
+          { table_name: "customer_servers" },
+          { table_name: "server_heartbeats" },
+          { table_name: "server_acceptance_reports" }
+        ]
+      };
+    }
+  });
+
+  const readiness = await storage.getReadiness();
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.storage_kind, "postgres");
+  assert.equal(readiness.checks.every((check) => check.passed), true);
+});
+
+test("postgres storage reports missing acceptance table", async () => {
+  const storage = createPostgresRegistryStorage({
+    async query() {
+      return {
+        rows: [
+          { table_name: "organizations" },
+          { table_name: "licenses" },
+          { table_name: "customer_servers" },
+          { table_name: "server_heartbeats" }
+        ]
+      };
+    }
+  });
+
+  const readiness = await storage.getReadiness();
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.checks.find((check) => check.name === "server_acceptance_reports").passed, false);
+});

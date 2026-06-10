@@ -33,6 +33,8 @@ The first runnable platform API is implemented with Node standard library in
 Endpoints:
 
 - `GET /health`: platform API health check.
+- `GET /ready`: deployment readiness check for storage mode, required tables,
+  and server-agent token configuration.
 - `POST /api/server-heartbeat`: receive outbound heartbeat from server-agent.
 - `GET /api/servers`: list the latest known server registry state.
 - `POST /api/server-acceptance`: receive customer deployment acceptance report.
@@ -63,4 +65,10 @@ Initialize PostgreSQL before starting the platform API:
 
 ```sh
 npm run db:migrate
+```
+
+After startup, verify readiness:
+
+```sh
+curl http://127.0.0.1:8788/ready
 ```

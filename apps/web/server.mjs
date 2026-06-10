@@ -34,6 +34,24 @@ export function createPlatformServer(config = loadRegistryConfig(), storagePromi
 
       const storage = await storagePromise;
 
+      if (request.method === "GET" && url.pathname === "/ready") {
+        const readiness = await storage.getReadiness();
+        const tokenConfigured = Boolean(config.agentToken);
+        const warnings = [];
+        if (!tokenConfigured) {
+          warnings.push("BAIRUI_SERVER_AGENT_TOKEN is not configured; heartbeat and acceptance ingestion are unauthenticated.");
+        }
+        jsonResponse(response, readiness.ready ? 200 : 503, {
+          status: readiness.ready ? "ready" : "not_ready",
+          service: "bairui-platform",
+          storage_kind: readiness.storage_kind,
+          token_configured: tokenConfigured,
+          checks: readiness.checks,
+          warnings
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/server-heartbeat") {
         if (!isAuthorized(request.headers, config)) {
           jsonResponse(response, 401, { error: "unauthorized" });

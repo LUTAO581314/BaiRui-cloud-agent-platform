@@ -150,6 +150,7 @@ such as `/etc/bairui/platform.env`, set real values, then run the script with
 When `BAIRUI_PLATFORM_DATABASE_URL` is set, the script runs `npm run db:migrate`
 by default. Keep `BAIRUI_RUN_MIGRATIONS=1` for server rebuilds so PostgreSQL
 tables such as `server_acceptance_reports` are created before the API starts.
+After startup, check `GET /ready` before customer deployment or acceptance.
 
 Generate a customer Hermes deployment bundle:
 

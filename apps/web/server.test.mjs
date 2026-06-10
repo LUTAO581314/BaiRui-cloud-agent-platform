@@ -58,6 +58,17 @@ test("receives heartbeat and lists server", async () => {
   });
 });
 
+test("reports platform readiness", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/ready`);
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.status, "ready");
+    assert.equal(body.storage_kind, "json");
+    assert.equal(body.token_configured, true);
+  });
+});
+
 test("receives acceptance report and lists report summaries", async () => {
   await withServer(async (baseUrl) => {
     const report = {

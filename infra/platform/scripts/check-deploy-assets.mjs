@@ -18,6 +18,7 @@ test("platform deployment assets avoid real secrets and expose required commands
   assert.match(deployScript, /npm test/);
   assert.match(migrationSql, /create table if not exists server_acceptance_reports/);
   assert.match(migrationSql, /idx_server_acceptance_reports_server_received/);
+  assert.match(await readFile("apps/web/server.mjs", "utf8"), /pathname === "\/ready"/);
   assert.match(service, /ExecStart=\/usr\/bin\/npm run platform:dev/);
   assert.doesNotMatch(`${envExample}\n${deployScript}\n${service}`, /BEGIN (RSA|OPENSSH) PRIVATE KEY/);
 });

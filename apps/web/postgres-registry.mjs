@@ -13,6 +13,25 @@ export function createPostgresRegistryStorage(pool) {
     async migrate() {
       await pool.query(buildMigrationSql());
     },
+    async getReadiness() {
+      const requiredTables = ["organizations", "licenses", "customer_servers", "server_heartbeats", "server_acceptance_reports"];
+      const result = await pool.query(`
+        select table_name
+        from information_schema.tables
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+      `, [requiredTables]);
+      const existing = new Set(result.rows.map((row) => row.table_name));
+      const checks = requiredTables.map((tableName) => ({
+        name: tableName,
+        passed: existing.has(tableName)
+      }));
+      return {
+        ready: checks.every((check) => check.passed),
+        storage_kind: "postgres",
+        checks
+      };
+    },
     async recordHeartbeat(heartbeat, options = {}) {
       const validation = validateHeartbeat(heartbeat);
       if (!validation.valid) {

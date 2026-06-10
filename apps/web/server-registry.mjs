@@ -179,6 +179,17 @@ export function isAuthorized(headers, config) {
 export function createJsonRegistryStorage(options = {}) {
   return {
     kind: "json",
+    async getReadiness() {
+      return {
+        ready: true,
+        storage_kind: "json",
+        checks: [
+          { name: "json_registry", passed: true, details: { registry_path: options.registryPath ?? DEFAULT_REGISTRY_PATH } },
+          { name: "postgresql", passed: false, severity: "warning", details: { reason: "BAIRUI_PLATFORM_DATABASE_URL is not configured" } },
+          { name: "server_acceptance_reports", passed: true, details: { storage: "json_fallback" } }
+        ]
+      };
+    },
     async recordHeartbeat(heartbeat, recordOptions = {}) {
       return recordHeartbeat(heartbeat, {
         registryPath: options.registryPath,
