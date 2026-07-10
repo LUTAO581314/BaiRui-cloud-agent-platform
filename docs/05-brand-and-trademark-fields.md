@@ -1,42 +1,37 @@
-# Brand And Trademark Fields
+﻿# Brand And Trademark Fields
 
-本文档定义平台仓库从源码开始使用的正式客户可见品牌字段。
+Default platform-facing brand fields:
 
-## 1. 决策
+- brand key: `bairui`
+- product family: `BaiRui`
+- platform name: `BaiRui Cloud Agent Platform`
+- runtime name: `Hermes Runtime Core`
+- runtime boundary name: `Bairui Runtime Boundary`
+- control plane name: `Bairui Control Plane`
 
-官网、客户控制台、管理员后台、license、部署向导、服务器管理 Agent 的默认品牌字段统一为：
+Use these names in new documentation, UI text, package metadata, deployment
+bundles, heartbeat payloads, and support evidence.
 
-```text
-bairui
-```
+## Public Naming
 
-## 2. Required Fields
+Recommended user-facing labels:
 
-平台源码后续必须提供这些品牌字段：
+- `BaiRui Cloud Agent Platform`
+- `BaiRui Customer Console`
+- `BaiRui Admin Console`
+- `BaiRui Server Agent`
+- `BaiRui Deployment Bundle`
+- `BaiRui License`
 
-- `brand_key`: `bairui`
-- `trademark_name`: `bairui`
-- `logo_text`: `bairui`
-- `product_name`: `bairui Agent OS`
+## Technical Naming
 
-## 3. Boundary
+Recommended technical identifiers:
 
-工程名可以保留：
+- `bairui`
+- `bairui-cloud-agent-platform`
+- `bairui-server-agent`
+- `bairui-license`
+- `bairui-control-plane`
 
-- `MOXI-cloud-agent`：平台和服务器管理仓库；
-- `Hermes`：客户侧 Agent OS 后端内核。
-
-但客户可见的默认品牌、商标和 logo 字段必须是 `bairui`。
-
-## 4. First Implementation Target
-
-后续创建 `apps/web` 源码时，应先在全局配置中实现：
-
-```ts
-export const brand = {
-  key: "bairui",
-  trademarkName: "bairui",
-  logoText: "bairui",
-  productName: "bairui Agent OS",
-};
-```
+Do not call the platform the agent runtime. The runtime belongs to the Core
+Runtime Layer in `BaiRui-agent`.

@@ -1,64 +1,40 @@
-# Repository Cleanup Policy
+﻿# Repository Cleanup Policy
 
-This repository is now the clean commercial platform and server-management home
-for MOXI Agent OS.
+This repository is the BaiRui platform repository. Keep it aligned with the
+framework source of truth in `LUTAO581314/BaiRui-agent`.
 
-## 1. Keep
+## Keep
 
-Keep:
+- platform API and web app code;
+- database schema and migrations;
+- license package;
+- deployment bundle package;
+- server-protocol package;
+- server-agent package;
+- infrastructure scripts;
+- documentation about platform delivery, server management, and control-plane
+  integration.
 
-- `apps/web/` for the commercial platform;
-- `packages/` for shared platform libraries;
-- `server-agent/` for server-side agent code;
-- `infra/` for deployment and operations templates;
-- `docs/` for current commercial documentation;
-- `LICENSE`;
-- `.gitignore`;
-- root `README.md`.
+## Do Not Add
 
-## 2. Remove
+- Hermes runtime internals;
+- duplicated agent loop logic;
+- OpenClaw channel implementation internals;
+- BaiLongma Brain UI implementation internals;
+- customer chat content fixtures;
+- real model API keys;
+- real connector tokens;
+- unrestricted remote shell workflows.
 
-Remove:
+## Naming
 
-- legacy branding;
-- old assistant-hosting docs;
-- copied prototype code that does not match current boundaries;
-- real secrets;
-- runtime data;
-- generated logs;
-- server IPs;
-- private keys;
-- TLS certificates;
-- customer-specific `.env` files.
+Use:
 
-## 3. Boundary
+- `BaiRui Cloud Agent Platform`
+- `BaiRui`
+- `bairui`
+- `Bairui Control Plane`
+- `Hermes Runtime Core`
+- `Bairui Runtime Boundary`
 
-Do not add Hermes runtime code to this repository.
-
-Hermes belongs in `hermes-`. This repository integrates with Hermes through
-licenses, server registration, deployment templates, health summaries, release
-metadata, and support workflows.
-
-Customer-facing brand, trademark, and logo fields must default to `bairui`.
-
-The Hermes runtime may use mature open-source projects directly when that is
-the safer product path. That does not change this repository boundary:
-third-party runtime source stays in `hermes-` or an explicit runtime/vendor
-location, while `MOXI-cloud-agent` owns platform productization and operations.
-
-Commercialization is a quality bar. It requires clean deployment, readiness,
-tests, attribution, license clarity, and support workflows; it does not require
-blank-slate AI rewrites of complex runtime internals.
-
-## 4. Commercial Readiness Rule
-
-A feature is not commercially ready until it has:
-
-- UI or API entry;
-- permission boundary;
-- audit behavior;
-- configuration path;
-- error state;
-- deployment path;
-- test or verification command;
-- documentation.
+Avoid old or unrelated platform names in new files.

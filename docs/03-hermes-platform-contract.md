@@ -1,69 +1,94 @@
-# Hermes Platform Contract
+﻿# Bairui Platform Contract
 
-This document defines the boundary between Hermes and MOXI-cloud-agent.
+This document defines the contract between the BaiRui Cloud Agent Platform, the
+Bairui Control Plane, the Bairui Runtime Boundary, the customer server-agent,
+and Hermes Runtime Core.
+
+Hermes remains the agent runtime core. The platform does not own the Hermes
+runtime internals.
 
 ## 1. Ownership
 
-Commercialization means production-grade delivery, not blank-slate runtime
-reinvention. Hermes may be built from mature upstream source code as long as
-licenses, notices, attribution, and runtime boundaries are preserved.
+Hermes Runtime Core owns:
 
-The platform contract stays ours even when Hermes integrates upstream runtime
-code: license packaging, server identity, health reporting, acceptance
-evidence, deployment scripts, readiness checks, and support operations must
-remain stable and bairui-branded.
+- agent loop;
+- model calls;
+- tool calls;
+- memory runtime;
+- skills and scheduled work;
+- runtime audit and runtime diagnostics;
+- runtime-level health and capability reporting.
 
-Hermes owns:
+Bairui Runtime Boundary owns:
 
-- Agent runtime;
-- model gateway;
-- tasks;
-- approvals;
-- tools;
-- PostgreSQL production state;
-- Obsidian writes;
-- connectors;
-- customer-side health.
+- platform identity mapping;
+- tenant, organization, workspace, and license context;
+- platform request and response envelopes;
+- runtime configuration mapping;
+- contract tests that protect Bairui from Hermes upstream changes.
 
-MOXI-cloud-agent owns:
+Bairui Cloud Agent Platform owns:
 
 - website;
 - customer console;
 - admin console;
-- license;
-- plans;
-- orders;
-- deployment wizard;
-- server registry;
-- release metadata;
-- support workflow.
+- organization and account management;
+- license generation and delivery;
+- deployment wizard and delivery bundles;
+- customer server registry;
+- release inventory;
+- support workflow;
+- server-agent protocol and acceptance evidence.
 
-## 2. Platform To Hermes
+Bairui Control Plane owns:
+
+- health and readiness inventory;
+- dependency drift tracking;
+- upstream version and commit inventory;
+- contract-test and smoke-test evidence;
+- release gates;
+- platform heartbeat summaries.
+
+## 2. Platform To Runtime Boundary
 
 The platform may provide:
 
-- license file;
-- server_id;
+- organization id;
+- workspace id;
+- license id and license status;
+- deployment mode;
+- enabled feature set;
 - release metadata;
 - deployment template;
-- documentation links;
-- support upload endpoint.
+- support upload endpoint;
+- documentation links.
 
-## 3. Hermes To Platform
+The platform must not provide raw model API keys or connector tokens through
+customer-visible contracts. Secret delivery must use a protected server-side
+workflow.
 
-Hermes may report:
+## 3. Runtime And Server-Agent To Platform
 
-- server_id;
-- license_id;
+Runtime and customer server-agent may report:
+
+- server id;
+- organization id;
+- license id;
+- license status;
 - Hermes version;
+- Bairui Runtime Boundary version;
 - deployment mode;
 - health status;
+- readiness status;
+- database status;
 - backup status;
 - connector summary;
+- enabled capability summary;
 - error count;
-- last seen time.
+- last seen time;
+- acceptance report summary.
 
-### 3.1 P0 Heartbeat Contract
+## 4. P0 Heartbeat Contract
 
 The P0 heartbeat is implemented in `packages/server-protocol`.
 
@@ -93,11 +118,11 @@ Payload:
 }
 ```
 
-The platform must validate this payload before storing server state. The
-customer server should send it outbound to the platform; the platform must not
-require an unauthenticated inbound control port on the customer server.
+The platform validates this payload before storing server state. The customer
+server sends it outbound to the platform; the platform must not require an
+unauthenticated inbound control port on the customer server.
 
-### 3.2 P0 Acceptance Report Contract
+## 5. P0 Acceptance Report Contract
 
 After assisted deployment, `server-agent:acceptance` sends a JSON report to:
 
@@ -105,10 +130,17 @@ After assisted deployment, `server-agent:acceptance` sends a JSON report to:
 POST /api/server-acceptance
 ```
 
-The report contains server identity, license identity, generated timestamp,
-overall accepted status, and check summaries. It must not contain prompts,
-chat history, files, Obsidian note bodies, model keys, connector tokens,
-passwords, private keys, or unrestricted logs.
+The report contains:
+
+- server identity;
+- organization identity;
+- license identity;
+- generated timestamp;
+- overall accepted status;
+- check summaries.
+
+It must not contain prompts, chat history, files, Obsidian note bodies, model
+keys, connector tokens, passwords, private keys, or unrestricted logs.
 
 The platform stores acceptance summaries for customer delivery evidence and
 support audit. Operators can query:
@@ -117,9 +149,9 @@ support audit. Operators can query:
 GET /api/server-acceptance?server_id=srv_xxx
 ```
 
-## 4. Default Data Boundary
+## 6. Default Data Boundary
 
-Hermes must not upload by default:
+The runtime and server-agent must not upload by default:
 
 - chat content;
 - Obsidian vault content;
@@ -129,4 +161,5 @@ Hermes must not upload by default:
 - database dumps;
 - private logs with secrets.
 
-Diagnostic bundles must be customer-triggered and must be redacted.
+Diagnostic bundles must be customer-triggered and redacted.
+

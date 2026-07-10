@@ -1,6 +1,6 @@
-# Infrastructure
+﻿# Infrastructure
 
-Infrastructure templates for MOXI Cloud Agent and managed deployments.
+Infrastructure templates for BaiRui Cloud Agent Platform and managed deployments.
 
 Planned contents:
 

@@ -1,14 +1,14 @@
-# Deployment Package
+﻿# Deployment Package
 
-This package builds the first customer deployment bundle for bairui Hermes
-servers managed by MOXI Cloud Agent.
+This package builds customer deployment bundles for BaiRui customer servers.
 
 It generates:
 
-- Hermes environment file content.
-- server-agent outbound heartbeat environment file content.
-- customer/operator deployment instructions.
-- signed license JSON when `delivery.mjs` is used.
+- Hermes Runtime Core environment file content;
+- Bairui Runtime Boundary and platform context configuration where needed;
+- server-agent outbound heartbeat environment file content;
+- customer/operator deployment instructions;
+- signed license JSON when `delivery.mjs` is used;
 - `manifest.json` with file hashes and delivery identity metadata.
 
 The package does not generate or store real secrets. Production secrets must be
@@ -57,3 +57,4 @@ BAIRUI_LICENSE_SECRET=change-me npm run delivery:release -- \
 
 This writes the package directory, verifies it, creates the `.tar.gz`, and
 prints the archive `sha256`.
+

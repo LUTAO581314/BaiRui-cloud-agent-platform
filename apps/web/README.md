@@ -1,6 +1,6 @@
-# MOXI Web Platform
+﻿# BaiRui Web Platform
 
-This directory will contain the MOXI commercial web application:
+This directory contains the BaiRui platform web application:
 
 - public website;
 - customer console;
@@ -9,7 +9,8 @@ This directory will contain the MOXI commercial web application:
 - license management;
 - server registry;
 - support tickets;
-- release and upgrade views.
+- release and upgrade views;
+- Bairui Control Plane status views.
 
 Recommended stack:
 
@@ -21,9 +22,9 @@ Recommended stack:
 - Prisma or Drizzle;
 - Playwright.
 
-This app must not contain Hermes runtime internals. It integrates with Hermes
-through license files, server registration, release metadata, health summaries,
-and support bundle workflows.
+This app must not contain Hermes runtime internals. It integrates with the
+runtime through license files, server registration, release metadata, health
+summaries, acceptance reports, and support bundle workflows.
 
 ## P0 API
 
@@ -57,9 +58,9 @@ Run locally:
 npm run platform:dev
 ```
 
-The API keeps a JSON fallback for local development. Commercial deployments
-should set `BAIRUI_PLATFORM_DATABASE_URL` and run the PostgreSQL migration from
-`packages/db`.
+The API keeps a JSON fallback for local development. Customer-facing
+deployments should set `BAIRUI_PLATFORM_DATABASE_URL` and run the PostgreSQL
+migration from `packages/db`.
 
 Initialize PostgreSQL before starting the platform API:
 
@@ -72,3 +73,4 @@ After startup, verify readiness:
 ```sh
 curl http://127.0.0.1:8788/ready
 ```
+

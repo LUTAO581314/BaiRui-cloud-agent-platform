@@ -1,7 +1,7 @@
-# License And Deployment Flow
+﻿# License And Deployment Flow
 
 This document defines the commercial license and deployment flow between
-MOXI-cloud-agent and Hermes.
+BaiRui-cloud-agent-platform and Hermes.
 
 ## 1. Flow
 
@@ -70,7 +70,7 @@ The first commercial version can be semi-manual:
 
 - platform generates license;
 - platform generates deployment command;
-- customer or MOXI operator runs deployment;
+- customer or BaiRui operator runs deployment;
 - server is registered manually;
 - health is checked automatically.
 
