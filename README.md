@@ -111,6 +111,14 @@ Platform:
 - GitHub Actions;
 - Playwright.
 
+Database policy:
+
+- PostgreSQL is the default and authoritative production database;
+- `MemoryPlatformRepository` is only for tests and disposable local runs;
+- new platform state and business schemas default to PostgreSQL migrations;
+- Obsidian is a Markdown/Vault interchange format, not a replacement for PG;
+- SQLite used internally by an upstream stays behind that upstream's adapter.
+
 Server management:
 
 - customer-side VPS, VM, or managed deployment;
