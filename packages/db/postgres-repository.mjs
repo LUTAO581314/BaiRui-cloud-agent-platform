@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 
 const mapUser = (row, includeHash = false) => row ? {
@@ -13,6 +13,9 @@ const mapUser = (row, includeHash = false) => row ? {
 } : null;
 const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, name: row.name, description: row.description, avatarUrl: row.avatar_url, soulMarkdown: row.soul_markdown, status: row.status, initializationStatus: row.initialization_status, desiredRuntimeState: row.desired_runtime_state, settings: row.settings, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapHeartbeat = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, sequence: Number(row.sequence), status: row.status, runtimeVersion: row.runtime_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, queueDepth: row.queue_depth, activeRuns: row.active_runs, failedRuns: row.failed_runs, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at }) : null;
+const mapAgentComponent = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, moduleId: row.module_id, status: row.status, version: row.version, upstreamRef: row.upstream_ref, capabilities: row.capabilities, metrics: row.metrics, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
+const mapAlert = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, code: row.code, severity: row.severity, status: row.status, title: row.title, summary: row.summary, firstSeenAt: row.first_seen_at?.toISOString?.() ?? row.first_seen_at, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, resolvedAt: row.resolved_at?.toISOString?.() ?? row.resolved_at });
 const mapConversation = (row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const mapMessage = (row) => ({ id: row.id, conversationId: row.conversation_id, organizationId: row.organization_id, userId: row.user_id, role: row.role, content: row.content, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapSnapshot = (row) => ({ id: row.id, organizationId: row.organization_id, serverId: row.server_id, status: row.status, payload: row.payload, receivedAt: row.received_at?.toISOString?.() ?? row.received_at });
@@ -109,7 +112,9 @@ export class PostgresPlatformRepository {
   async listAgents(organizationId, ownerUserId) {
     const query = ownerUserId
       ? ["SELECT * FROM agents WHERE organization_id = $1 AND owner_user_id = $2 ORDER BY updated_at DESC", [organizationId, ownerUserId]]
-      : ["SELECT * FROM agents WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]];
+      : organizationId
+        ? ["SELECT * FROM agents WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]]
+        : ["SELECT * FROM agents ORDER BY updated_at DESC", []];
     const { rows } = await this.pool.query(...query);
     return rows.map(mapAgent);
   }
@@ -144,9 +149,133 @@ export class PostgresPlatformRepository {
   async listAgentRuntimes(organizationId, ownerUserId) {
     const query = ownerUserId
       ? ["SELECT * FROM agent_runtimes WHERE organization_id = $1 AND owner_user_id = $2 ORDER BY updated_at DESC", [organizationId, ownerUserId]]
-      : ["SELECT * FROM agent_runtimes WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]];
+      : organizationId
+        ? ["SELECT * FROM agent_runtimes WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]]
+        : ["SELECT * FROM agent_runtimes ORDER BY updated_at DESC", []];
     const { rows } = await this.pool.query(...query);
     return rows.map(mapAgentRuntime);
+  }
+
+  async saveAgentHeartbeat(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `INSERT INTO heartbeats (id, organization_id, user_id, agent_id, runtime_id, sequence, status, runtime_version, boundary_version, config_revision_id, queue_depth, active_runs, failed_runs, observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (runtime_id, sequence) DO UPDATE SET received_at=heartbeats.received_at RETURNING *`,
+        [input.id ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.runtimeId, input.sequence, input.status, input.runtimeVersion ?? null, input.boundaryVersion ?? null, input.configRevisionId ?? null, input.queueDepth ?? 0, input.activeRuns ?? 0, input.failedRuns ?? 0, input.observedAt]
+      );
+      const runtimeStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
+      const initializationStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
+      await client.query("UPDATE agent_runtimes SET status=$2, hermes_version=COALESCE($3,hermes_version), boundary_version=COALESCE($4,boundary_version), config_revision_id=COALESCE($5,config_revision_id), last_heartbeat_at=$6, updated_at=now() WHERE id=$1 AND agent_id=$7", [input.runtimeId, runtimeStatus, input.runtimeVersion ?? null, input.boundaryVersion ?? null, input.configRevisionId ?? null, input.observedAt, input.agentId]);
+      await client.query("UPDATE agents SET status=$2, initialization_status=$3, updated_at=now() WHERE id=$1", [input.agentId, input.status === "healthy" ? "active" : initializationStatus, initializationStatus]);
+      for (const component of input.components ?? []) {
+        await client.query(
+          `INSERT INTO agent_components (id, organization_id, agent_id, runtime_id, layer, module_id, status, version, upstream_ref, capabilities, metrics, observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           ON CONFLICT (runtime_id, module_id) DO UPDATE SET layer=EXCLUDED.layer, status=EXCLUDED.status, version=EXCLUDED.version, upstream_ref=EXCLUDED.upstream_ref, capabilities=EXCLUDED.capabilities, metrics=EXCLUDED.metrics, observed_at=EXCLUDED.observed_at, updated_at=now()`,
+          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, component.layer, component.moduleId, component.status, component.version ?? null, component.upstreamRef ?? null, component.capabilities ?? [], component.metrics ?? {}, component.observedAt ?? input.observedAt]
+        );
+      }
+      for (const event of input.events ?? []) {
+        await client.query(
+          "INSERT INTO telemetry_events (id, organization_id, user_id, agent_id, runtime_id, layer, component_id, event_type, severity, trace_id, metrics, occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+          [randomUUID(), input.organizationId, input.userId, input.agentId, input.runtimeId, event.layer ?? null, event.componentId ?? null, event.eventType, event.severity, event.traceId ?? null, event.metrics ?? {}, event.occurredAt ?? input.observedAt]
+        );
+      }
+      if (input.usage) {
+        await client.query(
+          `INSERT INTO usage_rollups (organization_id, user_id, agent_id, runtime_id, bucket_start, bucket_seconds, model, input_tokens, output_tokens, estimated_cost_usd, run_count, failed_run_count, latency_sum_ms)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           ON CONFLICT (agent_id, bucket_start, bucket_seconds, model) DO UPDATE SET
+             input_tokens=usage_rollups.input_tokens+EXCLUDED.input_tokens,
+             output_tokens=usage_rollups.output_tokens+EXCLUDED.output_tokens,
+             estimated_cost_usd=usage_rollups.estimated_cost_usd+EXCLUDED.estimated_cost_usd,
+             run_count=usage_rollups.run_count+EXCLUDED.run_count,
+             failed_run_count=usage_rollups.failed_run_count+EXCLUDED.failed_run_count,
+             latency_sum_ms=usage_rollups.latency_sum_ms+EXCLUDED.latency_sum_ms`,
+          [input.organizationId, input.userId, input.agentId, input.runtimeId, input.usage.bucketStart, input.usage.bucketSeconds, input.usage.model ?? "unknown", input.usage.inputTokens ?? 0, input.usage.outputTokens ?? 0, input.usage.estimatedCostUsd ?? 0, input.usage.runCount ?? 0, input.usage.failedRunCount ?? 0, input.usage.latencySumMs ?? 0]
+        );
+      }
+      await client.query("COMMIT");
+      return mapHeartbeat(rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async latestAgentHeartbeats(organizationId) {
+    const query = organizationId
+      ? ["SELECT DISTINCT ON (runtime_id) * FROM heartbeats WHERE organization_id=$1 ORDER BY runtime_id, received_at DESC", [organizationId]]
+      : ["SELECT DISTINCT ON (runtime_id) * FROM heartbeats ORDER BY runtime_id, received_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapHeartbeat);
+  }
+
+  async listAgentComponents(organizationId, agentId) {
+    const conditions = [];
+    const values = [];
+    if (organizationId) { values.push(organizationId); conditions.push(`organization_id=$${values.length}`); }
+    if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
+    const { rows } = await this.pool.query(`SELECT * FROM agent_components${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY agent_id, layer, module_id`, values);
+    return rows.map(mapAgentComponent);
+  }
+
+  async listAlerts(organizationId) {
+    const query = organizationId ? ["SELECT * FROM alerts WHERE organization_id=$1 ORDER BY last_seen_at DESC", [organizationId]] : ["SELECT * FROM alerts ORDER BY last_seen_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapAlert);
+  }
+
+  async listUsageRollups(organizationId) {
+    const query = organizationId ? ["SELECT * FROM usage_rollups WHERE organization_id=$1 ORDER BY bucket_start DESC LIMIT 1000", [organizationId]] : ["SELECT * FROM usage_rollups ORDER BY bucket_start DESC LIMIT 1000", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, bucketStart: row.bucket_start?.toISOString?.() ?? row.bucket_start, bucketSeconds: row.bucket_seconds, model: row.model, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), runCount: Number(row.run_count), failedRunCount: Number(row.failed_run_count), latencySumMs: Number(row.latency_sum_ms) }));
+  }
+
+  async requestAgentProvisioning(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: agentRows } = await client.query("SELECT * FROM agents WHERE id=$1 FOR UPDATE", [input.agentId]);
+      const agent = mapAgent(agentRows[0]);
+      if (!agent) { await client.query("ROLLBACK"); return null; }
+      await client.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [agent.organizationId]);
+      const { rows: runtimeRows } = await client.query("SELECT * FROM agent_runtimes WHERE agent_id=$1 FOR UPDATE", [agent.id]);
+      const runtime = mapAgentRuntime(runtimeRows[0]);
+      if (!runtime) { await client.query("ROLLBACK"); return null; }
+      if (["provisioning", "ready"].includes(agent.initializationStatus)) {
+        const { rows: deploymentRows } = await client.query("SELECT * FROM control_deployments WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 1", [agent.id]);
+        const { rows: commandRows } = deploymentRows[0] ? await client.query("SELECT * FROM control_commands WHERE deployment_id=$1 ORDER BY created_at DESC LIMIT 1", [deploymentRows[0].id]) : { rows: [] };
+        await client.query("COMMIT");
+        return { agent, runtime, deployment: deploymentRows[0] ?? null, command: commandRows[0] ?? null };
+      }
+      const { rows: serverRows } = await client.query("SELECT * FROM servers WHERE organization_id=$1 AND status IN ('active','healthy') ORDER BY last_seen_at DESC NULLS LAST, created_at LIMIT 1", [agent.organizationId]);
+      if (!serverRows[0]) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
+      const { rows: revisionRows } = await client.query("SELECT COALESCE(MAX(revision),0)+1 AS next_revision FROM config_revisions WHERE organization_id=$1", [agent.organizationId]);
+      const configId = randomUUID();
+      const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model } };
+      const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
+      await client.query("INSERT INTO config_revisions (id, organization_id, agent_id, revision, config_document, secret_envelope, content_hash, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved',$8)", [configId, agent.organizationId, agent.id, Number(revisionRows[0].next_revision), configDocument, input.provider.apiKeyEnvelope, contentHash, input.requestedBy]);
+      const deploymentId = randomUUID();
+      await client.query("INSERT INTO control_deployments (id, organization_id, server_id, agent_id, name, environment, status, desired_state_version) VALUES ($1,$2,$3,$4,$5,'production','enrolling',1)", [deploymentId, agent.organizationId, serverRows[0].id, agent.id, agent.name]);
+      await client.query("INSERT INTO desired_states (id, deployment_id, version, config_revision_id, module_versions, created_by) VALUES ($1,$2,1,$3,$4,$5)", [randomUUID(), deploymentId, configId, { "core-runtime": "hermes" }, input.requestedBy]);
+      const commandId = randomUUID();
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 15 * 60_000);
+      const args = { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: configId };
+      await client.query("INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, expected_observation_version, state, expires_at, requested_by) VALUES ($1,$2,$3,'deployment.provision','bairui.supervisor',$4,$5,0,'queued',$6,$7)", [commandId, deploymentId, `${deploymentId}/provision/${configId}`, agent.id, args, expiresAt.toISOString(), input.requestedBy]);
+      await client.query("UPDATE agent_runtimes SET deployment_id=$2, config_revision_id=$3, status='provisioning', updated_at=now() WHERE id=$1", [runtime.id, deploymentId, configId]);
+      const { rows: updatedAgents } = await client.query("UPDATE agents SET initialization_status='provisioning', desired_runtime_state='running', status='provisioning', updated_at=now() WHERE id=$1 RETURNING *", [agent.id]);
+      const { rows: updatedRuntimes } = await client.query("SELECT * FROM agent_runtimes WHERE id=$1", [runtime.id]);
+      await client.query("COMMIT");
+      return { agent: mapAgent(updatedAgents[0]), runtime: mapAgentRuntime(updatedRuntimes[0]), deployment: { id: deploymentId, serverId: serverRows[0].id, status: "enrolling" }, command: { id: commandId, action: "deployment.provision", arguments: args, state: "queued" } };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
   }
 
   async createConversation(input) {

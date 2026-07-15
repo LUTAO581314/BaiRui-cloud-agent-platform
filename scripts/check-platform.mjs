@@ -22,6 +22,8 @@ const required = [
   "packages/db/migrations/003_integrations_and_memory.sql",
   "packages/db/migrations/004_control_plane.sql",
   "packages/db/migrations/005_multi_tenant_agents.sql",
+  "packages/db/migrations/006_agent_fleet_telemetry.sql",
+  "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
@@ -51,7 +53,8 @@ const required = [
   "docs/11-control-plane-protocol.md",
   "docs/12-control-plane-security.md",
   "docs/13-control-plane-operations.md",
-  "docs/14-multi-tenant-agent-runtime.md"
+  "docs/14-multi-tenant-agent-runtime.md",
+  "docs/15-agent-fleet-control.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -74,7 +77,7 @@ for (const evidence of ["assistant.delta", "assistant.completed", "sessions/${en
 }
 const controlProtocolPath = path.join(root, "packages/server-protocol/control-plane.mjs");
 const controlProtocol = fs.existsSync(controlProtocolPath) ? fs.readFileSync(controlProtocolPath, "utf8") : "";
-for (const action of ["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
+for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!controlProtocol.includes(`"${action}"`)) failures.push(`Missing allowed control action: ${action}`);
 }
 for (const prefix of ["prompt.", "conversation.", "task.", "model.", "tool.", "skill.", "memory.", "runtime.", "shell.", "script.", "sql."]) {
@@ -94,6 +97,14 @@ for (const table of ["agent_memberships", "agent_runtimes"]) {
 }
 for (const field of ["owner_user_id", "initialization_status", "desired_runtime_state", "workspace_ref"]) {
   if (!tenantMigration.includes(field)) failures.push(`Missing multi-tenant Agent field: ${field}`);
+}
+const fleetMigrationPath = path.join(root, "packages/db/migrations/006_agent_fleet_telemetry.sql");
+const fleetMigration = fs.existsSync(fleetMigrationPath) ? fs.readFileSync(fleetMigrationPath, "utf8") : "";
+for (const table of ["agent_components", "heartbeats", "telemetry_events", "usage_rollups", "alerts", "secret_references"]) {
+  if (!fleetMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent fleet table: ${table}`);
+}
+for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
+  if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
 }
 if (failures.length) {
   console.error("Platform check failed:");

@@ -14,6 +14,7 @@
     "verify": "node --test \"tests/*.test.mjs\" && node scripts/check-platform.mjs",
     "deploy:check": "node scripts/check-platform.mjs",
     "db:migrate": "node packages/db/bin/migrate.mjs",
+    "db:schema:check": "node scripts/check-postgres-schema.mjs",
     "db:migration:print": "node packages/db/bin/print-migration.mjs",
     "deployment:bundle:print": "node packages/deployment/bin/print-bundle.mjs",
     "delivery:write": "node packages/deployment/bin/write-delivery.mjs",

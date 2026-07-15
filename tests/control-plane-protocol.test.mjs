@@ -27,6 +27,14 @@ test("does not expose Hermes data-plane actions", () => {
   }
 });
 
+test("allows deployment lifecycle but no Agent business operation", () => {
+  const value = base();
+  value.action = "deployment.provision";
+  value.arguments = { agent_id: "agent_a", workspace_ref: "workspace:agent_a", config_revision_id: "config_a" };
+  delete value.approval_id;
+  assert.equal(validateControlCommand(value).action, "deployment.provision");
+});
+
 test("rejects content and executable fields", () => {
   assert.throws(() => validateControlCommand({ ...base(), arguments: { release_id: "rel_1", prompt: "hello" } }), /not allowed/);
   assert.throws(() => validateControlCommand({ ...base(), script: "restart everything" }), /Unknown control command field/);

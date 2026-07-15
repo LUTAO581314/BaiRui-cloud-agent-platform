@@ -70,14 +70,22 @@ export function adminPage(principal) {
     <header class="topbar"><div><p class="eyebrow">${scopeLabel}</p><h1>bairui-agent 总控</h1></div><span id="control-status" class="status unknown">读取中</span></header>
     <section class="metric-band" aria-label="总控摘要">
       <div><span>用户</span><strong id="metric-users">-</strong></div>
-      <div><span>部署快照</span><strong id="metric-snapshots">-</strong></div>
+      <div><span>Agent</span><strong id="metric-agents">-</strong></div>
+      <div><span>健康 Runtime</span><strong id="metric-runtimes">-</strong></div>
+      <div><span>开放告警</span><strong id="metric-alerts">-</strong></div>
       <div><span>服务器</span><strong id="metric-servers">-</strong></div>
-      <div><span>许可证</span><strong id="metric-licenses">-</strong></div>
       <div><span>发布</span><strong id="metric-releases">-</strong></div>
-      <div><span>最近事件</span><strong id="metric-audit">-</strong></div>
     </section>
     <section class="admin-section">
-      <div class="section-heading"><h2>模块与服务器状态</h2><button id="refresh-admin" class="quiet-button" type="button">刷新</button></div>
+      <div class="section-heading"><h2>Agent 舰队</h2><button id="refresh-admin" class="quiet-button" type="button">刷新</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Agent</th><th>用户</th><th>状态</th><th>Runtime</th><th>Hermes</th><th>组件</th><th>最后心跳</th></tr></thead><tbody id="agent-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <h2>开放告警</h2>
+      <div class="table-wrap"><table><thead><tr><th>级别</th><th>代码</th><th>Agent</th><th>说明</th><th>最后发生</th></tr></thead><tbody id="alert-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <div class="section-heading"><h2>服务器快照</h2></div>
       <div class="table-wrap"><table><thead><tr><th>服务器</th><th>状态</th><th>时间</th></tr></thead><tbody id="snapshot-rows"></tbody></table></div>
     </section>
     ${principal.role === "platform_admin" ? `<section class="admin-section provider-settings-section">

@@ -25,12 +25,13 @@ async function setup(options = {}) {
   const otherUser = await repository.createUser({ id: "user_b", organizationId: "org_b", email: "other@example.test", displayName: "Other", passwordHash, role: ROLES.USER });
   const platformAdmin = await repository.createUser({ id: "root", organizationId: "org_a", email: "root@example.test", displayName: "Root", passwordHash, role: ROLES.PLATFORM_ADMIN });
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", ownerUserId: user.id, name: "Agent" });
+  const runtime = await repository.createAgentRuntime({ id: "runtime_a", organizationId: "org_a", ownerUserId: user.id, agentId: agent.id, workspaceRef: "hermes:org_a:user_a:agent_a" });
   const { privateKey } = generateKeyPairSync("ed25519");
   const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope("http-test-provider-encryption-key-longer-than-32-characters"), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  return { repository, server, baseUrl, users: { user, sameOrgUser, orgAdmin, otherUser, platformAdmin }, agent };
+  return { repository, server, baseUrl, users: { user, sameOrgUser, orgAdmin, otherUser, platformAdmin }, agent, runtime };
 }
 
 async function login(baseUrl, email) {
@@ -120,6 +121,30 @@ test("only platform administrators can issue licenses and create releases", asyn
   assert.equal((await fetch(`${context.baseUrl}/api/admin/releases`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: releaseBody })).status, 201);
 });
 
+test("Agent heartbeat updates the administrator fleet without accepting conversation content", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const heartbeat = {
+    organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id,
+    sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0",
+    observedAt: "2026-07-16T00:00:00.000Z", activeRuns: 2, queueDepth: 1,
+    components: [{ layer: "core-runtime", moduleId: "hermes", status: "healthy", version: "hermes-1", metrics: { latency_ms: 12 }, prompt: "must-not-be-stored" }],
+    events: [{ layer: "core-runtime", componentId: "hermes", eventType: "runtime.health", severity: "info", metrics: { active_runs: 2 }, content: "must-not-be-stored" }],
+    usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "hermes", inputTokens: 10, outputTokens: 20, runCount: 1, failedRunCount: 0, latencySumMs: 12 }
+  };
+  const accepted = await fetch(`${context.baseUrl}/api/internal/control-plane/heartbeats`, { method: "POST", headers: { authorization: "Bearer agent-ingest-test-token", "content-type": "application/json" }, body: JSON.stringify(heartbeat) });
+  assert.equal(accepted.status, 202);
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  const fleet = await (await fetch(`${context.baseUrl}/api/admin/agents`, { headers: { cookie: rootCookie } })).json();
+  const item = fleet.agents.find((agent) => agent.id === context.agent.id);
+  assert.equal(item.runtime.status, "ready");
+  assert.equal(item.heartbeat.activeRuns, 2);
+  assert.deepEqual(item.components[0].metrics, { latency_ms: 12 });
+  assert.doesNotMatch(JSON.stringify(item), /must-not-be-stored/);
+  const overview = await (await fetch(`${context.baseUrl}/api/admin/overview`, { headers: { cookie: rootCookie } })).json();
+  assert.equal(overview.healthyRuntimes, 1);
+});
+
 test("users can create and manage only their own isolated Agents", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
@@ -149,6 +174,25 @@ test("users can create and manage only their own isolated Agents", async (t) => 
   });
   assert.equal(update.status, 200);
   assert.equal((await update.json()).agent.name, "Updated Agent");
+});
+
+test("Agent initialization queues a deployment provision command and never reports false readiness", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { ciphertext: "encrypted" }, keyHint: "1234", updatedBy: "root" });
+  const cookie = await login(context.baseUrl, "user@example.test");
+  const noCapacity = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(noCapacity.status, 409);
+  assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "uninitialized");
+
+  await context.repository.createServer({ id: "server_capacity", organizationId: "org_a", name: "Runtime host", status: "healthy" });
+  const accepted = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(accepted.status, 202);
+  const result = await accepted.json();
+  assert.equal(result.agent.initializationStatus, "provisioning");
+  assert.equal(result.runtime.status, "provisioning");
+  assert.equal(result.command.action, "deployment.provision");
+  assert.equal(result.command.arguments.agent_id, context.agent.id);
 });
 
 test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE", async (t) => {
