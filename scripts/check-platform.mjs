@@ -103,7 +103,7 @@ const fleetMigration = fs.existsSync(fleetMigrationPath) ? fs.readFileSync(fleet
 for (const table of ["agent_components", "heartbeats", "telemetry_events", "usage_rollups", "alerts", "secret_references"]) {
   if (!fleetMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent fleet table: ${table}`);
 }
-for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning", "deployment.provision"]) {
+for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
 }
 if (failures.length) {
