@@ -19,18 +19,18 @@ if (production && !databaseUrl) throw new Error("DATABASE_URL is required in pro
 const repository = databaseUrl
   ? new PostgresPlatformRepository({ connectionString: databaseUrl, ssl: process.env.BAIRUI_DATABASE_SSL === "1" ? { rejectUnauthorized: true } : undefined })
   : new MemoryPlatformRepository();
-const organization = await repository.createOrganization({ id: "org_bairui", name: "BaiRui" });
+const organization = await repository.createOrganization({ id: "org_bairui", name: "bairui-agent" });
 const adminEmail = process.env.BAIRUI_BOOTSTRAP_ADMIN_EMAIL ?? "admin@bairui.local";
 const adminPassword = process.env.BAIRUI_BOOTSTRAP_ADMIN_PASSWORD ?? (production ? "" : "Bairui-Admin-Change-Me-2026");
 if (!adminPassword) throw new Error("BAIRUI_BOOTSTRAP_ADMIN_PASSWORD is required in production");
 const admin = await repository.createUser({
   organizationId: organization.id,
   email: adminEmail,
-  displayName: "BaiRui Administrator",
+  displayName: "bairui-agent Administrator",
   passwordHash: await hashPassword(adminPassword),
   role: ROLES.PLATFORM_ADMIN
 });
-await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, name: "BaiRui Agent", description: "Hermes runtime boundary" });
+await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, name: "bairui-agent", description: "Hermes runtime boundary" });
 await repository.recordAudit({ organizationId: organization.id, actorUserId: admin.id, action: "platform.bootstrap", targetType: "organization", targetId: organization.id });
 
 const server = createPlatformServer({
@@ -46,6 +46,8 @@ const server = createPlatformServer({
   }) : undefined,
   licensePrivateKey: process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n"),
   styles: fs.readFileSync(path.join(appDir, "public", "styles.css"), "utf8"),
+  logo: fs.readFileSync(path.join(appDir, "public", "bairui-agent-logo.png")),
+  icon: fs.readFileSync(path.join(appDir, "public", "bairui-agent-icon.png")),
   loginScript: fs.readFileSync(path.join(appDir, "public", "login.js"), "utf8"),
   userScript: fs.readFileSync(path.join(appDir, "public", "user.js"), "utf8"),
   adminScript: fs.readFileSync(path.join(appDir, "admin", "admin.js"), "utf8")
@@ -53,5 +55,5 @@ const server = createPlatformServer({
 
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1", () => {
-  console.log(`BaiRui platform listening on port ${port}`);
+  console.log(`bairui-agent platform listening on port ${port}`);
 });
