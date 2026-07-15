@@ -58,6 +58,9 @@ test("anonymous and ordinary users cannot access administrator data", async (t) 
   t.after(() => context.server.close());
   assert.equal((await fetch(`${context.baseUrl}/api/admin/overview`)).status, 401);
   const cookie = await login(context.baseUrl, "user@example.test");
+  const workspacePage = await fetch(`${context.baseUrl}/app`, { headers: { cookie } });
+  assert.equal(workspacePage.status, 200);
+  assert.match(await workspacePage.text(), /brain-layout/);
   assert.equal((await fetch(`${context.baseUrl}/admin`, { headers: { cookie } })).status, 404);
   assert.equal((await fetch(`${context.baseUrl}/admin/assets/admin.js`, { headers: { cookie } })).status, 404);
   assert.equal((await fetch(`${context.baseUrl}/api/admin/overview`, { headers: { cookie } })).status, 403);
