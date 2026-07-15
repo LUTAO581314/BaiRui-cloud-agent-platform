@@ -24,6 +24,7 @@ const required = [
   "packages/db/migrations/005_multi_tenant_agents.sql",
   "packages/db/migrations/006_agent_fleet_telemetry.sql",
   "packages/db/migrations/007_control_command_delivery.sql",
+  "packages/db/migrations/008_user_agent_surfaces.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -120,6 +121,14 @@ for (const table of ["server_credentials", "agent_runtime_credentials", "machine
 }
 for (const evidence of ["/api/internal/control-plane/commands/lease", "recordCommandReceipt", "verifyMachineRequest", "revealLease"]) {
   if (!server.includes(evidence)) failures.push(`Missing command delivery server evidence: ${evidence}`);
+}
+const userSurfaceMigrationPath = path.join(root, "packages/db/migrations/008_user_agent_surfaces.sql");
+const userSurfaceMigration = fs.existsSync(userSurfaceMigrationPath) ? fs.readFileSync(userSurfaceMigrationPath, "utf8") : "";
+for (const table of ["agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks"]) {
+  if (!userSurfaceMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent user-surface table: ${table}`);
+}
+for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
+  if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }
 const supervisorPath = path.join(root, "server-agent/supervisor.mjs");
 const supervisor = fs.existsSync(supervisorPath) ? fs.readFileSync(supervisorPath, "utf8") : "";
