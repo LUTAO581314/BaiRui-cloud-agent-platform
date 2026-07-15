@@ -18,6 +18,7 @@ import {
   verifySessionToken
 } from "../../packages/auth/session.mjs";
 import { loginPage, userPage, adminPage } from "./views.mjs";
+import { issueLicense } from "../../packages/license/license.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -90,6 +91,7 @@ export function createPlatformApp(options) {
     allowRegistration = false,
     agentIngestToken,
     runtimeClient,
+    licensePrivateKey,
     logger = console
   } = options;
   if (!repository) throw new TypeError("repository is required");
@@ -234,8 +236,8 @@ export function createPlatformApp(options) {
         const permitted = can(principal, PERMISSIONS.PLATFORM_OVERVIEW_READ) || can(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         if (!permitted) throw new AuthorizationError();
         const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
-        const [users, snapshots, audit] = await Promise.all([repository.listUsers(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope)]);
-        return json(response, 200, { scope: scope ?? "platform", users: users.length, snapshots, recentAudit: audit.slice(-20).reverse() });
+        const [users, snapshots, audit, licenses, servers, releases] = await Promise.all([repository.listUsers(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([])]);
+        return json(response, 200, { scope: scope ?? "platform", users: users.length, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
       }
       if (method === "GET" && url.pathname === "/api/admin/users") {
         requireLogin(principal);
@@ -264,6 +266,51 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
         return json(response, 200, { snapshots: await repository.latestControlPlaneSnapshots(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/licenses") {
+        requireLogin(principal);
+        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
+        else requirePermission(principal, PERMISSIONS.PLATFORM_LICENSES_MANAGE);
+        return json(response, 200, { licenses: await repository.listLicenses(scope) });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/licenses") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_LICENSES_MANAGE);
+        if (!licensePrivateKey) return json(response, 503, { error: "license_signing_unavailable" });
+        const body = await readJson(request);
+        if (!await repository.getOrganization(body.organizationId)) return json(response, 404, { error: "organization_not_found" });
+        const document = issueLicense({ organizationId: body.organizationId, plan: body.plan, features: body.features, limits: body.limits, expiresAt: body.expiresAt }, licensePrivateKey);
+        const license = await repository.createLicense({ id: document.payload.licenseId, organizationId: body.organizationId, plan: body.plan, document, issuedAt: document.payload.issuedAt, expiresAt: document.payload.expiresAt });
+        await repository.recordAudit({ organizationId: body.organizationId, actorUserId: principal.userId, action: "license.issue", targetType: "license", targetId: license.id, metadata: { plan: license.plan } });
+        return json(response, 201, { license });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/servers") {
+        requireLogin(principal);
+        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
+        else requirePermission(principal, PERMISSIONS.PLATFORM_SERVERS_MANAGE);
+        return json(response, 200, { servers: await repository.listServers(scope) });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/servers") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_SERVERS_MANAGE);
+        const body = await readJson(request);
+        if (!await repository.getOrganization(body.organizationId)) return json(response, 404, { error: "organization_not_found" });
+        if (typeof body.name !== "string" || !body.name.trim()) return json(response, 400, { error: "invalid_server" });
+        const server = await repository.createServer({ organizationId: body.organizationId, name: body.name.trim() });
+        await repository.recordAudit({ organizationId: body.organizationId, actorUserId: principal.userId, action: "server.create", targetType: "server", targetId: server.id });
+        return json(response, 201, { server });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/releases") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
+        return json(response, 200, { releases: await repository.listReleases() });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/releases") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
+        const body = await readJson(request);
+        if (typeof body.version !== "string" || typeof body.agentCommit !== "string" || !/^[0-9a-f]{40}$/.test(body.agentCommit)) return json(response, 400, { error: "invalid_release" });
+        const release = await repository.createRelease({ version: body.version, agentCommit: body.agentCommit, status: body.status, notes: body.notes });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "release.create", targetType: "release", targetId: release.id, metadata: { version: release.version } });
+        return json(response, 201, { release });
       }
       if (method === "POST" && url.pathname === "/api/internal/control-plane/snapshots") {
         const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];

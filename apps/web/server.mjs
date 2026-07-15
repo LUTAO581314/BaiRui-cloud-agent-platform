@@ -44,6 +44,7 @@ const server = createPlatformServer({
     baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
     sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET
   }) : undefined,
+  licensePrivateKey: process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n"),
   styles: fs.readFileSync(path.join(appDir, "public", "styles.css"), "utf8"),
   loginScript: fs.readFileSync(path.join(appDir, "public", "login.js"), "utf8"),
   userScript: fs.readFileSync(path.join(appDir, "public", "user.js"), "utf8"),

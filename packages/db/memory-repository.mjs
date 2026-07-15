@@ -14,6 +14,9 @@ export class MemoryPlatformRepository {
   #messages = new Map();
   #snapshots = [];
   #audit = [];
+  #licenses = [];
+  #servers = [];
+  #releases = [];
 
   async createOrganization(input) {
     const organization = { id: input.id ?? randomUUID(), name: input.name, createdAt: new Date().toISOString() };
@@ -117,5 +120,35 @@ export class MemoryPlatformRepository {
 
   async listAudit(organizationId) {
     return this.#audit.filter((event) => !organizationId || event.organizationId === organizationId);
+  }
+
+  async createLicense(input) {
+    const license = { id: input.id, organizationId: input.organizationId, plan: input.plan, status: input.status ?? "active", document: input.document, issuedAt: input.issuedAt, expiresAt: input.expiresAt, createdAt: new Date().toISOString() };
+    this.#licenses.push(license);
+    return license;
+  }
+
+  async listLicenses(organizationId) {
+    return this.#licenses.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async createServer(input) {
+    const server = { id: input.id ?? randomUUID(), organizationId: input.organizationId, name: input.name, status: input.status ?? "pending", runtimeVersion: null, lastSeenAt: null, createdAt: new Date().toISOString() };
+    this.#servers.push(server);
+    return server;
+  }
+
+  async listServers(organizationId) {
+    return this.#servers.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async createRelease(input) {
+    const release = { id: input.id ?? randomUUID(), version: input.version, agentCommit: input.agentCommit, status: input.status ?? "draft", notes: input.notes ?? "", createdAt: new Date().toISOString() };
+    this.#releases.push(release);
+    return release;
+  }
+
+  async listReleases() {
+    return [...this.#releases];
   }
 }

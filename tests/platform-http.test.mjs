@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { generateKeyPairSync } from "node:crypto";
 import { createPlatformServer } from "../apps/web/app.mjs";
 import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
@@ -19,7 +20,8 @@ async function setup() {
   const platformAdmin = await repository.createUser({ id: "root", organizationId: "org_a", email: "root@example.test", displayName: "Root", passwordHash, role: ROLES.PLATFORM_ADMIN });
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", name: "Agent" });
   const conversation = await repository.createConversation({ id: "conversation_a", organizationId: "org_a", userId: user.id, agentId: agent.id, title: "Private" });
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", styles: "", loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, styles: "", loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -89,4 +91,16 @@ test("control-plane ingestion requires a separate agent credential", async (t) =
   const body = JSON.stringify({ organizationId: "org_a", serverId: "server_a", snapshot: { schemaVersion: "1.0", status: "healthy" } });
   assert.equal((await fetch(`${context.baseUrl}/api/internal/control-plane/snapshots`, { method: "POST", headers: { "content-type": "application/json" }, body })).status, 401);
   assert.equal((await fetch(`${context.baseUrl}/api/internal/control-plane/snapshots`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer agent-ingest-test-token" }, body })).status, 202);
+});
+
+test("only platform administrators can issue licenses and create releases", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const orgCookie = await login(context.baseUrl, "org-admin@example.test");
+  const licenseBody = JSON.stringify({ organizationId: "org_a", plan: "business", features: ["runtime"], expiresAt: "2030-01-01T00:00:00.000Z" });
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/licenses`, { method: "POST", headers: { cookie: orgCookie, "content-type": "application/json" }, body: licenseBody })).status, 403);
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/licenses`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: licenseBody })).status, 201);
+  const releaseBody = JSON.stringify({ version: "0.1.0", agentCommit: "a".repeat(40), status: "candidate" });
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/releases`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: releaseBody })).status, 201);
 });

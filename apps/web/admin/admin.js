@@ -35,6 +35,9 @@ async function loadOverview() {
   const data = await request("/api/admin/overview");
   document.querySelector("#metric-users").textContent = data.users;
   document.querySelector("#metric-snapshots").textContent = data.snapshots.length;
+  document.querySelector("#metric-servers").textContent = data.servers;
+  document.querySelector("#metric-licenses").textContent = data.licenses;
+  document.querySelector("#metric-releases").textContent = data.releases;
   document.querySelector("#metric-audit").textContent = data.recentAudit.length;
   const status = document.querySelector("#control-status");
   const latest = data.snapshots.at(-1);
@@ -50,6 +53,24 @@ async function loadOverview() {
     (item) => item.targetType,
     (item) => new Date(item.createdAt).toLocaleString()
   ], "暂无记录"));
+  const [users, servers, licenses, releases] = await Promise.all([
+    request("/api/admin/users"),
+    request("/api/admin/servers"),
+    request("/api/admin/licenses"),
+    request("/api/admin/releases").catch((error) => error.status === 403 ? { releases: [] } : Promise.reject(error))
+  ]);
+  document.querySelector("#user-rows").replaceChildren(...tableRows(users.users, [
+    (item) => `${item.displayName} (${item.email})`, (item) => item.role, (item) => item.status
+  ], "暂无成员"));
+  document.querySelector("#server-rows").replaceChildren(...tableRows(servers.servers, [
+    (item) => item.name, (item) => item.status, (item) => item.runtimeVersion ?? "-"
+  ], "暂无服务器"));
+  document.querySelector("#license-rows").replaceChildren(...tableRows(licenses.licenses, [
+    (item) => item.id, (item) => item.plan, (item) => item.status, (item) => new Date(item.expiresAt).toLocaleDateString()
+  ], "暂无许可证"));
+  document.querySelector("#release-rows").replaceChildren(...tableRows(releases.releases, [
+    (item) => item.version, (item) => item.status, (item) => item.agentCommit.slice(0, 12)
+  ], "暂无发布"));
 }
 
 document.querySelector("#refresh-admin").addEventListener("click", loadOverview);

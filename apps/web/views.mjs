@@ -97,11 +97,30 @@ export function adminPage(principal) {
     <section class="metric-band" aria-label="总控摘要">
       <div><span>用户</span><strong id="metric-users">-</strong></div>
       <div><span>部署快照</span><strong id="metric-snapshots">-</strong></div>
+      <div><span>服务器</span><strong id="metric-servers">-</strong></div>
+      <div><span>许可证</span><strong id="metric-licenses">-</strong></div>
+      <div><span>发布</span><strong id="metric-releases">-</strong></div>
       <div><span>最近事件</span><strong id="metric-audit">-</strong></div>
     </section>
     <section class="admin-section">
       <div class="section-heading"><h2>模块与服务器状态</h2><button id="refresh-admin" class="quiet-button" type="button">刷新</button></div>
       <div class="table-wrap"><table><thead><tr><th>服务器</th><th>状态</th><th>时间</th></tr></thead><tbody id="snapshot-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <h2>成员</h2>
+      <div class="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>状态</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <h2>服务器</h2>
+      <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>运行版本</th></tr></thead><tbody id="server-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <h2>许可证</h2>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>套餐</th><th>状态</th><th>到期</th></tr></thead><tbody id="license-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section" id="release-section">
+      <h2>发布</h2>
+      <div class="table-wrap"><table><thead><tr><th>版本</th><th>状态</th><th>Agent Commit</th></tr></thead><tbody id="release-rows"></tbody></table></div>
     </section>
     <section class="admin-section">
       <h2>审计记录</h2>

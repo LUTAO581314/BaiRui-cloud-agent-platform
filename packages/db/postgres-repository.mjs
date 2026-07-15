@@ -16,6 +16,9 @@ const mapConversation = (row) => ({ id: row.id, organizationId: row.organization
 const mapMessage = (row) => ({ id: row.id, conversationId: row.conversation_id, organizationId: row.organization_id, userId: row.user_id, role: row.role, content: row.content, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapSnapshot = (row) => ({ id: row.id, organizationId: row.organization_id, serverId: row.server_id, status: row.status, payload: row.payload, receivedAt: row.received_at?.toISOString?.() ?? row.received_at });
 const mapAudit = (row) => ({ id: row.id, organizationId: row.organization_id, actorUserId: row.actor_user_id, action: row.action, targetType: row.target_type, targetId: row.target_id, metadata: row.metadata, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
+const mapLicense = (row) => ({ id: row.id, organizationId: row.organization_id, plan: row.plan, status: row.status, document: row.document, issuedAt: row.issued_at?.toISOString?.() ?? row.issued_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
+const mapServer = (row) => ({ id: row.id, organizationId: row.organization_id, name: row.name, status: row.status, runtimeVersion: row.runtime_version, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
+const mapRelease = (row) => ({ id: row.id, version: row.version, agentCommit: row.agent_commit, status: row.status, notes: row.notes, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 
 export class PostgresPlatformRepository {
   constructor(options = {}) {
@@ -140,5 +143,37 @@ export class PostgresPlatformRepository {
     const query = organizationId ? ["SELECT * FROM audit_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 100", [organizationId]] : ["SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 100", []];
     const { rows } = await this.pool.query(...query);
     return rows.map(mapAudit);
+  }
+
+  async createLicense(input) {
+    const { rows } = await this.pool.query("INSERT INTO licenses (id, organization_id, plan, status, document, issued_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [input.id, input.organizationId, input.plan, input.status ?? "active", input.document, input.issuedAt, input.expiresAt]);
+    return mapLicense(rows[0]);
+  }
+
+  async listLicenses(organizationId) {
+    const query = organizationId ? ["SELECT * FROM licenses WHERE organization_id = $1 ORDER BY expires_at DESC", [organizationId]] : ["SELECT * FROM licenses ORDER BY expires_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapLicense);
+  }
+
+  async createServer(input) {
+    const { rows } = await this.pool.query("INSERT INTO servers (id, organization_id, name, status) VALUES ($1,$2,$3,$4) RETURNING *", [input.id ?? randomUUID(), input.organizationId, input.name, input.status ?? "pending"]);
+    return mapServer(rows[0]);
+  }
+
+  async listServers(organizationId) {
+    const query = organizationId ? ["SELECT * FROM servers WHERE organization_id = $1 ORDER BY created_at DESC", [organizationId]] : ["SELECT * FROM servers ORDER BY created_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapServer);
+  }
+
+  async createRelease(input) {
+    const { rows } = await this.pool.query("INSERT INTO releases (id, version, agent_commit, status, notes) VALUES ($1,$2,$3,$4,$5) RETURNING *", [input.id ?? randomUUID(), input.version, input.agentCommit, input.status ?? "draft", input.notes ?? ""]);
+    return mapRelease(rows[0]);
+  }
+
+  async listReleases() {
+    const { rows } = await this.pool.query("SELECT * FROM releases ORDER BY created_at DESC");
+    return rows.map(mapRelease);
   }
 }
