@@ -8,7 +8,8 @@ function shell({ title, view, body, script }) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} | BaiRui</title>
+  <title>${escapeHtml(title)} | bairui-agent</title>
+  <link rel="icon" type="image/png" href="/assets/bairui-agent-icon.png">
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body data-view="${escapeHtml(view)}">
@@ -25,8 +26,8 @@ export function loginPage() {
     script: "/assets/login.js",
     body: `<main class="auth-shell">
   <section class="auth-panel" aria-labelledby="login-title">
-    <div class="brand-mark">BR</div>
-    <p class="brand-name">BaiRui Agent</p>
+    <img class="brand-mark login-mark" src="/assets/bairui-agent-logo.png" alt="">
+    <p class="brand-name">bairui-agent</p>
     <h1 id="login-title">登录工作区</h1>
     <form id="login-form" class="form-stack">
       <label>邮箱<input name="email" type="email" autocomplete="username" required></label>
@@ -44,7 +45,7 @@ function navigation(principal, active) {
     ? `<a class="nav-link ${active === "admin" ? "active" : ""}" href="/admin">总控后台</a>`
     : "";
   return `<aside class="sidebar">
-  <div class="sidebar-brand"><span class="brand-mark small">BR</span><span>BaiRui</span></div>
+  <div class="sidebar-brand"><img class="brand-mark small" src="/assets/bairui-agent-logo.png" alt=""><span>bairui-agent</span></div>
   <nav aria-label="主导航">
     <a class="nav-link ${active === "app" ? "active" : ""}" href="/app">Agent 工作区</a>
     ${admin}
@@ -65,7 +66,7 @@ export function userPage(principal) {
     body: `<div class="app-shell">
   ${navigation(principal, "app")}
   <main class="workspace">
-    <header class="topbar"><div><p class="eyebrow">工作区</p><h1>Agent 对话</h1></div><span id="runtime-status" class="status unknown">连接中</span></header>
+    <header class="topbar"><div><p class="eyebrow">工作区</p><h1>bairui-agent 对话</h1></div><span id="runtime-status" class="status unknown">连接中</span></header>
     <div class="workspace-grid">
       <section class="conversation-list" aria-label="会话列表">
         <div class="section-heading"><h2>会话</h2><button id="new-conversation" class="icon-button" type="button" title="新建会话" aria-label="新建会话">+</button></div>
@@ -93,7 +94,7 @@ export function adminPage(principal) {
     body: `<div class="app-shell">
   ${navigation(principal, "admin")}
   <main class="workspace admin-workspace">
-    <header class="topbar"><div><p class="eyebrow">${scopeLabel}</p><h1>百瑞总控</h1></div><span id="control-status" class="status unknown">读取中</span></header>
+    <header class="topbar"><div><p class="eyebrow">${scopeLabel}</p><h1>bairui-agent 总控</h1></div><span id="control-status" class="status unknown">读取中</span></header>
     <section class="metric-band" aria-label="总控摘要">
       <div><span>用户</span><strong id="metric-users">-</strong></div>
       <div><span>部署快照</span><strong id="metric-snapshots">-</strong></div>
