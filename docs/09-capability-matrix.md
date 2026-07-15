@@ -88,6 +88,8 @@ SearXNG   -> 搜索兜底（已具备适配器，待部署服务）
 ## 记忆和数据库边界
 
 - PostgreSQL 是用户、权限、会话、审计、采集批次、热点和笔记索引的权威数据库。
+- PostgreSQL 是以后新增百瑞业务数据的默认生产数据库；内存 repository 仅用于测试或一次性本地运行。
+- upstream 内部使用 SQLite 时必须留在 adapter 边界后面，不能替代百瑞平台 PG 主库。
 - Obsidian 是用户可读的 Markdown 交换格式，包含 YAML frontmatter、标签和 `[[wikilink]]`。
 - Hermes 的 `MEMORY.md`、`USER.md` 和运行会话仍由 Hermes 管理。
 - 当前已实现 PG 内的 Obsidian Markdown 记录；文件系统 Vault 双向同步属于后续 adapter，不直接修改 Hermes 内部记忆。
