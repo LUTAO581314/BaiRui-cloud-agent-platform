@@ -89,7 +89,7 @@ the web process. Nginx terminates HTTPS using `infra/nginx/bairui.conf`.
 
 ## 6. Customer Hermes Deployment Bundle
 
-The platform can generate the P0 customer deployment bundle:
+The platform can generate the current customer deployment bundle:
 
 ```sh
 npm run deployment:bundle:print -- \

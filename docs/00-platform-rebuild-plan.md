@@ -38,9 +38,9 @@ prompts, chat history, files, model API keys, or connector tokens.
 | UI Exposure Layer | host platform console; do not own Brain UI internals |
 | Bairui Control Plane | ingest health, readiness, version, release gate, and acceptance evidence |
 
-## 3. P0 Scope
+## 3. Implemented Foundation
 
-P0 should include:
+The current foundation includes:
 
 - platform health and readiness endpoints;
 - organization and license records;
@@ -67,8 +67,10 @@ Recommended stack:
 - GitHub Actions;
 - Playwright.
 
-The current Node standard-library P0 API can remain as a simple runnable
-baseline until the web platform is scaffolded.
+The current Node standard-library API remains the deployed foundation while
+the complete control service, long-running server agent, workers, and formal
+administrator workflows are implemented. This is an implementation sequence,
+not a reduced product scope.
 
 ## 5. License Flow
 

@@ -32,6 +32,9 @@ plane contracts.
 - heartbeat and acceptance evidence;
 - version and release inventory;
 - Bairui Control Plane platform heartbeat ingestion;
+- desired and observed deployment state;
+- operational approvals, command leases, tests, releases, backups, incidents,
+  and audit workflows;
 - support tickets and diagnostic bundle workflow.
 
 `BaiRui-cloud-agent-platform` does not own:
@@ -45,21 +48,23 @@ plane contracts.
 - third-party model API keys;
 - customer connector tokens;
 - unrestricted remote shell control of customer servers.
+- prompts, Agent tasks, model/tool decisions, runtime memory operations, or any
+  other Hermes execution behavior through the control plane.
 
 ## Platform Relationship To The Agent Framework
 
 ```mermaid
 flowchart LR
   Platform["BaiRui Cloud Agent Platform<br/>website, console, license, deployment, support"]
-  CP["Bairui Control Plane<br/>health, versions, readiness, tests, release gates"]
+  CP["Bairui Control Plane<br/>desired state, operations, health, tests, releases"]
   Boundary["Bairui Runtime Boundary<br/>platform adapter around Hermes"]
   Hermes["Hermes Runtime Core<br/>agent runtime"]
-  ServerAgent["Customer Server Agent<br/>outbound heartbeat and acceptance"]
+  ServerAgent["Customer Server Agent<br/>outbound observation and approved operations"]
   Customer["Customer Server / VM"]
 
   Platform -->|"license, deployment bundle, release metadata"| Customer
   Customer --> ServerAgent
-  ServerAgent -->|"heartbeat, acceptance report, diagnostic metadata"| Platform
+  ServerAgent -->|"observations, command evidence, acceptance metadata"| Platform
   Platform -->|"platform heartbeat ingestion"| CP
   CP -->|"release gates, dependency inventory, readiness state"| Platform
   Platform -->|"tenant, license, workspace, deployment config"| Boundary
@@ -129,7 +134,7 @@ Server management:
 - diagnostic bundle upload only after customer action;
 - no customer business data uploaded by default.
 
-## P0 Platform Deployment
+## Current Platform Deployment
 
 Prepare protected production variables from `infra/.env.example`, then deploy:
 
@@ -171,6 +176,12 @@ npm run server-agent:acceptance
 - signed platform-to-runtime requests and outbound server heartbeat;
 - Ed25519 licenses and hash-verified delivery bundles;
 - PostgreSQL migrations, Docker deployment, and GitHub CI container builds.
+
+The current production control path is observation-only. The complete protocol,
+PostgreSQL control model, security boundary, and delivery sequence are defined
+in `docs/10-control-plane-architecture.md` through
+`docs/13-control-plane-operations.md`. A configuration or release is not
+reported as applied until the server agent executes and verifies it.
 
 Provider credentials and customer connector tokens remain deployment secrets.
 CI verifies fixtures and authorization boundaries without invoking paid models.

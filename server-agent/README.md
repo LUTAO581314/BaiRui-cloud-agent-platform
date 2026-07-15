@@ -17,6 +17,10 @@ Responsibilities:
 - collect diagnostic bundles after customer action;
 - execute white-listed maintenance actions.
 
+It manages the deployment around Hermes. It does not manage an Agent run inside
+Hermes and must never accept prompts, Agent tasks, model/tool calls, skills, or
+runtime-memory operations as control actions.
+
 Forbidden:
 
 - arbitrary shell command execution;
@@ -30,9 +34,10 @@ Forbidden:
 Formal customer deployments should use VPS or VM isolation with Docker Compose
 inside the customer environment.
 
-## P0 Outbound Heartbeat
+## Current Observation Cycle
 
-The first runnable agent cycle is implemented in `server-agent/index.mjs`.
+The currently implemented one-shot observation cycle lives in
+`server-agent/index.mjs`.
 
 It performs one safe outbound reporting cycle:
 
@@ -70,4 +75,10 @@ The agent reports only operational metadata already exposed by runtime
 heartbeat. It does not upload prompts, chat history, files, Obsidian note
 bodies, memory content, passwords, private keys, or model and connector
 secrets.
+
+The production target is a long-running outbound daemon with per-deployment
+identity, command leasing, replay-safe events, and the strict action validator
+in `packages/server-protocol/control-plane.mjs`. The current one-shot sender
+does not execute remote commands and must not be presented as a completed
+closed-loop control agent.
 

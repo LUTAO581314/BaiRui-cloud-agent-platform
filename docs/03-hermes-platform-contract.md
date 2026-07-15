@@ -42,12 +42,19 @@ Bairui Cloud Agent Platform owns:
 
 Bairui Control Plane owns:
 
+- desired and observed deployment state;
+- deployment identity and operational command life cycle;
+- configuration revision, operational approval, apply, verify, and rollback;
 - health and readiness inventory;
 - dependency drift tracking;
 - upstream version and commit inventory;
 - contract-test and smoke-test evidence;
 - release gates;
 - platform heartbeat summaries.
+
+It does not own prompts, conversations, Agent tasks, planning, model/tool
+selection or execution, runtime memory, skills, runtime approvals, replies, or
+artifacts. A control command must never be converted into `RuntimeRequest`.
 
 ## 2. Platform To Runtime Boundary
 
@@ -88,9 +95,11 @@ Runtime and customer server-agent may report:
 - last seen time;
 - acceptance report summary.
 
-## 4. P0 Heartbeat Contract
+## 4. Current Compatibility Heartbeat
 
-The P0 heartbeat is implemented in `packages/server-protocol`.
+The currently deployed observation heartbeat is implemented in
+`packages/server-protocol`. It remains a compatibility transport while the
+versioned control protocol is introduced.
 
 Current protocol version:
 
@@ -122,7 +131,7 @@ The platform validates this payload before storing server state. The customer
 server sends it outbound to the platform; the platform must not require an
 unauthenticated inbound control port on the customer server.
 
-## 5. P0 Acceptance Report Contract
+## 5. Current Acceptance Report Contract
 
 After assisted deployment, `server-agent:acceptance` sends a JSON report to:
 
