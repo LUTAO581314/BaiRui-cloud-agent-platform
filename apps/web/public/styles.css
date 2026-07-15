@@ -6,8 +6,8 @@
   --surface: #ffffff;
   --line: #dce2e5;
   --muted: #68757d;
-  --brand: #176b5b;
-  --brand-dark: #0f4f44;
+  --brand: #0879d1;
+  --brand-dark: #075da8;
   --danger: #a63c34;
   --warning: #a56812;
   --sidebar: #192327;
@@ -20,16 +20,17 @@ button { cursor: pointer; }
 
 .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #edf1f1; }
 .auth-panel { width: min(400px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 36px; box-shadow: 0 16px 45px rgba(18, 34, 39, .09); }
-.brand-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 6px; background: var(--brand); color: white; font-weight: 750; }
-.brand-mark.small { width: 32px; height: 32px; font-size: 12px; }
-.brand-name { margin: 14px 0 28px; color: var(--muted); font-weight: 650; }
+.brand-mark { width: 44px; height: 44px; display: block; object-fit: contain; border: 1px solid #d7e7f4; border-radius: 6px; background: white; }
+.brand-mark.login-mark { width: 72px; height: 72px; }
+.brand-mark.small { width: 34px; height: 34px; }
+.brand-name { margin: 14px 0 28px; color: #075da8; font-weight: 750; }
 h1, h2, p { margin-top: 0; }
 h1 { font-size: 24px; letter-spacing: 0; }
 h2 { font-size: 16px; letter-spacing: 0; }
 .form-stack { display: grid; gap: 18px; }
 .form-stack label { display: grid; gap: 7px; color: #37444a; font-size: 13px; font-weight: 650; }
 input, textarea { width: 100%; border: 1px solid #cbd4d8; border-radius: 5px; padding: 11px 12px; background: white; color: #172026; outline: none; }
-input:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(23, 107, 91, .12); }
+input:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(8, 121, 209, .13); }
 .primary-button { min-height: 40px; border: 0; border-radius: 5px; padding: 0 16px; background: var(--brand); color: white; font-weight: 700; }
 .primary-button:hover { background: var(--brand-dark); }
 .quiet-button, .icon-button { border: 1px solid var(--line); border-radius: 5px; background: white; color: #324047; min-height: 34px; padding: 0 11px; }
@@ -59,11 +60,11 @@ input:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px 
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .list-stack { display: grid; gap: 5px; }
 .conversation-item { width: 100%; border: 0; border-radius: 4px; background: transparent; padding: 10px; text-align: left; color: #344249; }
-.conversation-item:hover, .conversation-item.active { background: #edf4f2; color: var(--brand-dark); }
+.conversation-item:hover, .conversation-item.active { background: #eaf4fc; color: var(--brand-dark); }
 .chat-surface { min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
 .message-list { min-height: 0; overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
 .message { max-width: 76%; border-radius: 6px; padding: 11px 13px; white-space: pre-wrap; line-height: 1.5; background: #edf1f2; }
-.message.user { align-self: flex-end; background: #dff0eb; }
+.message.user { align-self: flex-end; background: #e0f0fb; }
 .composer { border-top: 1px solid var(--line); padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .composer textarea { resize: vertical; max-height: 180px; }
 .metric-band { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 6px; background: white; margin-bottom: 20px; }

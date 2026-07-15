@@ -21,7 +21,7 @@ async function setup() {
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", name: "Agent" });
   const conversation = await repository.createConversation({ id: "conversation_a", organizationId: "org_a", userId: user.id, agentId: agent.id, title: "Private" });
   const { privateKey } = generateKeyPairSync("ed25519");
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, styles: "", loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -37,6 +37,21 @@ async function login(baseUrl, email) {
   assert.equal(response.status, 200);
   return response.headers.get("set-cookie").split(";")[0];
 }
+
+test("public pages expose the bairui-agent brand assets", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const loginPage = await fetch(`${context.baseUrl}/login`);
+  assert.equal(loginPage.status, 200);
+  assert.match(await loginPage.text(), /bairui-agent/);
+  const logo = await fetch(`${context.baseUrl}/assets/bairui-agent-logo.png`);
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get("content-type"), "image/png");
+  assert.equal(Buffer.from(await logo.arrayBuffer()).toString(), "logo");
+  const icon = await fetch(`${context.baseUrl}/assets/bairui-agent-icon.png`);
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers.get("content-type"), "image/png");
+});
 
 test("anonymous and ordinary users cannot access administrator data", async (t) => {
   const context = await setup();

@@ -131,6 +131,16 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.styles);
       }
+      if (method === "GET" && url.pathname === "/assets/bairui-agent-logo.png") {
+        if (!options.logo) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+        return response.end(options.logo);
+      }
+      if (method === "GET" && url.pathname === "/assets/bairui-agent-icon.png") {
+        if (!options.icon) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+        return response.end(options.icon);
+      }
       if (method === "GET" && url.pathname === "/assets/login.js") {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.loginScript);
@@ -182,7 +192,7 @@ export function createPlatformApp(options) {
         const organization = await repository.createOrganization({ name: body.organizationName || "Personal workspace" });
         const passwordHash = await hashPassword(body.password);
         const user = await repository.createUser({ organizationId: organization.id, email: body.email, displayName: body.displayName || body.email, passwordHash, role: ROLES.ORG_ADMIN });
-        await repository.createAgent({ organizationId: organization.id, name: "BaiRui Agent", description: "Organization runtime agent" });
+        await repository.createAgent({ organizationId: organization.id, name: "bairui-agent", description: "Organization runtime agent" });
         await repository.recordAudit({ organizationId: organization.id, actorUserId: user.id, action: "organization.register", targetType: "organization", targetId: organization.id });
         return json(response, 201, { id: user.id });
       }
