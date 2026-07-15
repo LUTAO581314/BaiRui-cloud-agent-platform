@@ -60,3 +60,35 @@ jobs:
           BAIRUI_PROVIDER_ENCRYPTION_KEY: ci-provider-encryption-key-at-least-32-characters
           BAIRUI_LICENSE_PRIVATE_KEY: ci-placeholder-only-compose-validation
         run: docker compose -f infra/docker-compose.yml config --quiet
+
+  postgres-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: bairui_ci
+          POSTGRES_USER: bairui
+          POSTGRES_PASSWORD: ci-database-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bairui -d bairui_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://bairui:ci-database-password@127.0.0.1:5432/bairui_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:schema:check

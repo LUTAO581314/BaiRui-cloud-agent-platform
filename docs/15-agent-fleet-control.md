@@ -1,0 +1,43 @@
+# Agent Fleet Control
+
+## Scope
+
+The BaiRui control plane manages deployment state around Hermes. It does not
+submit prompts, inspect conversation content, invoke tools, or mutate runtime
+memory.
+
+## User initialization
+
+1. The user creates an owned Agent and isolated Runtime record.
+2. The user requests initialization.
+3. The platform verifies that an encrypted Provider configuration exists and a
+   healthy server has capacity.
+4. The platform creates an Agent-scoped configuration revision, Deployment,
+   desired state, and `deployment.provision` command in one transaction.
+5. The Agent remains `provisioning` until an Agent heartbeat proves that
+   Hermes and the Runtime Boundary are healthy.
+
+No API reports `ready` merely because a command was queued.
+
+## Fleet telemetry
+
+Each Runtime reports an ordered heartbeat containing identifiers, versions,
+five-layer component health, numeric metrics, usage aggregates, and redacted
+operational events. The ingestion endpoint rebuilds the payload from an
+allowlist and never stores submitted prompt, message, memory, or secret fields.
+
+PostgreSQL authorities:
+
+- `agent_runtimes` for current Runtime placement and health;
+- `agent_components` for the latest five-layer component observation;
+- `heartbeats` for ordered liveness evidence;
+- `telemetry_events` for redacted operational events;
+- `usage_rollups` for per-Agent model usage and cost;
+- `alerts` for actionable fleet incidents;
+- `secret_references` for vault references, never plaintext secrets.
+
+## Administrator view
+
+`/admin` reads fleet metadata through scoped administrator APIs. Platform
+administrators see all organizations; organization administrators see only
+their organization. Ordinary users cannot access these APIs.

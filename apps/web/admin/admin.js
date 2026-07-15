@@ -34,11 +34,11 @@ function tableRows(items, columns, emptyLabel) {
 async function loadOverview() {
   const data = await request("/api/admin/overview");
   document.querySelector("#metric-users").textContent = data.users;
-  document.querySelector("#metric-snapshots").textContent = data.snapshots.length;
+  document.querySelector("#metric-agents").textContent = data.agents;
+  document.querySelector("#metric-runtimes").textContent = `${data.healthyRuntimes}/${data.runtimes}`;
+  document.querySelector("#metric-alerts").textContent = data.openAlerts;
   document.querySelector("#metric-servers").textContent = data.servers;
-  document.querySelector("#metric-licenses").textContent = data.licenses;
   document.querySelector("#metric-releases").textContent = data.releases;
-  document.querySelector("#metric-audit").textContent = data.recentAudit.length;
   const status = document.querySelector("#control-status");
   const latest = data.snapshots.at(-1);
   status.textContent = latest?.status ?? "等待上报";
@@ -53,13 +53,31 @@ async function loadOverview() {
     (item) => item.targetType,
     (item) => new Date(item.createdAt).toLocaleString()
   ], "暂无记录"));
-  const [users, servers, licenses, releases, integrations] = await Promise.all([
+  const [fleet, alerts, users, servers, licenses, releases, integrations] = await Promise.all([
+    request("/api/admin/agents"),
+    request("/api/admin/alerts"),
     request("/api/admin/users"),
     request("/api/admin/servers"),
     request("/api/admin/licenses"),
     request("/api/admin/releases").catch((error) => error.status === 403 ? { releases: [] } : Promise.reject(error)),
     request("/api/admin/integrations")
   ]);
+  document.querySelector("#agent-rows").replaceChildren(...tableRows(fleet.agents, [
+    (item) => item.name,
+    (item) => item.owner ? `${item.owner.displayName} (${item.owner.email})` : item.ownerUserId,
+    (item) => item.initializationStatus,
+    (item) => item.runtime?.status ?? "未创建",
+    (item) => item.runtime?.hermesVersion ?? "-",
+    (item) => item.components.length ? `${item.components.filter((component) => component.status === "healthy").length}/${item.components.length}` : "-",
+    (item) => item.heartbeat ? new Date(item.heartbeat.receivedAt).toLocaleString() : "从未上报"
+  ], "暂无 Agent"));
+  document.querySelector("#alert-rows").replaceChildren(...tableRows(alerts.alerts.filter((item) => item.status === "open"), [
+    (item) => item.severity,
+    (item) => item.code,
+    (item) => item.agentId ?? "平台",
+    (item) => item.title,
+    (item) => new Date(item.lastSeenAt).toLocaleString()
+  ], "暂无开放告警"));
   document.querySelector("#user-rows").replaceChildren(...tableRows(users.users, [
     (item) => `${item.displayName} (${item.email})`, (item) => item.role, (item) => item.status
   ], "暂无成员"));

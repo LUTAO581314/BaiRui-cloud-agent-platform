@@ -2,6 +2,13 @@ export const CONTROL_PROTOCOL_VERSION = "1.0";
 
 export const CONTROL_ACTIONS = Object.freeze([
   "snapshot.collect",
+  "deployment.provision",
+  "deployment.start",
+  "deployment.stop",
+  "deployment.suspend",
+  "deployment.resume",
+  "deployment.delete",
+  "credential.revoke",
   "probe.run",
   "contract.test",
   "smoke.test",
@@ -18,6 +25,13 @@ export const CONTROL_ACTIONS = Object.freeze([
 
 const ARGUMENTS = Object.freeze({
   "snapshot.collect": [[], []],
+  "deployment.provision": [["agent_id", "workspace_ref", "config_revision_id"], []],
+  "deployment.start": [["agent_id"], []],
+  "deployment.stop": [["agent_id"], []],
+  "deployment.suspend": [["agent_id"], []],
+  "deployment.resume": [["agent_id"], []],
+  "deployment.delete": [["agent_id"], ["backup_id"]],
+  "credential.revoke": [["identity_id"], []],
   "probe.run": [["probe_ids"], []],
   "contract.test": [["suite_id"], []],
   "smoke.test": [["suite_id"], []],
@@ -32,7 +46,7 @@ const ARGUMENTS = Object.freeze({
   "service.restart": [["service_id"], []]
 });
 
-const APPROVAL_REQUIRED = new Set(["config.apply", "release.apply", "release.rollback", "service.restart"]);
+const APPROVAL_REQUIRED = new Set(["config.apply", "release.apply", "release.rollback", "service.restart", "deployment.delete", "credential.revoke"]);
 const TOP_LEVEL = new Set(["schema_version", "command_id", "idempotency_key", "deployment_id", "action", "target", "arguments", "approval_id", "expected_observation_version", "not_before", "expires_at", "created_at"]);
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);

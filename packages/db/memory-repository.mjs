@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 function publicUser(user) {
   if (!user) return null;
@@ -22,6 +22,14 @@ export class MemoryPlatformRepository {
   #integrationRuns = [];
   #hotspots = new Map();
   #obsidianNotes = [];
+  #agentComponents = new Map();
+  #heartbeats = [];
+  #telemetryEvents = [];
+  #usageRollups = [];
+  #alerts = [];
+  #controlDeployments = [];
+  #configRevisions = [];
+  #controlCommands = [];
 
   async createOrganization(input) {
     const organization = { id: input.id ?? randomUUID(), name: input.name, createdAt: new Date().toISOString() };
@@ -98,7 +106,7 @@ export class MemoryPlatformRepository {
   }
 
   async listAgents(organizationId, ownerUserId) {
-    return [...this.#agents.values()].filter((agent) => agent.organizationId === organizationId && (!ownerUserId || agent.ownerUserId === ownerUserId));
+    return [...this.#agents.values()].filter((agent) => (!organizationId || agent.organizationId === organizationId) && (!ownerUserId || agent.ownerUserId === ownerUserId));
   }
 
   async updateAgent(id, patch) {
@@ -131,7 +139,71 @@ export class MemoryPlatformRepository {
   }
 
   async listAgentRuntimes(organizationId, ownerUserId) {
-    return [...this.#agentRuntimes.values()].filter((runtime) => runtime.organizationId === organizationId && (!ownerUserId || runtime.ownerUserId === ownerUserId));
+    return [...this.#agentRuntimes.values()].filter((runtime) => (!organizationId || runtime.organizationId === organizationId) && (!ownerUserId || runtime.ownerUserId === ownerUserId));
+  }
+
+  async saveAgentHeartbeat(input) {
+    const runtime = this.#agentRuntimes.get(input.runtimeId);
+    const agent = this.#agents.get(input.agentId);
+    if (!runtime || !agent || runtime.agentId !== agent.id) return null;
+    const receivedAt = new Date().toISOString();
+    const heartbeat = { id: input.id ?? randomUUID(), ...input, receivedAt };
+    if (!this.#heartbeats.some((item) => item.runtimeId === input.runtimeId && item.sequence === input.sequence)) this.#heartbeats.push(heartbeat);
+    const runtimeStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
+    const initializationStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
+    Object.assign(runtime, { status: runtimeStatus, hermesVersion: input.runtimeVersion ?? runtime.hermesVersion, boundaryVersion: input.boundaryVersion ?? runtime.boundaryVersion, configRevisionId: input.configRevisionId ?? runtime.configRevisionId, lastHeartbeatAt: input.observedAt, updatedAt: receivedAt });
+    Object.assign(agent, { status: input.status === "healthy" ? "active" : initializationStatus, initializationStatus, updatedAt: receivedAt });
+    for (const component of input.components ?? []) {
+      const key = `${runtime.id}:${component.moduleId}`;
+      this.#agentComponents.set(key, { id: this.#agentComponents.get(key)?.id ?? randomUUID(), organizationId: input.organizationId, agentId: agent.id, runtimeId: runtime.id, ...component, updatedAt: receivedAt });
+    }
+    for (const event of input.events ?? []) this.#telemetryEvents.push({ id: randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: agent.id, runtimeId: runtime.id, ...event, receivedAt });
+    if (input.usage) this.#usageRollups.push({ organizationId: input.organizationId, userId: input.userId, agentId: agent.id, runtimeId: runtime.id, ...input.usage });
+    return heartbeat;
+  }
+
+  async latestAgentHeartbeats(organizationId) {
+    const latest = new Map();
+    for (const heartbeat of this.#heartbeats) {
+      if (organizationId && heartbeat.organizationId !== organizationId) continue;
+      const current = latest.get(heartbeat.runtimeId);
+      if (!current || current.receivedAt < heartbeat.receivedAt) latest.set(heartbeat.runtimeId, heartbeat);
+    }
+    return [...latest.values()];
+  }
+
+  async listAgentComponents(organizationId, agentId) {
+    return [...this.#agentComponents.values()].filter((item) => (!organizationId || item.organizationId === organizationId) && (!agentId || item.agentId === agentId));
+  }
+
+  async listAlerts(organizationId) {
+    return this.#alerts.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async listUsageRollups(organizationId) {
+    return this.#usageRollups.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async requestAgentProvisioning(input) {
+    const agent = this.#agents.get(input.agentId);
+    const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === input.agentId);
+    if (!agent || !runtime) return null;
+    if (["provisioning", "ready"].includes(agent.initializationStatus)) {
+      return { agent, runtime, deployment: this.#controlDeployments.find((item) => item.agentId === agent.id) ?? null, command: this.#controlCommands.findLast((item) => item.agentId === agent.id) ?? null };
+    }
+    const server = this.#servers.find((item) => item.organizationId === agent.organizationId && ["active", "healthy"].includes(item.status));
+    if (!server) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
+    const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
+    const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model } };
+    const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: input.provider.apiKeyEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
+    this.#configRevisions.push(config);
+    const deployment = { id: randomUUID(), organizationId: agent.organizationId, serverId: server.id, agentId: agent.id, name: agent.name, environment: "production", status: "enrolling", observedStateVersion: 0, desiredStateVersion: 1, createdAt: new Date().toISOString() };
+    this.#controlDeployments.push(deployment);
+    const command = { id: randomUUID(), deploymentId: deployment.id, agentId: agent.id, action: "deployment.provision", arguments: { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: config.id }, state: "queued", createdAt: new Date().toISOString() };
+    this.#controlCommands.push(command);
+    Object.assign(runtime, { deploymentId: deployment.id, configRevisionId: config.id, status: "provisioning", updatedAt: new Date().toISOString() });
+    Object.assign(agent, { initializationStatus: "provisioning", desiredRuntimeState: "running", status: "provisioning", updatedAt: new Date().toISOString() });
+    return { agent, runtime, deployment, command };
   }
 
   async createConversation(input) {

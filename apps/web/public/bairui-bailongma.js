@@ -22,9 +22,17 @@
     return new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
   }
 
+  async function initializeAgent(agent) {
+    const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/initialize`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "agent_initialization_failed");
+    return result;
+  }
+
   async function createAgentDialog() {
     await readyDom();
     return new Promise((resolve, reject) => {
+      let createdAgent = null;
       const overlay = document.createElement("div");
       overlay.className = "bairui-onboarding";
       overlay.innerHTML = `<form class="bairui-onboarding-form">
@@ -46,17 +54,24 @@
         error.textContent = "";
         const data = new FormData(form);
         try {
-          const response = await platformRequest("/api/user/agents", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ name: data.get("name"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown") })
-          });
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.error || "agent_create_failed");
+          if (!createdAgent) {
+            const response = await platformRequest("/api/user/agents", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: data.get("name"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown") })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "agent_create_failed");
+            createdAgent = result.agent;
+            for (const field of form.elements) if (field.name) field.disabled = true;
+            submit.disabled = false;
+            submit.textContent = "初始化 Agent";
+          }
+          const initialized = await initializeAgent(createdAgent);
           overlay.remove();
-          resolve(result.agent);
+          resolve({ ...initialized.agent, runtime: initialized.runtime });
         } catch (cause) {
-          error.textContent = "创建失败，请稍后重试";
+          error.textContent = cause.message === "model_provider_not_configured" ? "管理员尚未配置模型供应商" : cause.message === "no_agent_capacity" ? "暂无可用运行服务器，请稍后重试" : createdAgent ? "初始化失败，请稍后重试" : "创建失败，请稍后重试";
           submit.disabled = false;
           if (cause.message === "authentication_required") reject(cause);
         }
@@ -273,9 +288,19 @@
       localStorage.setItem("bairui.activeAgentId", selector.value);
       location.reload();
     });
-    const status = document.createElement("span");
+    const status = agent.initializationStatus === "uninitialized" || agent.initializationStatus === "failed" ? document.createElement("button") : document.createElement("span");
     status.className = `bairui-runtime-status status-${agent.runtime?.status || "uninitialized"}`;
     status.textContent = agent.runtime?.status || "未初始化";
+    if (status instanceof HTMLButtonElement) {
+      status.type = "button";
+      status.title = "初始化 Agent";
+      status.addEventListener("click", async () => {
+        status.disabled = true;
+        status.textContent = "初始化中";
+        try { await initializeAgent(agent); location.reload(); }
+        catch (error) { status.disabled = false; status.textContent = error.message === "model_provider_not_configured" ? "等待模型配置" : error.message === "no_agent_capacity" ? "等待服务器" : "重试初始化"; }
+      });
+    }
     const account = document.createElement("span");
     account.className = "bairui-account-label";
     account.textContent = user.displayName || user.email;

@@ -82,3 +82,8 @@ in `packages/server-protocol/control-plane.mjs`. The current one-shot sender
 does not execute remote commands and must not be presented as a completed
 closed-loop control agent.
 
+When `BAIRUI_USER_ID`, `BAIRUI_AGENT_ID`, and `BAIRUI_RUNTIME_ID` are set, the
+observation cycle also submits Agent-scoped five-layer telemetry. This payload
+contains health, versions, numeric metrics, and usage aggregates only. It does
+not contain conversation or memory content.
+

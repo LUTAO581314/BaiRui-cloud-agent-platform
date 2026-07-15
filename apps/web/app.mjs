@@ -26,7 +26,15 @@ import {
   toBailongmaMemories
 } from "../../packages/bailongma-ui/compatibility.mjs";
 
-const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
+const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
+const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
+const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
+
+function numericMetrics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, item]) => /^[a-z][a-z0-9_.-]{0,63}$/.test(key) && Number.isFinite(item)).slice(0, 100));
+}
 const INTEGRATION_CATALOG = Object.freeze([
   { id: "hermes", name: "Hermes Agent", layer: "核心运行层", importType: "submodule", status: "runtime-connected" },
   { id: "openclaw", name: "OpenClaw", layer: "服务集成层", importType: "submodule", status: "registered" },
@@ -344,6 +352,17 @@ export function createPlatformApp(options) {
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch) } });
         return json(response, 200, { agent: updated });
       }
+      const initializeAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/initialize$/);
+      if (initializeAgentMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, initializeAgentMatch[1]);
+        const provider = await repository.getProviderConfiguration(principal.organizationId);
+        if (!provider?.apiKeyEnvelope || !provider.provider || !provider.model) return json(response, 409, { error: "model_provider_not_configured" });
+        const result = await repository.requestAgentProvisioning({ agentId: agent.id, requestedBy: principal.userId, provider });
+        if (!result) return json(response, 404, { error: "agent_runtime_not_found" });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.initialization.request", targetType: "agent", targetId: agent.id, metadata: { deploymentId: result.deployment?.id, commandId: result.command?.id } });
+        return json(response, 202, result);
+      }
 
       const discoveryMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runtime\/discovery$/);
       if (discoveryMatch && method === "GET") {
@@ -513,8 +532,8 @@ export function createPlatformApp(options) {
         const permitted = can(principal, PERMISSIONS.PLATFORM_OVERVIEW_READ) || can(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         if (!permitted) throw new AuthorizationError();
         const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
-        const [users, snapshots, audit, licenses, servers, releases] = await Promise.all([repository.listUsers(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([])]);
-        return json(response, 200, { scope: scope ?? "platform", users: users.length, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
+        const [users, agents, runtimes, heartbeats, alerts, snapshots, audit, licenses, servers, releases] = await Promise.all([repository.listUsers(scope), repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAlerts(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([])]);
+        return json(response, 200, { scope: scope ?? "platform", users: users.length, agents: agents.length, runtimes: runtimes.length, healthyRuntimes: runtimes.filter((runtime) => runtime.status === "ready").length, openAlerts: alerts.filter((alert) => alert.status === "open").length, heartbeats, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
       }
       if (method === "GET" && url.pathname === "/api/admin/users") {
         requireLogin(principal);
@@ -543,6 +562,30 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
         return json(response, 200, { snapshots: await repository.latestControlPlaneSnapshots(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/agents") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const [agents, runtimes, heartbeats, components, users] = await Promise.all([repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAgentComponents(scope), repository.listUsers(scope)]);
+        const runtimeByAgent = new Map(runtimes.map((runtime) => [runtime.agentId, runtime]));
+        const heartbeatByRuntime = new Map(heartbeats.map((heartbeat) => [heartbeat.runtimeId, heartbeat]));
+        const componentsByRuntime = new Map();
+        for (const component of components) componentsByRuntime.set(component.runtimeId, [...(componentsByRuntime.get(component.runtimeId) ?? []), component]);
+        const usersById = new Map(users.map((user) => [user.id, user]));
+        return json(response, 200, { agents: agents.map((agent) => {
+          const runtime = runtimeByAgent.get(agent.id) ?? null;
+          return { ...agent, owner: usersById.get(agent.ownerUserId) ?? null, runtime, heartbeat: runtime ? heartbeatByRuntime.get(runtime.id) ?? null : null, components: runtime ? componentsByRuntime.get(runtime.id) ?? [] : [] };
+        }) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/alerts") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        return json(response, 200, { alerts: await repository.listAlerts(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/usage") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        return json(response, 200, { rollups: await repository.listUsageRollups(scope) });
       }
       if (method === "GET" && url.pathname === "/api/admin/provider-settings") {
         requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
@@ -645,6 +688,42 @@ export function createPlatformApp(options) {
           status: body.snapshot.status ?? "unknown",
           runtimeVersion: body.snapshot.heartbeat?.runtimeBoundaryVersion ?? null
         });
+        return json(response, 202, { id: saved.id });
+      }
+      if (method === "POST" && url.pathname === "/api/internal/control-plane/heartbeats") {
+        const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
+        if (!constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
+        const body = await readJson(request);
+        if (!body.organizationId || !body.userId || !body.agentId || !body.runtimeId || !Number.isSafeInteger(body.sequence) || body.sequence < 1 || !COMPONENT_STATUSES.has(body.status) || !Number.isFinite(Date.parse(body.observedAt))) return json(response, 400, { error: "invalid_agent_heartbeat" });
+        const [agent, runtime] = await Promise.all([repository.getAgent(body.agentId), repository.getAgentRuntimeByAgent(body.agentId)]);
+        if (!agent || !runtime || runtime.id !== body.runtimeId || agent.organizationId !== body.organizationId || agent.ownerUserId !== body.userId) return json(response, 404, { error: "agent_runtime_not_found" });
+        const components = Array.isArray(body.components) ? body.components.slice(0, 100).map((component) => ({
+          layer: component.layer,
+          moduleId: typeof component.moduleId === "string" ? component.moduleId.slice(0, 200) : "",
+          status: component.status,
+          version: typeof component.version === "string" ? component.version.slice(0, 200) : null,
+          upstreamRef: typeof component.upstreamRef === "string" ? component.upstreamRef.slice(0, 200) : null,
+          capabilities: Array.isArray(component.capabilities) ? component.capabilities.filter((item) => typeof item === "string").slice(0, 100) : [],
+          metrics: numericMetrics(component.metrics),
+          observedAt: Number.isFinite(Date.parse(component.observedAt)) ? component.observedAt : body.observedAt
+        })).filter((component) => CONTROL_LAYERS.has(component.layer) && component.moduleId && COMPONENT_STATUSES.has(component.status)) : [];
+        const events = Array.isArray(body.events) ? body.events.slice(0, 100).map((event) => ({
+          layer: CONTROL_LAYERS.has(event.layer) ? event.layer : null,
+          componentId: typeof event.componentId === "string" ? event.componentId.slice(0, 200) : null,
+          eventType: typeof event.eventType === "string" ? event.eventType.slice(0, 200) : "",
+          severity: TELEMETRY_SEVERITIES.has(event.severity) ? event.severity : "info",
+          traceId: typeof event.traceId === "string" ? event.traceId.slice(0, 200) : null,
+          metrics: numericMetrics(event.metrics),
+          occurredAt: Number.isFinite(Date.parse(event.occurredAt)) ? event.occurredAt : body.observedAt
+        })).filter((event) => event.eventType) : [];
+        const usage = body.usage && typeof body.usage === "object" && Number.isFinite(Date.parse(body.usage.bucketStart)) && [60, 300, 3600, 86400].includes(body.usage.bucketSeconds) ? {
+          bucketStart: body.usage.bucketStart, bucketSeconds: body.usage.bucketSeconds,
+          model: typeof body.usage.model === "string" ? body.usage.model.slice(0, 200) : "unknown",
+          inputTokens: Math.max(0, Number(body.usage.inputTokens) || 0), outputTokens: Math.max(0, Number(body.usage.outputTokens) || 0),
+          estimatedCostUsd: Math.max(0, Number(body.usage.estimatedCostUsd) || 0), runCount: Math.max(0, Number(body.usage.runCount) || 0),
+          failedRunCount: Math.max(0, Number(body.usage.failedRunCount) || 0), latencySumMs: Math.max(0, Number(body.usage.latencySumMs) || 0)
+        } : null;
+        const saved = await repository.saveAgentHeartbeat({ organizationId: body.organizationId, userId: body.userId, agentId: body.agentId, runtimeId: body.runtimeId, sequence: body.sequence, status: body.status, runtimeVersion: typeof body.runtimeVersion === "string" ? body.runtimeVersion.slice(0, 200) : null, boundaryVersion: typeof body.boundaryVersion === "string" ? body.boundaryVersion.slice(0, 200) : null, configRevisionId: typeof body.configRevisionId === "string" ? body.configRevisionId : null, queueDepth: Math.max(0, Number(body.queueDepth) || 0), activeRuns: Math.max(0, Number(body.activeRuns) || 0), failedRuns: Math.max(0, Number(body.failedRuns) || 0), observedAt: body.observedAt, components, events, usage });
         return json(response, 202, { id: saved.id });
       }
 
