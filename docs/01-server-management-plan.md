@@ -36,7 +36,7 @@ Forbidden:
 
 Platform receives:
 
-- `POST /api/server-heartbeat`
+- `POST /api/internal/control-plane/snapshots`
 - `POST /api/server-acceptance`
 - `GET /api/servers`
 - `GET /api/server-acceptance`

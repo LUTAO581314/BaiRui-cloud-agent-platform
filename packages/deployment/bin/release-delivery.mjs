@@ -1,0 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { issueLicense } from "../../license/license.mjs";
+import { verifyDeliveryBundle, writeDeliveryBundle } from "../bundle.mjs";
+import { parseArgs, deploymentInput } from "./args.mjs";
+
+const options = parseArgs(process.argv.slice(2));
+const privateKey = process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n");
+const licenseDocument = issueLicense({ licenseId: options["license-id"], organizationId: options["organization-id"], plan: options.plan ?? "starter", expiresAt: options["expires-at"] }, privateKey);
+const output = path.resolve(options.out);
+writeDeliveryBundle(output, { ...deploymentInput(options), licenseDocument });
+const verification = verifyDeliveryBundle(output);
+if (!verification.valid) throw new Error("Generated delivery bundle failed verification");
+fs.writeFileSync(path.join(output, "release-ready"), `${new Date().toISOString()}\n`, { mode: 0o600 });
+const archive = path.resolve(options.archive ?? `${output}.tar.gz`);
+execFileSync("tar", ["-czf", archive, "-C", path.dirname(output), path.basename(output)], { stdio: "inherit" });
+const archiveSha256 = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
+console.log(JSON.stringify({ output, archive, archiveSha256, verification }, null, 2));

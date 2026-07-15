@@ -1,60 +1,33 @@
-﻿# Deployment Package
+# Deployment Package
 
-This package builds customer deployment bundles for BaiRui customer servers.
-
-It generates:
-
-- Hermes Runtime Core environment file content;
-- Bairui Runtime Boundary and platform context configuration where needed;
-- server-agent outbound heartbeat environment file content;
-- customer/operator deployment instructions;
-- signed license JSON when `delivery.mjs` is used;
-- `manifest.json` with file hashes and delivery identity metadata.
-
-The package does not generate or store real secrets. Production secrets must be
-created by the platform secret service or operator workflow and injected as
-server-side values.
-
-Write a customer delivery package:
+This package creates customer delivery bundles with explicit deployment
+identity, an optional signed license, and a SHA-256 manifest.
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:write -- \
+npm run delivery:write -- \
   --organization-id=org_demo \
   --license-id=lic_demo \
   --server-id=srv_demo \
   --platform-url=https://platform.example.com \
+  --license=./tmp/licenses/lic_demo.json \
   --out=./tmp/delivery/org_demo-srv_demo
+
+npm run delivery:verify -- --in=./tmp/delivery/org_demo-srv_demo
+npm run delivery:archive -- --in=./tmp/delivery/org_demo-srv_demo
 ```
 
-Verify a customer delivery package before sending it:
+The full signed release flow requires the platform-only Ed25519 private key:
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:verify -- \
-  --in=./tmp/delivery/org_demo-srv_demo
-```
-
-Archive a verified package:
-
-```sh
-npm run delivery:archive -- \
-  --in=./tmp/delivery/org_demo-srv_demo \
-  --out=./tmp/delivery/org_demo-srv_demo.tar.gz
-```
-
-The command returns the archive `sha256` for customer acceptance and support
-records.
-
-Run the full release flow in one command:
-
-```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:release -- \
+BAIRUI_LICENSE_PRIVATE_KEY="<protected PEM>" npm run delivery:release -- \
   --organization-id=org_demo \
   --license-id=lic_demo \
   --server-id=srv_demo \
   --platform-url=https://platform.example.com \
+  --plan=business \
+  --expires-at=2030-01-01T00:00:00.000Z \
   --out=./tmp/delivery/org_demo-srv_demo
 ```
 
-This writes the package directory, verifies it, creates the `.tar.gz`, and
-prints the archive `sha256`.
-
+No model key, connector token, runtime shared secret, session secret, or
+license private key is written into a bundle.

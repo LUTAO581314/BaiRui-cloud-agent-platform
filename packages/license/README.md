@@ -1,30 +1,21 @@
-﻿# License Package
+# License Package
 
-This package implements license generation, signing, parsing, and validation
-helpers used by the BaiRui platform and customer deployment flow.
+Licenses are signed with an Ed25519 private key held only by the BaiRui
+platform. Customer deployments receive the license document and public key,
+never the signing key.
 
-License payload should include:
+Payloads contain license and organization identity, plan, features, limits,
+issue time, and expiry. They must not contain API keys, connector tokens,
+prompts, chat history, files, or customer business data.
 
-- license id;
-- organization id;
-- plan;
-- features;
-- limits;
-- issue time;
-- expiry time;
-- deployment mode;
-- signature.
-
-License payload must not include secrets, API keys, connector tokens, customer
-business data, prompts, chat history, files, or Obsidian note bodies.
-
-## Generate A Development License
-
-```powershell
-$env:BAIRUI_LICENSE_SECRET="dev-secret"
-npm run license:generate -- --license-id=lic_dev --organization-id=org_dev --plan=starter --out=dist/bairui-license.json
+```sh
+BAIRUI_LICENSE_PRIVATE_KEY="<protected PEM>" npm run license:generate -- \
+  --license-id=lic_dev \
+  --organization-id=org_dev \
+  --plan=starter \
+  --expires-at=2030-01-01T00:00:00.000Z \
+  --out=./tmp/licenses/lic_dev.json
 ```
 
-The generated file can be copied into a customer deployment and verified with
-the same `BAIRUI_LICENSE_SECRET`.
-
+Private keys belong in a secret manager or protected environment variable and
+must never be committed to this repository or copied into a delivery bundle.

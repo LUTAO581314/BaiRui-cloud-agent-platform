@@ -78,16 +78,14 @@ Full automatic provisioning should come after the first real customer trials.
 
 ## 5. Platform Deployment Command
 
-The platform repository now has a P0 deployment script:
+The platform repository provides a production Docker Compose deployment:
 
 ```sh
-sh infra/platform/scripts/deploy-platform.sh
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 ```
 
-It installs Node dependencies, optionally runs `npm run db:migrate` when
-`BAIRUI_PLATFORM_DATABASE_URL` is configured, runs tests, and prepares the
-systemd unit template. Set `BAIRUI_INSTALL_SYSTEMD=1` on a prepared Linux server
-to install and restart the `bairui-platform` service.
+The platform container waits for PostgreSQL, applies migrations, and then starts
+the web process. Nginx terminates HTTPS using `infra/nginx/bairui.conf`.
 
 ## 6. Customer Hermes Deployment Bundle
 
@@ -108,11 +106,12 @@ model keys, connector tokens, SSH keys, or customer business data.
 To write a full delivery package with signed license JSON:
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:write -- \
+npm run delivery:write -- \
   --organization-id=org_demo \
   --license-id=lic_demo \
   --server-id=srv_demo \
   --platform-url=https://platform.example.com \
+  --license=./tmp/licenses/lic_demo.json \
   --out=./tmp/delivery/org_demo-srv_demo
 ```
 
@@ -122,7 +121,7 @@ license id, server id, platform URL, generation time, and manifest version.
 Verify before sending:
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:verify -- \
+npm run delivery:verify -- \
   --in=./tmp/delivery/org_demo-srv_demo
 ```
 
@@ -140,11 +139,13 @@ records.
 For the complete release flow:
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:release -- \
+BAIRUI_LICENSE_PRIVATE_KEY="<protected PEM>" npm run delivery:release -- \
   --organization-id=org_demo \
   --license-id=lic_demo \
   --server-id=srv_demo \
   --platform-url=https://platform.example.com \
+  --plan=business \
+  --expires-at=2030-01-01T00:00:00.000Z \
   --out=./tmp/delivery/org_demo-srv_demo
 ```
 
