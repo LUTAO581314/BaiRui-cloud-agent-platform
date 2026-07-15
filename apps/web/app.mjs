@@ -317,7 +317,14 @@ export function createPlatformApp(options) {
         if (!constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
         const body = await readJson(request);
         if (!body.organizationId || !body.serverId || !body.snapshot?.schemaVersion) return json(response, 400, { error: "invalid_snapshot" });
+        if (!await repository.getOrganization(body.organizationId)) return json(response, 404, { error: "organization_not_found" });
         const saved = await repository.saveControlPlaneSnapshot({ organizationId: body.organizationId, serverId: body.serverId, status: body.snapshot.status ?? "unknown", payload: body.snapshot });
+        await repository.recordServerHeartbeat({
+          id: body.serverId,
+          organizationId: body.organizationId,
+          status: body.snapshot.status ?? "unknown",
+          runtimeVersion: body.snapshot.heartbeat?.runtimeBoundaryVersion ?? null
+        });
         return json(response, 202, { id: saved.id });
       }
 

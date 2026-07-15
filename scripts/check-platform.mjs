@@ -23,6 +23,11 @@ const required = [
   "tests/authorization.test.mjs",
   "tests/session.test.mjs",
   "tests/platform-http.test.mjs"
+  ,"server-agent/index.mjs"
+  ,"server-agent/bin/acceptance-check.mjs"
+  ,"Dockerfile"
+  ,"infra/docker-compose.yml"
+  ,"infra/nginx/bairui.conf"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);

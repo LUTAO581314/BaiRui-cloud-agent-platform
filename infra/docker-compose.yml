@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bairui
+      POSTGRES_USER: bairui
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - bairui-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bairui -d bairui"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend, runtime]
+
+  platform:
+    build:
+      context: ..
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://bairui:${POSTGRES_PASSWORD}@postgres:5432/bairui
+      BAIRUI_PLATFORM_ORIGIN: ${BAIRUI_PLATFORM_ORIGIN:?BAIRUI_PLATFORM_ORIGIN is required}
+      BAIRUI_SESSION_SECRET: ${BAIRUI_SESSION_SECRET:?BAIRUI_SESSION_SECRET is required}
+      BAIRUI_BOOTSTRAP_ADMIN_EMAIL: ${BAIRUI_BOOTSTRAP_ADMIN_EMAIL:?BAIRUI_BOOTSTRAP_ADMIN_EMAIL is required}
+      BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ${BAIRUI_BOOTSTRAP_ADMIN_PASSWORD:?BAIRUI_BOOTSTRAP_ADMIN_PASSWORD is required}
+      BAIRUI_AGENT_INGEST_TOKEN: ${BAIRUI_AGENT_INGEST_TOKEN:?BAIRUI_AGENT_INGEST_TOKEN is required}
+      BAIRUI_RUNTIME_URL: ${BAIRUI_RUNTIME_URL:-http://host.docker.internal:8787}
+      BAIRUI_RUNTIME_SHARED_SECRET: ${BAIRUI_RUNTIME_SHARED_SECRET:?BAIRUI_RUNTIME_SHARED_SECRET is required}
+      BAIRUI_LICENSE_PRIVATE_KEY: ${BAIRUI_LICENSE_PRIVATE_KEY:?BAIRUI_LICENSE_PRIVATE_KEY is required}
+    command: ["sh", "-c", "node packages/db/bin/migrate.mjs && node apps/web/server.mjs"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [backend]
+
+volumes:
+  bairui-postgres:
+
+networks:
+  backend:
+    internal: true
+  runtime:

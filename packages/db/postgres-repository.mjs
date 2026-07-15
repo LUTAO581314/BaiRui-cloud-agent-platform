@@ -167,6 +167,11 @@ export class PostgresPlatformRepository {
     return rows.map(mapServer);
   }
 
+  async recordServerHeartbeat(input) {
+    const { rows } = await this.pool.query("INSERT INTO servers (id, organization_id, name, status, runtime_version, last_seen_at) VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, runtime_version=EXCLUDED.runtime_version, last_seen_at=now() RETURNING *", [input.id, input.organizationId, input.name ?? input.id, input.status, input.runtimeVersion ?? null]);
+    return mapServer(rows[0]);
+  }
+
   async createRelease(input) {
     const { rows } = await this.pool.query("INSERT INTO releases (id, version, agent_commit, status, notes) VALUES ($1,$2,$3,$4,$5) RETURNING *", [input.id ?? randomUUID(), input.version, input.agentCommit, input.status ?? "draft", input.notes ?? ""]);
     return mapRelease(rows[0]);

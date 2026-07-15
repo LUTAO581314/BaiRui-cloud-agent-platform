@@ -142,6 +142,16 @@ export class MemoryPlatformRepository {
     return this.#servers.filter((item) => !organizationId || item.organizationId === organizationId);
   }
 
+  async recordServerHeartbeat(input) {
+    let server = this.#servers.find((item) => item.id === input.id);
+    if (!server) {
+      server = { id: input.id, organizationId: input.organizationId, name: input.name ?? input.id, createdAt: new Date().toISOString() };
+      this.#servers.push(server);
+    }
+    Object.assign(server, { status: input.status, runtimeVersion: input.runtimeVersion ?? null, lastSeenAt: new Date().toISOString() });
+    return server;
+  }
+
   async createRelease(input) {
     const release = { id: input.id ?? randomUUID(), version: input.version, agentCommit: input.agentCommit, status: input.status ?? "draft", notes: input.notes ?? "", createdAt: new Date().toISOString() };
     this.#releases.push(release);
