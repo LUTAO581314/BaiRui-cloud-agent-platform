@@ -23,6 +23,9 @@
     "platform:dev": "node apps/web/server.mjs",
     "server-agent:once": "node server-agent/index.mjs",
     "server-agent:acceptance": "node server-agent/bin/acceptance-check.mjs",
-    "license:generate": "node packages/license/bin/generate-license.mjs"
+    "license:generate": "node packages/license/bin/generate-license.mjs",
+    "operations:backup": "node scripts/operations/backup-postgres.mjs",
+    "operations:restore": "node scripts/operations/restore-postgres.mjs",
+    "operations:rollback": "node scripts/operations/rollback-compose.mjs"
   }
 }

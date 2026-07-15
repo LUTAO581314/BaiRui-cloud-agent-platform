@@ -30,7 +30,11 @@ const required = [
   "server-agent/bin/acceptance-check.mjs",
   "Dockerfile",
   "infra/docker-compose.yml",
-  "infra/nginx/bairui.conf"
+  "infra/nginx/bairui.conf",
+  "docs/09-operations-runbook.md",
+  "scripts/operations/backup-postgres.mjs",
+  "scripts/operations/restore-postgres.mjs",
+  "scripts/operations/rollback-compose.mjs"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
