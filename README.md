@@ -123,20 +123,15 @@ Server management:
 
 ## P0 Platform Deployment
 
-Run the local deployment check:
+Prepare protected production variables from `infra/.env.example`, then deploy:
 
 ```sh
-sh infra/platform/scripts/deploy-platform.sh
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 ```
 
-For production, copy `infra/platform/env.example` to a protected server path
-such as `/etc/bairui/platform.env`, set real values, then run the script with
-`BAIRUI_INSTALL_SYSTEMD=1` as root to install the systemd service.
-
-When `BAIRUI_PLATFORM_DATABASE_URL` is set, the script runs `npm run
-db:migrate` by default. Keep `BAIRUI_RUN_MIGRATIONS=1` for server rebuilds so
-PostgreSQL tables such as `server_acceptance_reports` are created before the
-API starts.
+The platform binds only to `127.0.0.1:3000`. Put
+`infra/nginx/bairui.conf` in front of it for HTTPS. The container waits for
+PostgreSQL and applies migrations before starting the web process.
 
 After startup, check `GET /ready` before customer deployment or acceptance.
 
@@ -149,7 +144,7 @@ npm run deployment:bundle:print -- --organization-id=org_demo --license-id=lic_d
 Run the full release flow:
 
 ```sh
-BAIRUI_LICENSE_SECRET=change-me npm run delivery:release -- --organization-id=org_demo --license-id=lic_demo --server-id=srv_demo --platform-url=https://platform.example.com --out=./tmp/delivery/org_demo-srv_demo
+BAIRUI_LICENSE_PRIVATE_KEY="<protected PEM>" npm run delivery:release -- --organization-id=org_demo --license-id=lic_demo --server-id=srv_demo --platform-url=https://platform.example.com --plan=business --expires-at=2030-01-01T00:00:00.000Z --out=./tmp/delivery/org_demo-srv_demo
 ```
 
 Run customer-server acceptance after Hermes and server-agent environment files

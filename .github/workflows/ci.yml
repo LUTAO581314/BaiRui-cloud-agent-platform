@@ -26,6 +26,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Reject committed credentials
+        shell: bash
+        run: |
+          if git grep -I -n -E '(gho_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----)' -- ':!*.md' ':!*.example'; then
+            echo "Potential credential found in tracked source"
+            exit 1
+          fi
       - run: npm run verify
 
   container:
@@ -37,3 +46,14 @@ jobs:
           persist-credentials: false
       - name: Build production platform image
         run: docker build -t bairui-platform:${{ github.sha }} .
+      - name: Validate production composition
+        env:
+          POSTGRES_PASSWORD: ci-database-password
+          BAIRUI_PLATFORM_ORIGIN: https://platform.example.test
+          BAIRUI_SESSION_SECRET: ci-session-secret-at-least-32-characters
+          BAIRUI_BOOTSTRAP_ADMIN_EMAIL: admin@example.test
+          BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password-at-least-12
+          BAIRUI_AGENT_INGEST_TOKEN: ci-agent-ingest-token
+          BAIRUI_RUNTIME_SHARED_SECRET: ci-runtime-secret-at-least-32-characters
+          BAIRUI_LICENSE_PRIVATE_KEY: ci-placeholder-only-compose-validation
+        run: docker compose -f infra/docker-compose.yml config --quiet

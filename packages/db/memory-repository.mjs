@@ -119,7 +119,7 @@ export class MemoryPlatformRepository {
   }
 
   async listAudit(organizationId) {
-    return this.#audit.filter((event) => !organizationId || event.organizationId === organizationId);
+    return this.#audit.filter((event) => !organizationId || event.organizationId === organizationId).toReversed();
   }
 
   async createLicense(input) {

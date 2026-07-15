@@ -79,7 +79,7 @@ white-listed commands, approval, audit logging, and customer-visible status.
 The first receive endpoint lives in `apps/web/server.mjs`:
 
 ```text
-POST /api/server-heartbeat
+POST /api/internal/control-plane/snapshots
 GET  /api/servers
 ```
 
