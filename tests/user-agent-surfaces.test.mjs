@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createPlatformServer } from "../apps/web/app.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
 import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
+import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 
 const password = "Correct-Horse-Battery-Staple-2026";
+const bailongmaUi = createBailongmaUi({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma") });
 
 async function setup() {
   const repository = new MemoryPlatformRepository();
@@ -30,6 +34,7 @@ async function setup() {
     sessionSecret: "user-surfaces-session-secret-longer-than-32-characters",
     secureCookies: false,
     providerVault: new SecretEnvelope("user-surfaces-encryption-key-longer-than-32-characters"),
+    bailongmaUi,
     licensePrivateKey: privateKey,
     styles: "",
     logo: Buffer.from("logo"),
