@@ -59,27 +59,87 @@ function navigation(principal, active) {
 }
 
 export function userPage(principal) {
+  const adminLink = ["org_admin", "platform_admin"].includes(principal.role)
+    ? '<a class="brain-nav-link" href="/admin">总控后台</a>'
+    : "";
   return shell({
     title: "Agent 工作区",
     view: "user",
     script: "/assets/user.js",
-    body: `<div class="app-shell">
-  ${navigation(principal, "app")}
-  <main class="workspace">
-    <header class="topbar"><div><p class="eyebrow">工作区</p><h1>bairui-agent 对话</h1></div><span id="runtime-status" class="status unknown">连接中</span></header>
-    <div class="workspace-grid">
-      <section class="conversation-list" aria-label="会话列表">
-        <div class="section-heading"><h2>会话</h2><button id="new-conversation" class="icon-button" type="button" title="新建会话" aria-label="新建会话">+</button></div>
-        <div id="conversation-items" class="list-stack"></div>
+    body: `<div class="brain-app">
+  <header class="brain-header">
+    <a class="brain-brand" href="/app" aria-label="bairui-agent 工作区">
+      <img src="/assets/bairui-agent-logo.png" alt="">
+      <span><small>认知界面</small><strong>bairui-agent</strong></span>
+    </a>
+    <nav class="brain-header-actions" aria-label="工作区导航">
+      ${adminLink}
+      <span class="brain-account"><strong>${escapeHtml(principal.displayName)}</strong><small>${escapeHtml(principal.email)}</small></span>
+      <button id="logout-button" class="brain-quiet-button" type="button">退出</button>
+    </nav>
+  </header>
+
+  <main class="brain-layout">
+    <aside class="brain-panel brain-primary-panel" aria-label="会话处理器">
+      <div class="brain-panel-title">
+        <div><span class="brain-kicker">消息通道</span><h1>用户消息处理器</h1></div>
+        <span id="runtime-status" class="brain-pill unknown">连接中</span>
+      </div>
+      <div class="brain-activity">
+        <span class="brain-activity-dot"></span>
+        <span id="runtime-status-label">正在读取工作区</span>
+      </div>
+      <section class="brain-conversation-section">
+        <div class="brain-section-heading">
+          <h2>会话</h2>
+          <button id="new-conversation" class="brain-icon-button" type="button" title="新建会话" aria-label="新建会话">+</button>
+        </div>
+        <div id="conversation-items" class="brain-conversation-list"></div>
       </section>
-      <section class="chat-surface" aria-label="对话">
-        <div id="message-list" class="message-list"></div>
-        <form id="message-form" class="composer">
-          <textarea name="content" rows="2" maxlength="20000" placeholder="输入消息" required></textarea>
-          <button type="submit" class="primary-button">发送</button>
-        </form>
+      <footer class="brain-panel-footer">
+        <span id="conversation-count">0 个会话</span>
+        <span id="agent-name">bairui-agent</span>
+      </footer>
+    </aside>
+
+    <section class="brain-stage" aria-label="Agent 对话">
+      <header class="brain-stage-header">
+        <div><span class="brain-kicker">当前会话</span><h2 id="current-conversation-title">新会话</h2></div>
+        <span class="brain-stage-state"><i></i>Hermes Runtime</span>
+      </header>
+      <div id="chat-scroll" class="brain-chat-scroll">
+        <div id="chat-empty" class="brain-empty-state">
+          <img src="/assets/bairui-agent-logo.png" alt="">
+          <strong>bairui-agent</strong>
+          <span>开始一段新会话</span>
+        </div>
+        <div id="message-list" class="brain-message-list"></div>
+      </div>
+      <form id="message-form" class="brain-composer">
+        <span class="brain-prompt-mark">▸</span>
+        <textarea name="content" rows="1" maxlength="20000" placeholder="向 bairui-agent 发送消息..." aria-label="输入消息" required></textarea>
+        <button id="send-message" type="submit">发送</button>
+      </form>
+    </section>
+
+    <aside class="brain-panel brain-secondary-panel" aria-label="运行状态">
+      <div class="brain-runtime-stats">
+        <div><span>状态</span><strong id="agent-state">读取中</strong></div>
+        <div><span>会话</span><strong id="runtime-conversation-count">0</strong></div>
+        <div><span>权限</span><strong>${escapeHtml(principal.role)}</strong></div>
+      </div>
+      <section class="brain-runtime-section">
+        <div class="brain-section-heading"><div><span class="brain-kicker">运行通道</span><h2>自主行动机制 · Runtime</h2></div></div>
+        <div class="brain-runtime-line"><span>Agent</span><strong>bairui-agent</strong></div>
+        <div class="brain-runtime-line"><span>核心</span><strong>Hermes</strong></div>
+        <div class="brain-runtime-line"><span>平台会话</span><strong class="brain-live"><i></i>已连接</strong></div>
       </section>
-    </div>
+      <section class="brain-runtime-section brain-account-section">
+        <span class="brain-kicker">当前身份</span>
+        <strong>${escapeHtml(principal.displayName)}</strong>
+        <span>${escapeHtml(principal.email)}</span>
+      </section>
+    </aside>
   </main>
 </div>`
   });
