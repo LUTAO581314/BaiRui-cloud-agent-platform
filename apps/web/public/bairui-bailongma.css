@@ -1,0 +1,168 @@
+.brand-mark {
+  background: #fff url("/assets/bairui-agent-icon.png") center / 82% no-repeat !important;
+  border: 1px solid rgba(74, 159, 255, 0.42) !important;
+  box-shadow: 0 0 20px rgba(44, 132, 240, 0.28) !important;
+}
+
+.bairui-platform-tools {
+  position: fixed;
+  z-index: 1200;
+  top: 22px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--panel-border, rgba(126, 153, 181, 0.28));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg0, #0b121c) 92%, transparent);
+  color: var(--ink2, #b7c8dc);
+  font: 500 12px/1 Inter, "Segoe UI", sans-serif;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+.bairui-platform-tools img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.bairui-platform-tools strong {
+  color: var(--ink, #f3f7fb);
+  font-size: 12px;
+}
+
+.bairui-platform-tools select {
+  width: min(180px, 24vw);
+  height: 26px;
+  border: 1px solid var(--panel-border, rgba(126, 153, 181, 0.28));
+  border-radius: 4px;
+  background: var(--bg0, #0b121c);
+  color: var(--ink, #f3f7fb);
+  padding: 0 24px 0 8px;
+  font: inherit;
+}
+
+.bairui-runtime-status {
+  color: #93a4b7;
+  white-space: nowrap;
+}
+
+.bairui-runtime-status.status-ready {
+  color: #42c886;
+}
+
+.bairui-runtime-status.status-degraded,
+.bairui-runtime-status.status-failed {
+  color: #ff6f61;
+}
+
+.bairui-onboarding {
+  position: fixed;
+  z-index: 4000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(5, 10, 16, 0.9);
+}
+
+.bairui-onboarding-form {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 28px;
+  border: 1px solid rgba(126, 153, 181, 0.32);
+  border-radius: 8px;
+  background: #101923;
+  color: #f3f7fb;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+  font: 500 14px/1.5 Inter, "Segoe UI", sans-serif;
+}
+
+.bairui-onboarding-form img {
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+}
+
+.bairui-onboarding-form h1 {
+  margin: 12px 0 20px;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.bairui-onboarding-form label {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+  color: #b7c8dc;
+}
+
+.bairui-onboarding-form input,
+.bairui-onboarding-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid rgba(126, 153, 181, 0.34);
+  border-radius: 4px;
+  background: #0b121c;
+  color: #f3f7fb;
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+}
+
+.bairui-onboarding-form button {
+  min-height: 38px;
+  border: 1px solid #4a9fff;
+  border-radius: 4px;
+  background: #267bd4;
+  color: #fff;
+  padding: 0 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bairui-onboarding-error {
+  min-height: 20px;
+  color: #ff6f61;
+}
+
+.bairui-platform-tools a,
+.bairui-platform-tools button {
+  display: inline-grid;
+  min-width: 28px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--panel-border, rgba(126, 153, 181, 0.28));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.bairui-platform-tools a:hover,
+.bairui-platform-tools button:hover {
+  border-color: var(--cool, #4a9fff);
+  color: var(--ink, #fff);
+}
+
+@media (max-width: 900px) {
+  .bairui-platform-tools {
+    top: 10px;
+    right: 10px;
+    left: auto;
+    transform: none;
+  }
+
+  .bairui-platform-tools .bairui-account-label {
+    display: none;
+  }
+
+  .bairui-platform-tools select {
+    width: 124px;
+  }
+}

@@ -9,8 +9,10 @@ import { hashPassword } from "../../packages/auth/password.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
 import { BairuiRuntimeClient } from "../../packages/server-protocol/runtime-client.mjs";
 import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
+import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(appDir, "..", "..");
 const production = process.env.NODE_ENV === "production";
 const sessionSecret = process.env.BAIRUI_SESSION_SECRET;
 if (production && (!sessionSecret || sessionSecret.length < 32)) throw new Error("BAIRUI_SESSION_SECRET must contain at least 32 characters in production");
@@ -33,7 +35,7 @@ const admin = await repository.createUser({
   passwordHash: await hashPassword(adminPassword),
   role: ROLES.PLATFORM_ADMIN
 });
-await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, name: "bairui-agent", description: "Hermes runtime boundary" });
+await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, ownerUserId: admin.id, name: "bairui-agent", description: "Hermes runtime boundary" });
 await repository.recordAudit({ organizationId: organization.id, actorUserId: admin.id, action: "platform.bootstrap", targetType: "organization", targetId: organization.id });
 
 const server = createPlatformServer({
@@ -53,8 +55,11 @@ const server = createPlatformServer({
   logo: fs.readFileSync(path.join(appDir, "public", "bairui-agent-logo.png")),
   icon: fs.readFileSync(path.join(appDir, "public", "bairui-agent-icon.png")),
   loginScript: fs.readFileSync(path.join(appDir, "public", "login.js"), "utf8"),
-  userScript: fs.readFileSync(path.join(appDir, "public", "user.js"), "utf8"),
-  adminScript: fs.readFileSync(path.join(appDir, "admin", "admin.js"), "utf8")
+  adminScript: fs.readFileSync(path.join(appDir, "admin", "admin.js"), "utf8"),
+  bailongmaUi: createBailongmaUi({ root: path.join(repoRoot, "upstreams", "bailongma") }),
+  bailongmaOverlayCss: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.css"), "utf8"),
+  bailongmaOverlayScript: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.js"), "utf8"),
+  bailongmaSceneBootstrap: fs.readFileSync(path.join(appDir, "public", "bairui-scene-bootstrap.js"), "utf8")
 });
 
 const port = Number(process.env.PORT ?? 3000);
