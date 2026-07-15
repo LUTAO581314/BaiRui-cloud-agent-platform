@@ -22,6 +22,9 @@ export class MemoryPlatformRepository {
   #integrationRuns = [];
   #hotspots = new Map();
   #obsidianNotes = [];
+  #agentSkillPreferences = [];
+  #agentChannelBindings = [];
+  #agentHotspotBookmarks = [];
   #agentComponents = new Map();
   #heartbeats = [];
   #telemetryEvents = [];
@@ -184,8 +187,11 @@ export class MemoryPlatformRepository {
     return this.#alerts.filter((item) => !organizationId || item.organizationId === organizationId);
   }
 
-  async listUsageRollups(organizationId) {
-    return this.#usageRollups.filter((item) => !organizationId || item.organizationId === organizationId);
+  async listUsageRollups(organizationId, userId, agentId, limit = 1000) {
+    return this.#usageRollups
+      .filter((item) => (!organizationId || item.organizationId === organizationId) && (!userId || item.userId === userId) && (!agentId || item.agentId === agentId))
+      .toReversed()
+      .slice(0, Math.max(1, Math.min(Number(limit) || 1000, 5000)));
   }
 
   async requestAgentProvisioning(input) {
@@ -419,7 +425,7 @@ export class MemoryPlatformRepository {
   }
 
   async createObsidianNote(input) {
-    const duplicate = this.#obsidianNotes.find((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.slug === input.slug);
+    const duplicate = this.#obsidianNotes.find((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId && item.slug === input.slug);
     const now = new Date().toISOString();
     if (duplicate) {
       Object.assign(duplicate, input, { updatedAt: now });
@@ -430,7 +436,85 @@ export class MemoryPlatformRepository {
     return note;
   }
 
-  async listObsidianNotes(organizationId, userId) {
-    return this.#obsidianNotes.filter((item) => item.organizationId === organizationId && item.userId === userId).toReversed();
+  async listObsidianNotes(organizationId, userId, agentId, query = "") {
+    const search = String(query ?? "").trim().toLocaleLowerCase();
+    return this.#obsidianNotes
+      .filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId && (!search || item.title.toLocaleLowerCase().includes(search) || item.markdown.toLocaleLowerCase().includes(search)))
+      .toReversed();
+  }
+
+  async getObsidianNote(organizationId, userId, agentId, noteId) {
+    return this.#obsidianNotes.find((item) => item.id === noteId && item.organizationId === organizationId && item.userId === userId && item.agentId === agentId) ?? null;
+  }
+
+  async updateObsidianNote(input) {
+    const note = await this.getObsidianNote(input.organizationId, input.userId, input.agentId, input.id);
+    if (!note) return null;
+    Object.assign(note, input, { updatedAt: new Date().toISOString() });
+    return note;
+  }
+
+  async deleteObsidianNote(organizationId, userId, agentId, noteId) {
+    const index = this.#obsidianNotes.findIndex((item) => item.id === noteId && item.organizationId === organizationId && item.userId === userId && item.agentId === agentId);
+    if (index < 0) return false;
+    this.#obsidianNotes.splice(index, 1);
+    return true;
+  }
+
+  async listAgentSkillPreferences(organizationId, userId, agentId) {
+    return this.#agentSkillPreferences.filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId);
+  }
+
+  async upsertAgentSkillPreference(input) {
+    const existing = this.#agentSkillPreferences.find((item) => item.agentId === input.agentId && item.skillId === input.skillId);
+    const value = { ...input, enabled: Boolean(input.enabled), applyStatus: input.applyStatus ?? "pending", lastErrorCode: input.lastErrorCode ?? null, updatedAt: new Date().toISOString() };
+    if (existing) {
+      Object.assign(existing, value);
+      return existing;
+    }
+    this.#agentSkillPreferences.push(value);
+    return value;
+  }
+
+  async listAgentChannelBindings(organizationId, userId, agentId) {
+    return this.#agentChannelBindings.filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId);
+  }
+
+  async getAgentChannelBinding(organizationId, userId, agentId, channel) {
+    return this.#agentChannelBindings.find((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId && item.channel === channel) ?? null;
+  }
+
+  async upsertAgentChannelBinding(input) {
+    const existing = this.#agentChannelBindings.find((item) => item.agentId === input.agentId && item.channel === input.channel);
+    const now = new Date().toISOString();
+    const value = {
+      id: existing?.id ?? input.id ?? randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: input.agentId,
+      channel: input.channel, displayName: input.displayName, status: input.status ?? "pending",
+      credentialEnvelope: input.credentialEnvelope ?? existing?.credentialEnvelope ?? null,
+      credentialHint: input.credentialHint ?? existing?.credentialHint ?? null,
+      metadata: input.metadata ?? {}, lastErrorCode: input.lastErrorCode ?? null, lastSeenAt: existing?.lastSeenAt ?? null,
+      createdAt: existing?.createdAt ?? now, updatedAt: now
+    };
+    if (existing) Object.assign(existing, value);
+    else this.#agentChannelBindings.push(value);
+    return existing ?? value;
+  }
+
+  async deleteAgentChannelBinding(organizationId, userId, agentId, channel) {
+    const index = this.#agentChannelBindings.findIndex((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId && item.channel === channel);
+    if (index < 0) return false;
+    this.#agentChannelBindings.splice(index, 1);
+    return true;
+  }
+
+  async setAgentHotspotBookmark(input) {
+    const index = this.#agentHotspotBookmarks.findIndex((item) => item.agentId === input.agentId && item.hotspotItemId === input.hotspotItemId);
+    if (input.bookmarked && index < 0) this.#agentHotspotBookmarks.push({ organizationId: input.organizationId, userId: input.userId, agentId: input.agentId, hotspotItemId: input.hotspotItemId, createdAt: new Date().toISOString() });
+    if (!input.bookmarked && index >= 0) this.#agentHotspotBookmarks.splice(index, 1);
+    return Boolean(input.bookmarked);
+  }
+
+  async listAgentHotspotBookmarkIds(organizationId, userId, agentId) {
+    return this.#agentHotspotBookmarks.filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId).map((item) => item.hotspotItemId);
   }
 }

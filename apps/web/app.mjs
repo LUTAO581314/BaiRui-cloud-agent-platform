@@ -31,6 +31,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
 const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
+const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 
 function numericMetrics(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -126,6 +127,29 @@ function publicProviderConfiguration(configuration) {
     applyStatus: configuration.applyStatus,
     updatedAt: configuration.updatedAt
   };
+}
+
+function publicChannelBinding(binding) {
+  if (!binding) return null;
+  const { credentialEnvelope, ...safe } = binding;
+  return { ...safe, configured: Boolean(credentialEnvelope), credentialMasked: binding.credentialHint ? `****${binding.credentialHint}` : null };
+}
+
+function channelSecretHint(credentials) {
+  if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) return null;
+  const value = Object.values(credentials).find((item) => typeof item === "string" && item.trim());
+  return value ? secretHint(value.trim()) : null;
+}
+
+function usageSummary(rollups) {
+  return rollups.reduce((summary, item) => ({
+    inputTokens: summary.inputTokens + item.inputTokens,
+    outputTokens: summary.outputTokens + item.outputTokens,
+    estimatedCostUsd: summary.estimatedCostUsd + item.estimatedCostUsd,
+    runCount: summary.runCount + item.runCount,
+    failedRunCount: summary.failedRunCount + item.failedRunCount,
+    latencySumMs: summary.latencySumMs + item.latencySumMs
+  }), { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, runCount: 0, failedRunCount: 0, latencySumMs: 0 });
 }
 
 export function createPlatformApp(options) {
@@ -556,13 +580,138 @@ export function createPlatformApp(options) {
         if (operation) return json(response, method === "POST" ? 202 : 200, await runtimeClient.operation({ principal, agent, operation, input }));
       }
 
+      const memoryNotesMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes$/);
+      if (memoryNotesMatch && ["GET", "POST"].includes(method)) {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, memoryNotesMatch[1]);
+        if (method === "GET") {
+          return json(response, 200, { notes: await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id, url.searchParams.get("query") ?? ""), format: "obsidian-markdown" });
+        }
+        const body = await readJson(request);
+        if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
+        const note = createObsidianNote({ title: body.title.slice(0, 200), body: body.body.slice(0, 200_000), tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id, metadata: { agentId: agent.id } });
+        return json(response, 201, { note: saved });
+      }
+
+      const memoryNoteMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes\/([^/]+)$/);
+      if (memoryNoteMatch && ["GET", "PATCH", "DELETE"].includes(method)) {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, memoryNoteMatch[1]);
+        const noteId = memoryNoteMatch[2];
+        const current = await repository.getObsidianNote(principal.organizationId, principal.userId, agent.id, noteId);
+        if (!current) return json(response, 404, { error: "memory_note_not_found" });
+        if (method === "GET") return json(response, 200, { note: current, format: "obsidian-markdown" });
+        if (method === "DELETE") {
+          await repository.deleteObsidianNote(principal.organizationId, principal.userId, agent.id, noteId);
+          await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.delete", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
+          return json(response, 200, { deleted: true });
+        }
+        const body = await readJson(request);
+        if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
+        const note = createObsidianNote({ title: body.title.slice(0, 200), body: body.body.slice(0, 200_000), tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        let saved;
+        try { saved = await repository.updateObsidianNote({ ...note, id: noteId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id }); }
+        catch (error) { if (error.code === "23505") return json(response, 409, { error: "memory_note_slug_conflict" }); throw error; }
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.update", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
+        return json(response, 200, { note: saved });
+      }
+
+      const skillsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/skills(?:\/([^/]+))?$/);
+      if (skillsMatch && ["GET", "PATCH"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, skillsMatch[1]);
+        const preferences = await repository.listAgentSkillPreferences(principal.organizationId, principal.userId, agent.id);
+        if (method === "GET") {
+          let discovery = { status: "unavailable", error: "runtime_unavailable" };
+          if (runtimeClient) {
+            try { discovery = { status: "available", data: await runtimeClient.operation({ principal, agent, operation: "discovery.skills" }) }; }
+            catch (error) { discovery = { status: "unavailable", error: error.code ?? "runtime_unavailable" }; }
+          }
+          return json(response, 200, { discovery, preferences });
+        }
+        if (!skillsMatch[2]) return json(response, 405, { error: "skill_id_required" });
+        const body = await readJson(request);
+        if (typeof body.enabled !== "boolean") return json(response, 400, { error: "invalid_skill_preference" });
+        const skillId = decodeURIComponent(skillsMatch[2]).slice(0, 200);
+        const preference = await repository.upsertAgentSkillPreference({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, skillId, enabled: body.enabled, applyStatus: "pending" });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.skill.preference.update", targetType: "agent", targetId: agent.id, metadata: { skillId, enabled: body.enabled, applyStatus: "pending" } });
+        return json(response, 202, { preference });
+      }
+
+      const channelsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/channels(?:\/([^/]+))?$/);
+      if (channelsMatch && ["GET", "PUT", "DELETE"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, channelsMatch[1]);
+        if (method === "GET") {
+          const bindings = await repository.listAgentChannelBindings(principal.organizationId, principal.userId, agent.id);
+          return json(response, 200, { channels: [...USER_CHANNELS].map((channel) => ({ channel, binding: publicChannelBinding(bindings.find((item) => item.channel === channel) ?? null) })) });
+        }
+        const channel = channelsMatch[2] ? decodeURIComponent(channelsMatch[2]) : "";
+        if (!USER_CHANNELS.has(channel)) return json(response, 404, { error: "channel_not_supported" });
+        if (method === "DELETE") {
+          const deleted = await repository.deleteAgentChannelBinding(principal.organizationId, principal.userId, agent.id, channel);
+          await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.channel.unbind", targetType: "agent", targetId: agent.id, metadata: { channel, deleted } });
+          return json(response, 200, { channel, status: "unconfigured" });
+        }
+        const body = await readJson(request);
+        const credentials = body.credentials && typeof body.credentials === "object" && !Array.isArray(body.credentials) ? body.credentials : null;
+        if (credentials && !providerVault) return json(response, 503, { error: "channel_secret_storage_unavailable" });
+        const credentialText = credentials ? JSON.stringify(credentials) : "";
+        if (credentialText.length > 64_000) return json(response, 413, { error: "channel_credentials_too_large" });
+        const binding = await repository.upsertAgentChannelBinding({
+          organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, channel,
+          displayName: typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim().slice(0, 100) : channel,
+          status: channel === "web" ? "connected" : "pending",
+          credentialEnvelope: credentialText ? providerVault.seal(credentialText) : null,
+          credentialHint: channelSecretHint(credentials),
+          metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}
+        });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.channel.bind", targetType: "agent", targetId: agent.id, metadata: { channel, status: binding.status, credentialChanged: Boolean(credentialText) } });
+        return json(response, channel === "web" ? 200 : 202, { binding: publicChannelBinding(binding) });
+      }
+
+      const agentHotspotsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/hotspots$/);
+      if (agentHotspotsMatch && method === "GET") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, agentHotspotsMatch[1]);
+        const [latest, bookmarkIds] = await Promise.all([repository.listLatestHotspots(principal.organizationId), repository.listAgentHotspotBookmarkIds(principal.organizationId, principal.userId, agent.id)]);
+        const bookmarks = new Set(bookmarkIds);
+        return json(response, 200, { ...latest, items: latest.items.map((item) => ({ ...item, bookmarked: bookmarks.has(item.id) })) });
+      }
+
+      const hotspotBookmarkMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/hotspots\/([^/]+)\/bookmark$/);
+      if (hotspotBookmarkMatch && method === "PUT") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, hotspotBookmarkMatch[1]);
+        const body = await readJson(request);
+        if (typeof body.bookmarked !== "boolean") return json(response, 400, { error: "invalid_bookmark_state" });
+        const latest = await repository.listLatestHotspots(principal.organizationId);
+        const hotspotItemId = hotspotBookmarkMatch[2];
+        if (!latest.items.some((item) => item.id === hotspotItemId)) return json(response, 404, { error: "hotspot_not_found" });
+        const bookmarked = await repository.setAgentHotspotBookmark({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, hotspotItemId, bookmarked: body.bookmarked });
+        return json(response, 200, { hotspotItemId, bookmarked });
+      }
+
+      const usageMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/usage$/);
+      if (usageMatch && method === "GET") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, usageMatch[1]);
+        const rollups = await repository.listUsageRollups(principal.organizationId, principal.userId, agent.id, url.searchParams.get("limit") ?? 1000);
+        return json(response, 200, { agentId: agent.id, summary: usageSummary(rollups), rollups });
+      }
+
       if (method === "GET" && url.pathname === "/agent-profile") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
         return json(response, 200, { name: "bairui-agent", runtime: "Hermes", ui: "BaiLongma Brain UI", uiVersion: options.bailongmaUi?.version ?? "unavailable" });
       }
       if (method === "GET" && url.pathname === "/memories") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
-        const notes = await repository.listObsidianNotes(principal.organizationId, principal.userId);
+        const agents = await repository.listAgents(principal.organizationId, principal.userId);
+        const requested = url.searchParams.get("agent_id");
+        const agent = agents.find((item) => item.id === requested) ?? agents[0];
+        const notes = agent ? await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id) : [];
         return json(response, 200, toBailongmaMemories(notes).slice(0, Math.max(1, Math.min(Number(url.searchParams.get("limit")) || 120, 200))));
       }
       if (method === "GET" && url.pathname === "/hotspots") {
@@ -580,22 +729,20 @@ export function createPlatformApp(options) {
       }
       if (method === "GET" && url.pathname === "/api/user/hotspots") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
-        return json(response, 200, await repository.listLatestHotspots(principal.organizationId));
+        return json(response, 200, await repository.listLatestHotspots(principal.organizationId), { deprecation: "true" });
       }
-      if (method === "GET" && url.pathname === "/api/user/memory-notes") {
+      if (["GET", "POST"].includes(method) && url.pathname === "/api/user/memory-notes") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
-        return json(response, 200, { notes: await repository.listObsidianNotes(principal.organizationId, principal.userId), format: "obsidian-markdown" });
-      }
-      if (method === "POST" && url.pathname === "/api/user/memory-notes") {
-        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = (await repository.listAgents(principal.organizationId, principal.userId))[0];
+        if (!agent) return json(response, 409, { error: "agent_required" });
+        if (method === "GET") return json(response, 200, { notes: await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id), format: "obsidian-markdown" }, { deprecation: "true" });
         const body = await readJson(request);
         if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
-        const note = createObsidianNote({ title: body.title, body: body.body, tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
-        const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id });
-        return json(response, 201, { note: saved });
+        const note = createObsidianNote({ title: body.title.slice(0, 200), body: body.body.slice(0, 200_000), tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id, metadata: { agentId: agent.id, compatibilityRoute: true } });
+        return json(response, 201, { note: saved }, { deprecation: "true" });
       }
-
       if (method === "GET" && url.pathname === "/api/admin/overview") {
         requireLogin(principal);
         const permitted = can(principal, PERMISSIONS.PLATFORM_OVERVIEW_READ) || can(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });

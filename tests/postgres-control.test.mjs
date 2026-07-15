@@ -33,6 +33,30 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     const route = await repository.getAgentRuntimeRoute(agentId);
     assert.equal(route.runtime.endpointRef, "http://127.0.0.1:19123");
     assert.equal(route.runtime.status, "starting");
+
+    const note = await repository.createObsidianNote({ id: `note_${suffix}`, organizationId, userId, agentId, title: "PostgreSQL note", slug: "postgresql-note", markdown: "# PostgreSQL note", frontmatter: { tags: [] }, wikilinks: [] });
+    assert.equal(note.agentId, agentId);
+    assert.equal((await repository.listObsidianNotes(organizationId, userId, agentId, "PostgreSQL")).length, 1);
+    await repository.updateObsidianNote({ ...note, markdown: "# PostgreSQL note\n\nUpdated" });
+    assert.match((await repository.getObsidianNote(organizationId, userId, agentId, note.id)).markdown, /Updated/);
+
+    const skill = await repository.upsertAgentSkillPreference({ organizationId, userId, agentId, skillId: "browser/use", enabled: true, applyStatus: "pending" });
+    assert.equal(skill.applyStatus, "pending");
+    assert.equal((await repository.listAgentSkillPreferences(organizationId, userId, agentId)).length, 1);
+
+    const channel = await repository.upsertAgentChannelBinding({ organizationId, userId, agentId, channel: "feishu", displayName: "Postgres Feishu", status: "pending", credentialEnvelope: { encrypted: true }, credentialHint: "test" });
+    assert.deepEqual(channel.credentialEnvelope, { encrypted: true });
+    assert.equal((await repository.listAgentChannelBindings(organizationId, userId, agentId)).length, 1);
+
+    await repository.saveIntegrationResult({ organizationId, integrationId: "trendradar", capability: "list_hotspots", status: "completed", startedAt: new Date().toISOString(), items: [{ external_id: "one", source_id: "test", source_name: "Test", rank: 1, title: "Hotspot", fetched_at: new Date().toISOString() }] });
+    const hotspot = (await repository.listLatestHotspots(organizationId)).items[0];
+    assert.equal(await repository.setAgentHotspotBookmark({ organizationId, userId, agentId, hotspotItemId: hotspot.id, bookmarked: true }), true);
+    assert.deepEqual(await repository.listAgentHotspotBookmarkIds(organizationId, userId, agentId), [hotspot.id]);
+
+    await repository.saveAgentHeartbeat({ organizationId, userId, agentId, runtimeId, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [], usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "example/model", inputTokens: 3, outputTokens: 4, runCount: 1 } });
+    const usage = await repository.listUsageRollups(organizationId, userId, agentId);
+    assert.equal(usage[0].inputTokens, 3);
+    assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
   } finally {
     await repository.pool.query("DELETE FROM organizations WHERE id=$1", [organizationId]).catch(() => {});
     await repository.close();
