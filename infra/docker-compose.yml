@@ -16,6 +16,7 @@ services:
     networks: [backend, runtime]
 
   platform:
+    image: ${BAIRUI_PLATFORM_IMAGE:-bairui-platform:local}
     build:
       context: ..
     restart: unless-stopped
