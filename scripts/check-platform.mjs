@@ -19,15 +19,18 @@ const required = [
   "packages/db/memory-repository.mjs",
   "packages/db/postgres-repository.mjs",
   "packages/db/migrations/001_initial.sql",
+  "packages/db/migrations/002_operations.sql",
   "packages/server-protocol/runtime-client.mjs",
+  "packages/license/license.mjs",
+  "packages/deployment/bundle.mjs",
   "tests/authorization.test.mjs",
   "tests/session.test.mjs",
-  "tests/platform-http.test.mjs"
-  ,"server-agent/index.mjs"
-  ,"server-agent/bin/acceptance-check.mjs"
-  ,"Dockerfile"
-  ,"infra/docker-compose.yml"
-  ,"infra/nginx/bairui.conf"
+  "tests/platform-http.test.mjs",
+  "server-agent/index.mjs",
+  "server-agent/bin/acceptance-check.mjs",
+  "Dockerfile",
+  "infra/docker-compose.yml",
+  "infra/nginx/bairui.conf"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);

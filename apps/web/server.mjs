@@ -17,7 +17,7 @@ if (production && (!sessionSecret || sessionSecret.length < 32)) throw new Error
 const databaseUrl = process.env.DATABASE_URL ?? process.env.BAIRUI_PLATFORM_DATABASE_URL;
 if (production && !databaseUrl) throw new Error("DATABASE_URL is required in production");
 const repository = databaseUrl
-  ? new PostgresPlatformRepository({ connectionString: databaseUrl, ssl: production ? { rejectUnauthorized: true } : undefined })
+  ? new PostgresPlatformRepository({ connectionString: databaseUrl, ssl: process.env.BAIRUI_DATABASE_SSL === "1" ? { rejectUnauthorized: true } : undefined })
   : new MemoryPlatformRepository();
 const organization = await repository.createOrganization({ id: "org_bairui", name: "BaiRui" });
 const adminEmail = process.env.BAIRUI_BOOTSTRAP_ADMIN_EMAIL ?? "admin@bairui.local";

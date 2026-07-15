@@ -9,7 +9,7 @@ It is aligned with the framework defined in
 - one cross-cutting Bairui Control Plane;
 - Hermes Agent as the Core Runtime Layer;
 - Bairui Runtime Boundary as the platform adapter around Hermes;
-- OpenClaw as a channel bridge reference;
+- OpenClaw as a service integration candidate/reference;
 - BaiLongma as a channel and UI reference.
 
 This repository does not own the Hermes runtime. It owns the cloud platform,
@@ -159,11 +159,16 @@ are installed:
 npm run server-agent:acceptance
 ```
 
-## Immediate Next Steps
+## Implemented Platform Foundation
 
-1. Keep this repository platform-only.
-2. Keep Hermes in `LUTAO581314/BaiRui-agent` as the runtime upstream.
-3. Align heartbeat and acceptance contracts with the Bairui Control Plane.
-4. Build customer console, license, deployment, and server registry first.
-5. Add support and release views after the P0 deployment loop is stable.
+- server-side `user`, `org_admin`, and `platform_admin` authorization;
+- organization-scoped users, agents, conversations, messages, audit, servers,
+  licenses, releases, and control-plane snapshots;
+- separate user and administrator pages, APIs, and JavaScript delivery;
+- signed platform-to-runtime requests and outbound server heartbeat;
+- Ed25519 licenses and hash-verified delivery bundles;
+- PostgreSQL migrations, Docker deployment, and GitHub CI container builds.
+
+Provider credentials and customer connector tokens remain deployment secrets.
+CI verifies fixtures and authorization boundaries without invoking paid models.
 
