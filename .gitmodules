@@ -1,0 +1,4 @@
+[submodule "upstreams/bailongma"]
+	path = upstreams/bailongma
+	url = https://github.com/xiaoyuanda666-ship-it/BaiLongma.git
+	branch = main

@@ -10,6 +10,7 @@ export class MemoryPlatformRepository {
   #organizations = new Map();
   #users = new Map();
   #agents = new Map();
+  #agentRuntimes = new Map();
   #conversations = new Map();
   #messages = new Map();
   #snapshots = [];
@@ -69,13 +70,68 @@ export class MemoryPlatformRepository {
   }
 
   async createAgent(input) {
-    const agent = { id: input.id ?? randomUUID(), organizationId: input.organizationId, name: input.name, description: input.description ?? "", status: input.status ?? "ready", createdAt: new Date().toISOString() };
+    if (!input.ownerUserId) throw new TypeError("ownerUserId is required");
+    const now = new Date().toISOString();
+    const agent = {
+      id: input.id ?? randomUUID(),
+      organizationId: input.organizationId,
+      ownerUserId: input.ownerUserId,
+      name: input.name,
+      description: input.description ?? "",
+      avatarUrl: input.avatarUrl ?? null,
+      soulMarkdown: input.soulMarkdown ?? "",
+      status: input.status ?? "pending",
+      initializationStatus: input.initializationStatus ?? "uninitialized",
+      desiredRuntimeState: input.desiredRuntimeState ?? "stopped",
+      settings: input.settings ?? {},
+      lastErrorCode: null,
+      lastErrorDetail: null,
+      createdAt: now,
+      updatedAt: now
+    };
     this.#agents.set(agent.id, agent);
     return agent;
   }
 
-  async listAgents(organizationId) {
-    return [...this.#agents.values()].filter((agent) => agent.organizationId === organizationId);
+  async getAgent(id) {
+    return this.#agents.get(id) ?? null;
+  }
+
+  async listAgents(organizationId, ownerUserId) {
+    return [...this.#agents.values()].filter((agent) => agent.organizationId === organizationId && (!ownerUserId || agent.ownerUserId === ownerUserId));
+  }
+
+  async updateAgent(id, patch) {
+    const agent = this.#agents.get(id);
+    if (!agent) return null;
+    for (const field of ["name", "description", "avatarUrl", "soulMarkdown", "status", "initializationStatus", "desiredRuntimeState", "settings", "lastErrorCode", "lastErrorDetail"]) {
+      if (field in patch) agent[field] = patch[field];
+    }
+    agent.updatedAt = new Date().toISOString();
+    return agent;
+  }
+
+  async createAgentRuntime(input) {
+    const existing = [...this.#agentRuntimes.values()].find((runtime) => runtime.agentId === input.agentId);
+    if (existing) return existing;
+    const now = new Date().toISOString();
+    const runtime = {
+      id: input.id ?? randomUUID(), organizationId: input.organizationId, ownerUserId: input.ownerUserId,
+      agentId: input.agentId, deploymentId: input.deploymentId ?? null, workspaceRef: input.workspaceRef,
+      runtimeKind: "hermes", status: input.status ?? "uninitialized", hermesVersion: null,
+      boundaryVersion: null, configRevisionId: null, lastHeartbeatAt: null, lastErrorCode: null,
+      lastErrorDetail: null, createdAt: now, updatedAt: now
+    };
+    this.#agentRuntimes.set(runtime.id, runtime);
+    return runtime;
+  }
+
+  async getAgentRuntimeByAgent(agentId) {
+    return [...this.#agentRuntimes.values()].find((runtime) => runtime.agentId === agentId) ?? null;
+  }
+
+  async listAgentRuntimes(organizationId, ownerUserId) {
+    return [...this.#agentRuntimes.values()].filter((runtime) => runtime.organizationId === organizationId && (!ownerUserId || runtime.ownerUserId === ownerUserId));
   }
 
   async createConversation(input) {

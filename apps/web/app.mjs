@@ -17,10 +17,14 @@ import {
   sessionCookie,
   verifySessionToken
 } from "../../packages/auth/session.mjs";
-import { loginPage, userPage, adminPage } from "./views.mjs";
+import { loginPage, adminPage } from "./views.mjs";
 import { issueLicense } from "../../packages/license/license.mjs";
 import { createObsidianNote } from "../../packages/memory/obsidian-note.mjs";
 import { secretHint } from "../../packages/security/secret-envelope.mjs";
+import {
+  toBailongmaHotspots,
+  toBailongmaMemories
+} from "../../packages/bailongma-ui/compatibility.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const INTEGRATION_CATALOG = Object.freeze([
@@ -125,8 +129,8 @@ export function createPlatformApp(options) {
   } = options;
   if (!repository) throw new TypeError("repository is required");
   if (!sessionSecret || sessionSecret.length < 32) throw new TypeError("sessionSecret must contain at least 32 characters");
+  if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
   const loginAttempts = new Map();
-
   async function principalFor(request) {
     const token = parseCookies(request.headers.cookie)[SESSION_COOKIE];
     const session = verifySessionToken(token, sessionSecret);
@@ -143,6 +147,37 @@ export function createPlatformApp(options) {
       throw error;
     }
     return principal;
+  }
+
+  async function ownedAgent(principal, agentId) {
+    const agent = await repository.getAgent(agentId);
+    if (!agent || agent.organizationId !== principal.organizationId || agent.ownerUserId !== principal.userId) {
+      const error = new Error("agent_not_found");
+      error.statusCode = 404;
+      throw error;
+    }
+    return agent;
+  }
+
+  async function pipeRuntimeStream(response, upstream) {
+    response.writeHead(200, {
+      "content-type": upstream.headers.get("content-type") ?? "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+      "x-content-type-options": "nosniff"
+    });
+    const reader = upstream.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!response.write(Buffer.from(value))) await new Promise((resolve) => response.once("drain", resolve));
+      }
+    } finally {
+      reader.releaseLock();
+      response.end();
+    }
   }
 
   return async function handle(request, response) {
@@ -174,12 +209,31 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.loginScript);
       }
-      if (method === "GET" && url.pathname === "/assets/user.js") {
+      if (method === "GET" && url.pathname === "/assets/bairui-bailongma.css") {
+        if (!options.bailongmaOverlayCss) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" });
+        return response.end(options.bailongmaOverlayCss);
+      }
+      if (method === "GET" && url.pathname === "/assets/bairui-bailongma.js") {
+        if (!options.bailongmaOverlayScript) return json(response, 404, { error: "not_found" });
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.userScript);
+        return response.end(options.bailongmaOverlayScript);
       }
 
       const principal = await principalFor(request);
+      if (method === "GET" && url.pathname === "/bailongma-ui/src/ui/scene-shell/bootstrap.js") {
+        if (!principal || !options.bailongmaSceneBootstrap) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "private, no-store" });
+        return response.end(options.bailongmaSceneBootstrap);
+      }
+      if (method === "GET" && options.bailongmaUi && (url.pathname.startsWith("/bailongma-ui/") || url.pathname.startsWith("/src/ui/"))) {
+        if (!principal) return json(response, 401, { error: "authentication_required" });
+        const assetPath = url.pathname.startsWith("/src/ui/") ? `/bailongma-ui${url.pathname}` : url.pathname;
+        const asset = options.bailongmaUi.readAsset(assetPath);
+        if (!asset) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": asset.contentType, "cache-control": "private, max-age=300", "x-bailongma-version": options.bailongmaUi.version });
+        return response.end(asset.body);
+      }
       if (method === "GET" && url.pathname === "/admin/assets/admin.js") {
         if (!principal || ![ROLES.ORG_ADMIN, ROLES.PLATFORM_ADMIN].includes(principal.role)) return json(response, 404, { error: "not_found" });
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "private, no-store" });
@@ -189,7 +243,7 @@ export function createPlatformApp(options) {
       if (method === "GET" && url.pathname === "/login") return html(response, 200, loginPage());
       if (method === "GET" && url.pathname === "/app") {
         if (!principal) return redirect(response, "/login");
-        return html(response, 200, userPage(principal));
+        return html(response, 200, options.bailongmaUi.render());
       }
       if (method === "GET" && url.pathname === "/admin") {
         if (!principal) return redirect(response, "/login?next=/admin");
@@ -221,7 +275,7 @@ export function createPlatformApp(options) {
         const organization = await repository.createOrganization({ name: body.organizationName || "Personal workspace" });
         const passwordHash = await hashPassword(body.password);
         const user = await repository.createUser({ organizationId: organization.id, email: body.email, displayName: body.displayName || body.email, passwordHash, role: ROLES.ORG_ADMIN });
-        await repository.createAgent({ organizationId: organization.id, name: "bairui-agent", description: "Organization runtime agent" });
+        await repository.createAgent({ organizationId: organization.id, ownerUserId: user.id, name: "bairui-agent", description: "User-owned Hermes agent" });
         await repository.recordAudit({ organizationId: organization.id, actorUserId: user.id, action: "organization.register", targetType: "organization", targetId: organization.id });
         return json(response, 201, { id: user.id });
       }
@@ -233,44 +287,209 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.SELF_READ, { userId: principal.userId, organizationId: principal.organizationId });
         return json(response, 200, { user: principal });
       }
-      if (method === "GET" && url.pathname === "/api/user/workspace") {
-        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
-        const [agents, conversations] = await Promise.all([
-          repository.listAgents(principal.organizationId),
-          repository.listConversations(principal.organizationId, principal.userId)
+
+      if (method === "GET" && url.pathname === "/api/user/agents") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        const [agents, runtimes] = await Promise.all([
+          repository.listAgents(principal.organizationId, principal.userId),
+          repository.listAgentRuntimes(principal.organizationId, principal.userId)
         ]);
-        return json(response, 200, { agents, conversations });
+        const runtimeByAgent = new Map(runtimes.map((runtime) => [runtime.agentId, runtime]));
+        return json(response, 200, { agents: agents.map((agent) => ({ ...agent, runtime: runtimeByAgent.get(agent.id) ?? null })) });
       }
-      if (method === "POST" && url.pathname === "/api/user/conversations") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+      if (method === "POST" && url.pathname === "/api/user/agents") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_CREATE, { organizationId: principal.organizationId, userId: principal.userId });
         const body = await readJson(request);
-        const agents = await repository.listAgents(principal.organizationId);
-        const agent = agents.find((item) => item.id === body.agentId);
-        if (!agent) return json(response, 404, { error: "agent_not_found" });
-        const conversation = await repository.createConversation({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, title: body.title });
-        return json(response, 201, { conversation });
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        if (!name || name.length > 64) return json(response, 400, { error: "invalid_agent_name" });
+        const agent = await repository.createAgent({
+          organizationId: principal.organizationId,
+          ownerUserId: principal.userId,
+          name,
+          description: typeof body.description === "string" ? body.description.trim().slice(0, 500) : "",
+          avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl.trim().slice(0, 2000) : null,
+          soulMarkdown: typeof body.soulMarkdown === "string" ? body.soulMarkdown.slice(0, 50_000) : "",
+          settings: {}
+        });
+        const runtime = await repository.createAgentRuntime({
+          organizationId: principal.organizationId,
+          ownerUserId: principal.userId,
+          agentId: agent.id,
+          workspaceRef: `hermes:${principal.organizationId}:${principal.userId}:${agent.id}`
+        });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.create", targetType: "agent", targetId: agent.id });
+        return json(response, 201, { agent: { ...agent, runtime } });
       }
-      const messageMatch = url.pathname.match(/^\/api\/user\/conversations\/([^/]+)\/messages$/);
-      if (messageMatch && method === "GET") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_READ, { organizationId: principal.organizationId, userId: principal.userId });
-        const conversation = await repository.getConversation(messageMatch[1]);
-        if (!conversation || conversation.organizationId !== principal.organizationId || conversation.userId !== principal.userId) return json(response, 404, { error: "conversation_not_found" });
-        return json(response, 200, { messages: await repository.listMessages(conversation.id) });
+      const userAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)$/);
+      if (userAgentMatch && method === "GET") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await repository.getAgent(userAgentMatch[1]);
+        if (!agent || agent.organizationId !== principal.organizationId || agent.ownerUserId !== principal.userId) return json(response, 404, { error: "agent_not_found" });
+        return json(response, 200, { agent: { ...agent, runtime: await repository.getAgentRuntimeByAgent(agent.id) } });
       }
-      if (messageMatch && method === "POST") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        const conversation = await repository.getConversation(messageMatch[1]);
-        if (!conversation || conversation.organizationId !== principal.organizationId || conversation.userId !== principal.userId) return json(response, 404, { error: "conversation_not_found" });
+      if (userAgentMatch && method === "PATCH") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await repository.getAgent(userAgentMatch[1]);
+        if (!agent || agent.organizationId !== principal.organizationId || agent.ownerUserId !== principal.userId) return json(response, 404, { error: "agent_not_found" });
         const body = await readJson(request);
-        if (typeof body.content !== "string" || !body.content.trim() || body.content.length > 20_000) return json(response, 400, { error: "invalid_message" });
-        const userMessage = await repository.appendMessage({ conversationId: conversation.id, organizationId: principal.organizationId, userId: principal.userId, role: "user", content: body.content.trim() });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable", message: userMessage });
-        const providerConfiguration = await repository.getProviderConfiguration(principal.organizationId);
-        const runtimeResult = await runtimeClient.invoke({ principal, conversation, content: userMessage.content, model: providerConfiguration?.applyStatus === "applied" ? providerConfiguration.model : undefined });
-        const assistantMessage = await repository.appendMessage({ conversationId: conversation.id, organizationId: principal.organizationId, userId: principal.userId, role: "assistant", content: runtimeResult.content });
-        return json(response, 201, { userMessage, assistantMessage, runtime: runtimeResult.metadata });
+        const patch = {};
+        if (body.name !== undefined) {
+          if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 64) return json(response, 400, { error: "invalid_agent_name" });
+          patch.name = body.name.trim();
+        }
+        if (body.description !== undefined) patch.description = String(body.description).trim().slice(0, 500);
+        if (body.avatarUrl !== undefined) patch.avatarUrl = body.avatarUrl ? String(body.avatarUrl).trim().slice(0, 2000) : null;
+        if (body.soulMarkdown !== undefined) patch.soulMarkdown = String(body.soulMarkdown).slice(0, 50_000);
+        const updated = await repository.updateAgent(agent.id, patch);
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch) } });
+        return json(response, 200, { agent: updated });
       }
 
+      const discoveryMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runtime\/discovery$/);
+      if (discoveryMatch && method === "GET") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, discoveryMatch[1]);
+        const names = ["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets"];
+        const settled = await Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation })));
+        return json(response, 200, { agentId: agent.id, discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])) });
+      }
+
+      const sessionsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions$/);
+      if (sessionsMatch && ["GET", "POST"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, sessionsMatch[1]);
+        if (method === "GET") {
+          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.list", input: { limit: url.searchParams.get("limit") ?? 50, offset: url.searchParams.get("offset") ?? 0, include_children: url.searchParams.get("include_children") ?? false } }));
+        }
+        const body = await readJson(request);
+        const provider = await repository.getProviderConfiguration(principal.organizationId);
+        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: provider?.applyStatus === "applied" ? provider.model : undefined } } });
+        return json(response, 201, result);
+      }
+
+      const sessionActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)\/(messages|fork|chat|chat\/stream)$/);
+      if (sessionActionMatch) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, sessionActionMatch[1]);
+        const sessionId = sessionActionMatch[2];
+        const action = sessionActionMatch[3];
+        if (action === "messages" && method === "GET") return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.messages", input: { session_id: sessionId } }));
+        if (action === "fork" && method === "POST") {
+          const body = await readJson(request);
+          return json(response, 201, await runtimeClient.operation({ principal, agent, operation: "sessions.fork", input: { session_id: sessionId, body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined } } }));
+        }
+        if (action === "chat" && method === "POST") {
+          const body = await readJson(request);
+          if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) return json(response, 400, { error: "invalid_message" });
+          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message: body.message.trim() } } }));
+        }
+        if (action === "chat/stream" && method === "POST") {
+          const body = await readJson(request);
+          if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) return json(response, 400, { error: "invalid_message" });
+          const controller = new AbortController();
+          response.on("close", () => controller.abort());
+          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message: body.message.trim() } }, signal: controller.signal });
+          return pipeRuntimeStream(response, upstream);
+        }
+      }
+
+      const sessionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)$/);
+      if (sessionMatch && ["GET", "PATCH", "DELETE"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, sessionMatch[1]);
+        const input = { session_id: sessionMatch[2] };
+        if (method === "PATCH") {
+          const body = await readJson(request);
+          input.body = { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined };
+        }
+        const operation = method === "GET" ? "sessions.get" : method === "PATCH" ? "sessions.update" : "sessions.delete";
+        return json(response, 200, await runtimeClient.operation({ principal, agent, operation, input }));
+      }
+
+      const runsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs$/);
+      if (runsMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, runsMatch[1]);
+        const body = await readJson(request);
+        if (typeof body.input !== "string" || !body.input.trim() || body.input.length > 20_000) return json(response, 400, { error: "invalid_run_input" });
+        const provider = await repository.getProviderConfiguration(principal.organizationId);
+        return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.create", input: { body: { input: body.input.trim(), model: provider?.applyStatus === "applied" ? provider.model : undefined } } }));
+      }
+
+      const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop)$/);
+      if (runActionMatch) {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, runActionMatch[1]);
+        const runId = runActionMatch[2];
+        const action = runActionMatch[3];
+        if (action === "events" && method === "GET") {
+          const controller = new AbortController();
+          response.on("close", () => controller.abort());
+          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "runs.events", input: { run_id: runId }, signal: controller.signal });
+          return pipeRuntimeStream(response, upstream);
+        }
+        if (action === "approval" && method === "POST") {
+          const body = await readJson(request);
+          if (!["once", "session", "always", "deny"].includes(body.choice)) return json(response, 400, { error: "invalid_approval_choice" });
+          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } }));
+        }
+        if (action === "stop" && method === "POST") return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.stop", input: { run_id: runId } }));
+      }
+
+      const runMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)$/);
+      if (runMatch && method === "GET") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, runMatch[1]);
+        return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "runs.get", input: { run_id: runMatch[2] } }));
+      }
+
+      const jobsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/jobs(?:\/([^/]+))?(?:\/(pause|resume|run))?$/);
+      if (jobsMatch) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, jobsMatch[1]);
+        const jobId = jobsMatch[2];
+        const action = jobsMatch[3];
+        let operation;
+        let input = {};
+        if (!jobId && method === "GET") operation = "jobs.list";
+        else if (!jobId && method === "POST") { operation = "jobs.create"; input.body = await readJson(request); }
+        else if (action && method === "POST") { operation = `jobs.${action}`; input.job_id = jobId; }
+        else if (jobId && method === "GET") { operation = "jobs.get"; input.job_id = jobId; }
+        else if (jobId && method === "PATCH") { operation = "jobs.update"; input = { job_id: jobId, body: await readJson(request) }; }
+        else if (jobId && method === "DELETE") { operation = "jobs.delete"; input.job_id = jobId; }
+        if (operation) return json(response, method === "POST" ? 202 : 200, await runtimeClient.operation({ principal, agent, operation, input }));
+      }
+
+      if (method === "GET" && url.pathname === "/agent-profile") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
+        return json(response, 200, { name: "bairui-agent", runtime: "Hermes", ui: "BaiLongma Brain UI", uiVersion: options.bailongmaUi?.version ?? "unavailable" });
+      }
+      if (method === "GET" && url.pathname === "/memories") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const notes = await repository.listObsidianNotes(principal.organizationId, principal.userId);
+        return json(response, 200, toBailongmaMemories(notes).slice(0, Math.max(1, Math.min(Number(url.searchParams.get("limit")) || 120, 200))));
+      }
+      if (method === "GET" && url.pathname === "/hotspots") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
+        return json(response, 200, toBailongmaHotspots(await repository.listLatestHotspots(principal.organizationId)));
+      }
+      if (method === "GET" && url.pathname === "/audit/stats") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
+        return json(response, 200, { recall: { count: 0, avg: 0 }, extract: { count: 0, avg: 0 } });
+      }
+      if (method === "POST" && ["/hotspot-state", "/worldcup-state", "/doc-panel-state", "/person-card-state"].includes(url.pathname)) {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
+        await readJson(request);
+        return json(response, 200, { ok: true });
+      }
       if (method === "GET" && url.pathname === "/api/user/hotspots") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
         return json(response, 200, await repository.listLatestHotspots(principal.organizationId));

@@ -11,7 +11,8 @@ const mapUser = (row, includeHash = false) => row ? {
   status: row.status,
   createdAt: row.created_at?.toISOString?.() ?? row.created_at
 } : null;
-const mapAgent = (row) => ({ id: row.id, organizationId: row.organization_id, name: row.name, description: row.description, status: row.status, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
+const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, name: row.name, description: row.description, avatarUrl: row.avatar_url, soulMarkdown: row.soul_markdown, status: row.status, initializationStatus: row.initialization_status, desiredRuntimeState: row.desired_runtime_state, settings: row.settings, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapConversation = (row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const mapMessage = (row) => ({ id: row.id, conversationId: row.conversation_id, organizationId: row.organization_id, userId: row.user_id, role: row.role, content: row.content, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapSnapshot = (row) => ({ id: row.id, organizationId: row.organization_id, serverId: row.server_id, status: row.status, payload: row.payload, receivedAt: row.received_at?.toISOString?.() ?? row.received_at });
@@ -79,14 +80,73 @@ export class PostgresPlatformRepository {
   }
 
   async createAgent(input) {
+    if (!input.ownerUserId) throw new TypeError("ownerUserId is required");
     const id = input.id ?? randomUUID();
-    const { rows } = await this.pool.query("INSERT INTO agents (id, organization_id, name, description, status) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, status=EXCLUDED.status RETURNING *", [id, input.organizationId, input.name, input.description ?? "", input.status ?? "ready"]);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `INSERT INTO agents (id, organization_id, owner_user_id, name, description, avatar_url, soul_markdown, status, initialization_status, desired_runtime_state, settings)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (id) DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id, name=EXCLUDED.name, description=EXCLUDED.description, avatar_url=EXCLUDED.avatar_url, soul_markdown=EXCLUDED.soul_markdown, updated_at=now()
+         RETURNING *`,
+        [id, input.organizationId, input.ownerUserId, input.name, input.description ?? "", input.avatarUrl ?? null, input.soulMarkdown ?? "", input.status ?? "pending", input.initializationStatus ?? "uninitialized", input.desiredRuntimeState ?? "stopped", input.settings ?? {}]
+      );
+      await client.query("INSERT INTO agent_memberships (agent_id, organization_id, user_id, role) VALUES ($1,$2,$3,'owner') ON CONFLICT (agent_id, user_id) DO UPDATE SET role='owner'", [id, input.organizationId, input.ownerUserId]);
+      await client.query("COMMIT");
+      return mapAgent(rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async getAgent(id) {
+    const { rows } = await this.pool.query("SELECT * FROM agents WHERE id = $1", [id]);
     return mapAgent(rows[0]);
   }
 
-  async listAgents(organizationId) {
-    const { rows } = await this.pool.query("SELECT * FROM agents WHERE organization_id = $1 ORDER BY created_at", [organizationId]);
+  async listAgents(organizationId, ownerUserId) {
+    const query = ownerUserId
+      ? ["SELECT * FROM agents WHERE organization_id = $1 AND owner_user_id = $2 ORDER BY updated_at DESC", [organizationId, ownerUserId]]
+      : ["SELECT * FROM agents WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]];
+    const { rows } = await this.pool.query(...query);
     return rows.map(mapAgent);
+  }
+
+  async updateAgent(id, patch) {
+    const current = await this.getAgent(id);
+    if (!current) return null;
+    const value = (field) => field in patch ? patch[field] : current[field];
+    const { rows } = await this.pool.query(
+      `UPDATE agents SET name=$2, description=$3, avatar_url=$4, soul_markdown=$5, status=$6,
+       initialization_status=$7, desired_runtime_state=$8, settings=$9, last_error_code=$10,
+       last_error_detail=$11, updated_at=now() WHERE id=$1 RETURNING *`,
+      [id, value("name"), value("description"), value("avatarUrl"), value("soulMarkdown"), value("status"), value("initializationStatus"), value("desiredRuntimeState"), value("settings"), value("lastErrorCode"), value("lastErrorDetail")]
+    );
+    return mapAgent(rows[0]);
+  }
+
+  async createAgentRuntime(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO agent_runtimes (id, organization_id, owner_user_id, agent_id, deployment_id, workspace_ref, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (agent_id) DO UPDATE SET updated_at=now() RETURNING *`,
+      [input.id ?? randomUUID(), input.organizationId, input.ownerUserId, input.agentId, input.deploymentId ?? null, input.workspaceRef, input.status ?? "uninitialized"]
+    );
+    return mapAgentRuntime(rows[0]);
+  }
+
+  async getAgentRuntimeByAgent(agentId) {
+    const { rows } = await this.pool.query("SELECT * FROM agent_runtimes WHERE agent_id = $1", [agentId]);
+    return mapAgentRuntime(rows[0]);
+  }
+
+  async listAgentRuntimes(organizationId, ownerUserId) {
+    const query = ownerUserId
+      ? ["SELECT * FROM agent_runtimes WHERE organization_id = $1 AND owner_user_id = $2 ORDER BY updated_at DESC", [organizationId, ownerUserId]]
+      : ["SELECT * FROM agent_runtimes WHERE organization_id = $1 ORDER BY updated_at DESC", [organizationId]];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapAgentRuntime);
   }
 
   async createConversation(input) {

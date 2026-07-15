@@ -8,46 +8,54 @@ export class BairuiRuntimeClient {
   constructor(options = {}) {
     this.baseUrl = String(options.baseUrl ?? "http://127.0.0.1:8787").replace(/\/$/, "");
     this.sharedSecret = options.sharedSecret;
+    this.resolveRuntime = options.resolveRuntime ?? (() => ({ baseUrl: this.baseUrl, sharedSecret: this.sharedSecret }));
     this.fetch = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 125_000;
     if (!this.sharedSecret || this.sharedSecret.length < 32) throw new TypeError("Runtime shared secret must contain at least 32 characters");
   }
 
-  async signedPost(path, payload) {
+  async signedPost(path, payload, options = {}) {
     const body = JSON.stringify(payload);
     const timestamp = Date.now().toString();
     const nonce = randomUUID();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const runtime = options.runtime ?? { baseUrl: this.baseUrl, sharedSecret: this.sharedSecret };
+    if (!runtime?.baseUrl || !runtime?.sharedSecret) throw Object.assign(new Error("Agent Runtime route is unavailable"), { code: "runtime_route_unavailable", statusCode: 503 });
+    const controller = options.signal ? null : new AbortController();
+    const signal = options.signal ?? controller.signal;
+    const timer = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
     let response;
     try {
-      response = await this.fetch(`${this.baseUrl}${path}`, {
+      response = await this.fetch(`${String(runtime.baseUrl).replace(/\/$/, "")}${path}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "x-bairui-timestamp": timestamp,
           "x-bairui-nonce": nonce,
-          "x-bairui-signature": sign(body, timestamp, nonce, this.sharedSecret)
+          "x-bairui-signature": sign(body, timestamp, nonce, runtime.sharedSecret)
         },
         body,
-        signal: controller.signal
+        signal
       });
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
+    if (options.stream && response.ok) return response;
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error("BaiRui runtime is unavailable"), { code: result.error ?? "runtime_unavailable", statusCode: 503 });
     return result;
   }
 
-  async invoke({ principal, conversation, content, model }) {
+  async invoke({ principal, agent, conversation, content, model }) {
+    if (!agent?.id || agent.ownerUserId !== principal.userId || agent.organizationId !== principal.organizationId) {
+      throw Object.assign(new Error("Agent ownership does not match the authenticated principal"), { code: "agent_ownership_mismatch", statusCode: 403 });
+    }
     const requestId = randomUUID();
-    const configId = `config:${principal.organizationId}`;
+    const configId = `config:${principal.organizationId}:${agent.id}`;
     const payload = {
       request: {
         request_id: requestId,
         request_type: "message",
-        tenant: { organization_id: principal.organizationId },
+        tenant: { organization_id: principal.organizationId, agent_id: agent.id },
         actor: { user_id: principal.userId, roles: [principal.role] },
         channel_context: { channel: "web", conversation_id: conversation.id },
         input: { content },
@@ -59,14 +67,14 @@ export class BairuiRuntimeClient {
         config_id: configId,
         model_policy: model ? { model } : {},
         tool_policy: {},
-        memory_policy: { scope: "organization-user" },
+        memory_policy: { scope: "agent" },
         approval_policy: { mode: "required-for-risky-actions" },
         storage_policy: {},
         integration_policy: {},
         channel_policy: { channel: "web" }
       }
     };
-    const response = await this.signedPost("/v1/runtime/requests", payload);
+    const response = await this.signedPost("/v1/runtime/requests", payload, { runtime: await this.resolveRuntime(agent) });
     const result = response.result;
     if (result?.status === "completed") return { content: result.reply?.content ?? "", metadata: { requestId, runId: result.run_id, status: result.status } };
     if (result?.status === "requires_approval") return { content: "This action requires administrator approval.", metadata: { requestId, runId: result.run_id, status: result.status, approval: result.approval_request } };
@@ -85,5 +93,34 @@ export class BairuiRuntimeClient {
         trace: { correlation_id: requestId }
       }
     });
+  }
+
+  validateAgent(principal, agent) {
+    if (!agent?.id || agent.ownerUserId !== principal.userId || agent.organizationId !== principal.organizationId) {
+      throw Object.assign(new Error("Agent ownership does not match the authenticated principal"), { code: "agent_ownership_mismatch", statusCode: 403 });
+    }
+  }
+
+  operationEnvelope({ principal, agent, operation, input = {} }) {
+    this.validateAgent(principal, agent);
+    return {
+      operation,
+      tenant: { organization_id: principal.organizationId, agent_id: agent.id },
+      actor: { user_id: principal.userId, roles: [principal.role] },
+      channel_context: { channel: "web", conversation_id: input.session_id },
+      input,
+      trace: { correlation_id: randomUUID() },
+      created_at: new Date().toISOString()
+    };
+  }
+
+  async operation(options) {
+    const envelope = this.operationEnvelope(options);
+    return this.signedPost("/v1/runtime/operations", envelope, { runtime: await this.resolveRuntime(options.agent) });
+  }
+
+  async streamOperation(options) {
+    const envelope = this.operationEnvelope(options);
+    return this.signedPost("/v1/runtime/streams", envelope, { runtime: await this.resolveRuntime(options.agent), signal: options.signal, stream: true });
   }
 }

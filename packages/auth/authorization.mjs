@@ -6,6 +6,9 @@ export const ROLES = Object.freeze({
 
 export const PERMISSIONS = Object.freeze({
   SELF_READ: "self:read",
+  AGENT_CREATE: "agent:create",
+  AGENT_READ: "agent:read",
+  AGENT_MANAGE_OWN: "agent:manage-own",
   AGENT_USE: "agent:use",
   CONVERSATION_READ: "conversation:read",
   CONVERSATION_WRITE: "conversation:write",
@@ -26,12 +29,18 @@ export const PERMISSIONS = Object.freeze({
 const grants = new Map([
   [ROLES.USER, new Set([
     PERMISSIONS.SELF_READ,
+    PERMISSIONS.AGENT_CREATE,
+    PERMISSIONS.AGENT_READ,
+    PERMISSIONS.AGENT_MANAGE_OWN,
     PERMISSIONS.AGENT_USE,
     PERMISSIONS.CONVERSATION_READ,
     PERMISSIONS.CONVERSATION_WRITE
   ])],
   [ROLES.ORG_ADMIN, new Set([
     PERMISSIONS.SELF_READ,
+    PERMISSIONS.AGENT_CREATE,
+    PERMISSIONS.AGENT_READ,
+    PERMISSIONS.AGENT_MANAGE_OWN,
     PERMISSIONS.AGENT_USE,
     PERMISSIONS.CONVERSATION_READ,
     PERMISSIONS.CONVERSATION_WRITE,

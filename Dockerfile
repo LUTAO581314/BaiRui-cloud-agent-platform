@@ -12,6 +12,8 @@ COPY package.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY server-agent ./server-agent
+COPY upstreams/bailongma/brain-ui.html upstreams/bailongma/LICENSE upstreams/bailongma/package.json ./upstreams/bailongma/
+COPY upstreams/bailongma/src/ui ./upstreams/bailongma/src/ui
 USER bairui
 EXPOSE 3000
 CMD ["node", "apps/web/server.mjs"]

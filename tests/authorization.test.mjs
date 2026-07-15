@@ -8,6 +8,8 @@ const platformAdmin = { userId: "root", organizationId: "org_platform", role: RO
 
 test("ordinary users can use only their own organization resources", () => {
   assert.equal(can(user, PERMISSIONS.AGENT_USE, { organizationId: "org_a" }), true);
+  assert.equal(can(user, PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: "org_a", userId: "user_a" }), true);
+  assert.equal(can(user, PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: "org_a", userId: "user_b" }), false);
   assert.equal(can(user, PERMISSIONS.AGENT_USE, { organizationId: "org_b" }), false);
   assert.equal(can(user, PERMISSIONS.CONTROL_PLANE_READ), false);
 });
