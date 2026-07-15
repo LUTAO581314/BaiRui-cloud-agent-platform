@@ -30,6 +30,10 @@ export class MemoryPlatformRepository {
   #controlDeployments = [];
   #configRevisions = [];
   #controlCommands = [];
+  #serverCredentials = [];
+  #agentRuntimeCredentials = [];
+  #machineNonces = new Set();
+  #commandReceipts = [];
 
   async createOrganization(input) {
     const organization = { id: input.id ?? randomUUID(), name: input.name, createdAt: new Date().toISOString() };
@@ -195,15 +199,98 @@ export class MemoryPlatformRepository {
     if (!server) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
     const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
     const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model } };
-    const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: input.provider.apiKeyEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
+    const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: input.secretEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
     this.#configRevisions.push(config);
+    for (const credential of this.#agentRuntimeCredentials) if (credential.runtimeId === runtime.id && credential.status === "active") credential.status = "revoked";
+    this.#agentRuntimeCredentials.push({ id: input.agentCredentialId ?? randomUUID(), organizationId: agent.organizationId, userId: agent.ownerUserId, agentId: agent.id, runtimeId: runtime.id, keyHash: input.agentCredentialHash, keyHint: input.agentCredentialHint, status: "active", createdBy: input.requestedBy, createdAt: new Date().toISOString() });
     const deployment = { id: randomUUID(), organizationId: agent.organizationId, serverId: server.id, agentId: agent.id, name: agent.name, environment: "production", status: "enrolling", observedStateVersion: 0, desiredStateVersion: 1, createdAt: new Date().toISOString() };
     this.#controlDeployments.push(deployment);
-    const command = { id: randomUUID(), deploymentId: deployment.id, agentId: agent.id, action: "deployment.provision", arguments: { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: config.id }, state: "queued", createdAt: new Date().toISOString() };
+    const command = { id: randomUUID(), deploymentId: deployment.id, agentId: agent.id, action: "deployment.provision", target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: config.id }, expectedObservationVersion: 0, state: "queued", priority: 100, attempt: 0, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: new Date().toISOString() };
     this.#controlCommands.push(command);
     Object.assign(runtime, { deploymentId: deployment.id, configRevisionId: config.id, status: "provisioning", updatedAt: new Date().toISOString() });
     Object.assign(agent, { initializationStatus: "provisioning", desiredRuntimeState: "running", status: "provisioning", updatedAt: new Date().toISOString() });
     return { agent, runtime, deployment, command };
+  }
+
+  async createServerCredential(input) {
+    for (const credential of this.#serverCredentials) if (credential.serverId === input.serverId && credential.status === "active") credential.status = "revoked";
+    const credential = { id: input.id ?? randomUUID(), serverId: input.serverId, keyHash: input.keyHash, keyHint: input.keyHint, status: "active", createdBy: input.createdBy ?? null, createdAt: new Date().toISOString() };
+    this.#serverCredentials.push(credential);
+    return credential;
+  }
+
+  async getActiveServerCredential(serverId) {
+    return this.#serverCredentials.findLast((item) => item.serverId === serverId && item.status === "active") ?? null;
+  }
+
+  async getActiveAgentRuntimeCredential(agentId) {
+    return this.#agentRuntimeCredentials.findLast((item) => item.agentId === agentId && item.status === "active") ?? null;
+  }
+
+  async claimMachineNonce(input) {
+    const key = `${input.credentialType}:${input.credentialId}:${input.nonce}`;
+    if (this.#machineNonces.has(key)) return false;
+    this.#machineNonces.add(key);
+    return true;
+  }
+
+  async leaseControlCommands(input) {
+    const now = Date.now();
+    const deployments = new Map(this.#controlDeployments.filter((item) => item.serverId === input.serverId).map((item) => [item.id, item]));
+    const leased = [];
+    for (const command of this.#controlCommands.sort((left, right) => left.priority - right.priority || left.createdAt.localeCompare(right.createdAt))) {
+      if (leased.length >= (input.limit ?? 10) || !deployments.has(command.deploymentId)) continue;
+      if (["leased", "accepted", "running"].includes(command.state) && Date.parse(command.leaseExpiresAt) <= now) command.state = "queued";
+      if (command.state !== "queued" || Date.parse(command.expiresAt) <= now) continue;
+      command.state = "leased";
+      command.leaseServerId = input.serverId;
+      command.leaseExpiresAt = new Date(now + (input.leaseSeconds ?? 60) * 1000).toISOString();
+      command.attempt += 1;
+      const deployment = deployments.get(command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      leased.push({
+        schema_version: "1.0", command_id: command.id, idempotency_key: `${command.deploymentId}/${command.action}/${command.arguments.config_revision_id ?? command.id}`,
+        deployment_id: command.deploymentId, action: command.action, target: command.target, arguments: command.arguments,
+        expected_observation_version: command.expectedObservationVersion, created_at: command.createdAt, expires_at: command.expiresAt,
+        attempt: command.attempt, lease_expires_at: command.leaseExpiresAt,
+        placement: { server_id: deployment.serverId, agent_id: deployment.agentId, runtime_id: runtime.id, organization_id: deployment.organizationId, user_id: runtime.ownerUserId, workspace_ref: runtime.workspaceRef },
+        config: config ? { document: config.configDocument, secret_envelope: config.secretEnvelope } : null
+      });
+    }
+    return leased;
+  }
+
+  async recordCommandReceipt(input) {
+    const command = this.#controlCommands.find((item) => item.id === input.commandId);
+    if (!command || command.leaseServerId !== input.serverId || command.attempt !== input.attempt) return null;
+    const duplicate = this.#commandReceipts.find((item) => item.commandId === input.commandId && item.attempt === input.attempt && item.state === input.state);
+    if (duplicate) return duplicate;
+    const receipt = { id: randomUUID(), ...input, deploymentId: command.deploymentId, createdAt: new Date().toISOString() };
+    this.#commandReceipts.push(receipt);
+    command.state = input.state;
+    if (input.state === "running") command.leaseExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    if (input.state === "succeeded" && command.action === "deployment.provision") {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      Object.assign(runtime, { endpointRef: input.runtimeEndpointRef, status: "starting", updatedAt: new Date().toISOString() });
+      deployment.status = "active";
+    }
+    if (input.state === "failed") {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const agent = this.#agents.get(deployment.agentId);
+      Object.assign(runtime, { status: "failed", lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary });
+      Object.assign(agent, { status: "failed", initializationStatus: "failed", lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary });
+      deployment.status = "degraded";
+    }
+    return receipt;
+  }
+
+  async getAgentRuntimeRoute(agentId) {
+    const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === agentId);
+    const config = runtime?.configRevisionId ? this.#configRevisions.find((item) => item.id === runtime.configRevisionId) : null;
+    return runtime && config ? { runtime, configDocument: config.configDocument, secretEnvelope: config.secretEnvelope } : null;
   }
 
   async createConversation(input) {

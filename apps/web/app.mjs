@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   PERMISSIONS,
   ROLES,
@@ -21,6 +21,7 @@ import { loginPage, adminPage } from "./views.mjs";
 import { issueLicense } from "../../packages/license/license.mjs";
 import { createObsidianNote } from "../../packages/memory/obsidian-note.mjs";
 import { secretHint } from "../../packages/security/secret-envelope.mjs";
+import { deriveMachineKey, verifyMachineRequest } from "../../packages/security/machine-request.mjs";
 import {
   toBailongmaHotspots,
   toBailongmaMemories
@@ -65,6 +66,10 @@ function redirect(response, location) {
 }
 
 async function readJson(request) {
+  return (await readSignedJson(request)).body;
+}
+
+async function readSignedJson(request) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
@@ -76,9 +81,10 @@ async function readJson(request) {
     }
     chunks.push(chunk);
   }
-  if (!chunks.length) return {};
+  if (!chunks.length) return { raw: "", body: {} };
+  const raw = Buffer.concat(chunks).toString("utf8");
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return { raw, body: JSON.parse(raw) };
   } catch {
     const error = new Error("Invalid JSON");
     error.statusCode = 400;
@@ -139,6 +145,7 @@ export function createPlatformApp(options) {
   if (!sessionSecret || sessionSecret.length < 32) throw new TypeError("sessionSecret must contain at least 32 characters");
   if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
   const loginAttempts = new Map();
+  const runtimeRouteHosts = new Set(["host.docker.internal", "127.0.0.1", "localhost", ...(options.runtimeRouteHosts ?? [])]);
   async function principalFor(request) {
     const token = parseCookies(request.headers.cookie)[SESSION_COOKIE];
     const session = verifySessionToken(token, sessionSecret);
@@ -165,6 +172,52 @@ export function createPlatformApp(options) {
       throw error;
     }
     return agent;
+  }
+
+  async function authenticateMachine(request, url, rawBody, credentialType) {
+    const machineId = request.headers["x-bairui-machine-id"];
+    const timestamp = request.headers["x-bairui-timestamp"];
+    const nonce = request.headers["x-bairui-nonce"];
+    const signature = request.headers["x-bairui-signature"];
+    if (typeof machineId !== "string") return null;
+    const credential = credentialType === "server"
+      ? await repository.getActiveServerCredential(machineId)
+      : await repository.getActiveAgentRuntimeCredential(machineId);
+    if (!credential || !verifyMachineRequest({ method: request.method, path: url.pathname, timestamp, nonce, body: rawBody, signature, keyHash: credential.keyHash })) return null;
+    const timestampMs = Number(timestamp);
+    const claimed = await repository.claimMachineNonce({ credentialType, credentialId: credential.id, nonce, timestampMs, expiresAt: new Date(timestampMs + 10 * 60_000).toISOString() });
+    return claimed ? { machineId, credential } : null;
+  }
+
+  function issueMachineToken() {
+    const token = randomBytes(32).toString("base64url");
+    return { token, keyHash: deriveMachineKey(token), keyHint: token.slice(-4) };
+  }
+
+  function runtimeEndpointRef(value) {
+    if (typeof value !== "string" || value.length > 2000) return null;
+    let parsed;
+    try { parsed = new URL(value); } catch { return null; }
+    if (parsed.protocol !== "http:" || !runtimeRouteHosts.has(parsed.hostname) || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || !parsed.port) return null;
+    return parsed.toString().replace(/\/$/, "");
+  }
+
+  function revealLease(command) {
+    if (!command.config?.secret_envelope) return { ...command, config: command.config ? { document: command.config.document } : null };
+    if (!providerVault) throw Object.assign(new Error("Secret storage is unavailable"), { statusCode: 503, code: "secret_storage_unavailable" });
+    const envelope = command.config.secret_envelope;
+    return {
+      ...command,
+      config: {
+        document: command.config.document,
+        secrets: {
+          provider_api_key: providerVault.open(envelope.providerApiKey),
+          hermes_api_server_key: providerVault.open(envelope.hermesApiServerKey),
+          runtime_shared_secret: providerVault.open(envelope.runtimeSharedSecret),
+          agent_control_token: providerVault.open(envelope.agentControlToken)
+        }
+      }
+    };
   }
 
   async function pipeRuntimeStream(response, upstream) {
@@ -358,7 +411,23 @@ export function createPlatformApp(options) {
         const agent = await ownedAgent(principal, initializeAgentMatch[1]);
         const provider = await repository.getProviderConfiguration(principal.organizationId);
         if (!provider?.apiKeyEnvelope || !provider.provider || !provider.model) return json(response, 409, { error: "model_provider_not_configured" });
-        const result = await repository.requestAgentProvisioning({ agentId: agent.id, requestedBy: principal.userId, provider });
+        if (!providerVault) return json(response, 503, { error: "secret_storage_unavailable" });
+        const runtimeSecret = randomBytes(32).toString("base64url");
+        const hermesSecret = randomBytes(32).toString("base64url");
+        const agentCredential = issueMachineToken();
+        const result = await repository.requestAgentProvisioning({
+          agentId: agent.id,
+          requestedBy: principal.userId,
+          provider,
+          agentCredentialHash: agentCredential.keyHash,
+          agentCredentialHint: agentCredential.keyHint,
+          secretEnvelope: {
+            providerApiKey: provider.apiKeyEnvelope,
+            runtimeSharedSecret: providerVault.seal(runtimeSecret),
+            hermesApiServerKey: providerVault.seal(hermesSecret),
+            agentControlToken: providerVault.seal(agentCredential.token)
+          }
+        });
         if (!result) return json(response, 404, { error: "agent_runtime_not_found" });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.initialization.request", targetType: "agent", targetId: agent.id, metadata: { deploymentId: result.deployment?.id, commandId: result.command?.id } });
         return json(response, 202, result);
@@ -660,8 +729,20 @@ export function createPlatformApp(options) {
         if (!await repository.getOrganization(body.organizationId)) return json(response, 404, { error: "organization_not_found" });
         if (typeof body.name !== "string" || !body.name.trim()) return json(response, 400, { error: "invalid_server" });
         const server = await repository.createServer({ organizationId: body.organizationId, name: body.name.trim() });
+        const issued = issueMachineToken();
+        const credential = await repository.createServerCredential({ serverId: server.id, keyHash: issued.keyHash, keyHint: issued.keyHint, createdBy: principal.userId });
         await repository.recordAudit({ organizationId: body.organizationId, actorUserId: principal.userId, action: "server.create", targetType: "server", targetId: server.id });
-        return json(response, 201, { server });
+        return json(response, 201, { server, credential: { id: credential.id, token: issued.token, keyHint: credential.keyHint } });
+      }
+      const serverCredentialMatch = url.pathname.match(/^\/api\/admin\/servers\/([^/]+)\/credentials$/);
+      if (serverCredentialMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_SERVERS_MANAGE);
+        const server = (await repository.listServers()).find((item) => item.id === serverCredentialMatch[1]);
+        if (!server) return json(response, 404, { error: "server_not_found" });
+        const issued = issueMachineToken();
+        const credential = await repository.createServerCredential({ serverId: server.id, keyHash: issued.keyHash, keyHint: issued.keyHint, createdBy: principal.userId });
+        await repository.recordAudit({ organizationId: server.organizationId, actorUserId: principal.userId, action: "server.credential.rotate", targetType: "server", targetId: server.id, metadata: { credentialId: credential.id } });
+        return json(response, 201, { credential: { id: credential.id, token: issued.token, keyHint: credential.keyHint } });
       }
       if (method === "GET" && url.pathname === "/api/admin/releases") {
         requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
@@ -691,9 +772,11 @@ export function createPlatformApp(options) {
         return json(response, 202, { id: saved.id });
       }
       if (method === "POST" && url.pathname === "/api/internal/control-plane/heartbeats") {
+        const signed = await readSignedJson(request);
         const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-        if (!constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
-        const body = await readJson(request);
+        const machine = await authenticateMachine(request, url, signed.raw, "agent-runtime");
+        if ((!machine || machine.machineId !== signed.body.agentId) && !constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
+        const body = signed.body;
         if (!body.organizationId || !body.userId || !body.agentId || !body.runtimeId || !Number.isSafeInteger(body.sequence) || body.sequence < 1 || !COMPONENT_STATUSES.has(body.status) || !Number.isFinite(Date.parse(body.observedAt))) return json(response, 400, { error: "invalid_agent_heartbeat" });
         const [agent, runtime] = await Promise.all([repository.getAgent(body.agentId), repository.getAgentRuntimeByAgent(body.agentId)]);
         if (!agent || !runtime || runtime.id !== body.runtimeId || agent.organizationId !== body.organizationId || agent.ownerUserId !== body.userId) return json(response, 404, { error: "agent_runtime_not_found" });
@@ -725,6 +808,27 @@ export function createPlatformApp(options) {
         } : null;
         const saved = await repository.saveAgentHeartbeat({ organizationId: body.organizationId, userId: body.userId, agentId: body.agentId, runtimeId: body.runtimeId, sequence: body.sequence, status: body.status, runtimeVersion: typeof body.runtimeVersion === "string" ? body.runtimeVersion.slice(0, 200) : null, boundaryVersion: typeof body.boundaryVersion === "string" ? body.boundaryVersion.slice(0, 200) : null, configRevisionId: typeof body.configRevisionId === "string" ? body.configRevisionId : null, queueDepth: Math.max(0, Number(body.queueDepth) || 0), activeRuns: Math.max(0, Number(body.activeRuns) || 0), failedRuns: Math.max(0, Number(body.failedRuns) || 0), observedAt: body.observedAt, components, events, usage });
         return json(response, 202, { id: saved.id });
+      }
+
+      if (method === "POST" && url.pathname === "/api/internal/control-plane/commands/lease") {
+        const signed = await readSignedJson(request);
+        const machine = await authenticateMachine(request, url, signed.raw, "server");
+        if (!machine || signed.body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
+        const commands = await repository.leaseControlCommands({ serverId: machine.machineId, limit: Number(signed.body.limit) || 10, leaseSeconds: Number(signed.body.leaseSeconds) || 60 });
+        return json(response, 200, { commands: commands.map(revealLease) });
+      }
+      const commandReceiptMatch = url.pathname.match(/^\/api\/internal\/control-plane\/commands\/([^/]+)\/receipts$/);
+      if (commandReceiptMatch && method === "POST") {
+        const signed = await readSignedJson(request);
+        const machine = await authenticateMachine(request, url, signed.raw, "server");
+        const body = signed.body;
+        if (!machine || body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
+        if (!Number.isSafeInteger(body.attempt) || body.attempt < 1 || !["accepted", "running", "succeeded", "failed", "cancelled", "expired"].includes(body.state)) return json(response, 400, { error: "invalid_command_receipt" });
+        const endpointRef = body.runtimeEndpointRef === undefined ? null : runtimeEndpointRef(body.runtimeEndpointRef);
+        if (body.runtimeEndpointRef !== undefined && !endpointRef) return json(response, 400, { error: "invalid_runtime_endpoint" });
+        const receipt = await repository.recordCommandReceipt({ commandId: commandReceiptMatch[1], serverId: machine.machineId, attempt: body.attempt, state: body.state, errorCode: typeof body.errorCode === "string" ? body.errorCode.slice(0, 200) : null, errorSummary: typeof body.errorSummary === "string" ? body.errorSummary.slice(0, 1000) : null, runtimeEndpointRef: endpointRef, resultSummary: numericMetrics(body.resultSummary), evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs.filter((item) => typeof item === "string").slice(0, 20) : [] });
+        if (!receipt) return json(response, 404, { error: "command_lease_not_found" });
+        return json(response, 202, { receipt });
       }
 
       return json(response, 404, { error: "not_found" });

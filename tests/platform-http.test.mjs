@@ -7,11 +7,14 @@ import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
+import { signedMachinePost, sendCommandReceipt } from "../server-agent/control-client.mjs";
+import { signMachineRequest } from "../packages/security/machine-request.mjs";
 import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sessionSecret = "http-test-session-secret-that-is-longer-than-32-characters";
+const providerEncryptionKey = "http-test-provider-encryption-key-longer-than-32-characters";
 const bailongmaUi = createBailongmaUi({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma") });
 
 async function setup(options = {}) {
@@ -27,7 +30,7 @@ async function setup(options = {}) {
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", ownerUserId: user.id, name: "Agent" });
   const runtime = await repository.createAgentRuntime({ id: "runtime_a", organizationId: "org_a", ownerUserId: user.id, agentId: agent.id, workspaceRef: "hermes:org_a:user_a:agent_a" });
   const { privateKey } = generateKeyPairSync("ed25519");
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope("http-test-provider-encryption-key-longer-than-32-characters"), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope(providerEncryptionKey), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -193,6 +196,58 @@ test("Agent initialization queues a deployment provision command and never repor
   assert.equal(result.runtime.status, "provisioning");
   assert.equal(result.command.action, "deployment.provision");
   assert.equal(result.command.arguments.agent_id, context.agent.id);
+});
+
+test("signed command lease provisions an Agent route and independent heartbeat identity", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  const userCookie = await login(context.baseUrl, "user@example.test");
+  const serverResponse = await fetch(`${context.baseUrl}/api/admin/servers`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ organizationId: "org_a", name: "Agent host" }) });
+  assert.equal(serverResponse.status, 201);
+  const serverRegistration = await serverResponse.json();
+  assert.ok(serverRegistration.credential.token.length >= 32);
+  assert.doesNotMatch(JSON.stringify(await context.repository.getActiveServerCredential(serverRegistration.server.id)), new RegExp(serverRegistration.credential.token));
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/servers/${serverRegistration.server.id}/credentials`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: "{}" })).status, 403);
+  await context.repository.recordServerHeartbeat({ id: serverRegistration.server.id, organizationId: "org_a", status: "healthy", runtimeVersion: "0.3.0" });
+  const replayPath = "/api/internal/control-plane/commands/lease";
+  const replayBody = JSON.stringify({ serverId: serverRegistration.server.id, limit: 1 });
+  const replayTimestamp = Date.now().toString();
+  const replayNonce = "fixed_nonce_value_1234567890";
+  const replayHeaders = { "content-type": "application/json", "x-bairui-machine-id": serverRegistration.server.id, "x-bairui-timestamp": replayTimestamp, "x-bairui-nonce": replayNonce, "x-bairui-signature": signMachineRequest({ method: "POST", path: replayPath, timestamp: replayTimestamp, nonce: replayNonce, body: replayBody, token: serverRegistration.credential.token }) };
+  assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 200);
+  assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 401);
+  const vault = new SecretEnvelope(providerEncryptionKey);
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: vault.seal("provider-secret-value"), keyHint: "alue", updatedBy: "root" });
+
+  const initialize = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(initialize.status, 202);
+  assert.doesNotMatch(await initialize.clone().text(), /provider-secret-value/);
+
+  const leaseResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
+  assert.equal(leaseResponse.status, 200);
+  const leased = (await leaseResponse.json()).commands;
+  assert.equal(leased.length, 1);
+  const command = leased[0];
+  assert.equal(command.action, "deployment.provision");
+  assert.equal(command.config.secrets.provider_api_key, "provider-secret-value");
+  assert.ok(command.config.secrets.runtime_shared_secret.length >= 32);
+  assert.ok(command.config.secrets.agent_control_token.length >= 32);
+
+  const receiptOptions = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: command.command_id, attempt: command.attempt };
+  await sendCommandReceipt({ ...receiptOptions, state: "accepted" });
+  await sendCommandReceipt({ ...receiptOptions, state: "running" });
+  await assert.rejects(() => sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://169.254.169.254/latest/meta-data" }), { code: "invalid_runtime_endpoint", statusCode: 400 });
+  await sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://127.0.0.1:19001", resultSummary: { containers: 2 } });
+  const route = await context.repository.getAgentRuntimeRoute(context.agent.id);
+  assert.equal(route.runtime.endpointRef, "http://127.0.0.1:19001");
+  assert.equal(route.runtime.status, "starting");
+  assert.doesNotMatch(JSON.stringify(route.secretEnvelope), /provider-secret-value/);
+
+  const heartbeat = { organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0", observedAt: new Date().toISOString(), components: [] };
+  const heartbeatResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: "/api/internal/control-plane/heartbeats", payload: heartbeat });
+  assert.equal(heartbeatResponse.status, 202);
+  assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "ready");
 });
 
 test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE", async (t) => {

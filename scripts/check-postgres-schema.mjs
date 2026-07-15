@@ -7,9 +7,11 @@ const requiredTables = [
   "agents", "agent_memberships", "agent_runtimes", "agent_components",
   "heartbeats", "telemetry_events", "usage_rollups", "alerts",
   "secret_references", "control_deployments", "control_commands",
-  "config_revisions", "desired_states"
+  "config_revisions", "desired_states", "server_credentials",
+  "agent_runtime_credentials", "machine_request_nonces", "command_receipts"
 ];
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
+const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
 const client = new pg.Client({ connectionString });
 await client.connect();
 try {
@@ -19,6 +21,9 @@ try {
   const { rows: columnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='agents'");
   const columns = new Set(columnRows.map((row) => row.column_name));
   for (const column of requiredAgentColumns) if (!columns.has(column)) throw new Error(`Missing agents column: ${column}`);
+  const { rows: runtimeColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_runtimes'");
+  const runtimeColumns = new Set(runtimeColumnRows.map((row) => row.column_name));
+  for (const column of requiredRuntimeColumns) if (!runtimeColumns.has(column)) throw new Error(`Missing agent_runtimes column: ${column}`);
   const { rows: actionRows } = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='control_commands_action_check'");
   const actionConstraint = actionRows[0]?.definition ?? "";
   for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke"]) {

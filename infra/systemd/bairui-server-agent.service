@@ -1,0 +1,27 @@
+[Unit]
+Description=BaiRui Agent Supervisor
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bairui-agent
+Group=bairui-agent
+SupplementaryGroups=docker
+EnvironmentFile=/etc/bairui/server-agent.env
+WorkingDirectory=/opt/bairui-platform
+ExecStart=/usr/bin/node /opt/bairui-platform/server-agent/daemon.mjs
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bairui/agents
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

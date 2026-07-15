@@ -76,11 +76,11 @@ heartbeat. It does not upload prompts, chat history, files, Obsidian note
 bodies, memory content, passwords, private keys, or model and connector
 secrets.
 
-The production target is a long-running outbound daemon with per-deployment
-identity, command leasing, replay-safe events, and the strict action validator
-in `packages/server-protocol/control-plane.mjs`. The current one-shot sender
-does not execute remote commands and must not be presented as a completed
-closed-loop control agent.
+The long-running outbound daemon in `server-agent/daemon.mjs` leases commands
+with a Server Credential, validates the strict control protocol, and delegates
+only to the fixed action map in `server-agent/supervisor.mjs`. The Supervisor
+uses Docker argument arrays without a shell. The one-shot observation command
+remains available for diagnostics.
 
 When `BAIRUI_USER_ID`, `BAIRUI_AGENT_ID`, and `BAIRUI_RUNTIME_ID` are set, the
 observation cycle also submits Agent-scoped five-layer telemetry. This payload

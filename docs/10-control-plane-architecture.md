@@ -64,6 +64,7 @@ does not implement a generic remote shell.
 ## Current implementation
 
 The deployed implementation currently ingests observation snapshots and shows
-them to authorized administrators. It does not yet lease or execute commands.
+them to authorized administrators. The outbound Server Agent leases commands,
+records idempotent receipts, and executes only the Supervisor action allowlist.
 The formal protocol and PostgreSQL model are being introduced before command
 workers so the future implementation cannot blur the Hermes boundary.
