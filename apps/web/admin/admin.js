@@ -105,14 +105,15 @@ document.querySelector("#provider-settings-form")?.addEventListener("submit", as
 });
 
 document.querySelector("#refresh-hotspots").addEventListener("click", async (event) => {
-  event.currentTarget.disabled = true;
-  event.currentTarget.textContent = "采集中";
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "采集中";
   try {
     await request("/api/admin/hotspots/refresh", { method: "POST", body: "{}" });
     await loadOverview();
   } finally {
-    event.currentTarget.disabled = false;
-    event.currentTarget.textContent = "刷新热点数据";
+    button.disabled = false;
+    button.textContent = "刷新热点数据";
   }
 });
 
