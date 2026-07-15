@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, email)
+  UNIQUE (email)
 );
 
 CREATE TABLE IF NOT EXISTS agents (

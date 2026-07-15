@@ -2,7 +2,7 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
-function shell({ title, view, body }) {
+function shell({ title, view, body, script }) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -13,7 +13,7 @@ function shell({ title, view, body }) {
 </head>
 <body data-view="${escapeHtml(view)}">
 ${body}
-<script src="/assets/app.js" defer></script>
+<script src="${escapeHtml(script)}" defer></script>
 </body>
 </html>`;
 }
@@ -22,6 +22,7 @@ export function loginPage() {
   return shell({
     title: "登录",
     view: "login",
+    script: "/assets/login.js",
     body: `<main class="auth-shell">
   <section class="auth-panel" aria-labelledby="login-title">
     <div class="brand-mark">BR</div>
@@ -60,6 +61,7 @@ export function userPage(principal) {
   return shell({
     title: "Agent 工作区",
     view: "user",
+    script: "/assets/user.js",
     body: `<div class="app-shell">
   ${navigation(principal, "app")}
   <main class="workspace">
@@ -87,6 +89,7 @@ export function adminPage(principal) {
   return shell({
     title: "总控后台",
     view: "admin",
+    script: "/admin/assets/admin.js",
     body: `<div class="app-shell">
   ${navigation(principal, "admin")}
   <main class="workspace admin-workspace">

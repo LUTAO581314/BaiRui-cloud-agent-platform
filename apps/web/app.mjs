@@ -129,12 +129,21 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.styles);
       }
-      if (method === "GET" && url.pathname === "/assets/app.js") {
+      if (method === "GET" && url.pathname === "/assets/login.js") {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.clientScript);
+        return response.end(options.loginScript);
+      }
+      if (method === "GET" && url.pathname === "/assets/user.js") {
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
+        return response.end(options.userScript);
       }
 
       const principal = await principalFor(request);
+      if (method === "GET" && url.pathname === "/admin/assets/admin.js") {
+        if (!principal || ![ROLES.ORG_ADMIN, ROLES.PLATFORM_ADMIN].includes(principal.role)) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "private, no-store" });
+        return response.end(options.adminScript);
+      }
       if (method === "GET" && url.pathname === "/") return redirect(response, principal ? "/app" : "/login");
       if (method === "GET" && url.pathname === "/login") return html(response, 200, loginPage());
       if (method === "GET" && url.pathname === "/app") {

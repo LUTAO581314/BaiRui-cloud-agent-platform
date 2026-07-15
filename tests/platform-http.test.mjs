@@ -19,7 +19,7 @@ async function setup() {
   const platformAdmin = await repository.createUser({ id: "root", organizationId: "org_a", email: "root@example.test", displayName: "Root", passwordHash, role: ROLES.PLATFORM_ADMIN });
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", name: "Agent" });
   const conversation = await repository.createConversation({ id: "conversation_a", organizationId: "org_a", userId: user.id, agentId: agent.id, title: "Private" });
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", styles: "", clientScript: "", logger: { error() {} } });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", styles: "", loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -42,6 +42,7 @@ test("anonymous and ordinary users cannot access administrator data", async (t) 
   assert.equal((await fetch(`${context.baseUrl}/api/admin/overview`)).status, 401);
   const cookie = await login(context.baseUrl, "user@example.test");
   assert.equal((await fetch(`${context.baseUrl}/admin`, { headers: { cookie } })).status, 404);
+  assert.equal((await fetch(`${context.baseUrl}/admin/assets/admin.js`, { headers: { cookie } })).status, 404);
   assert.equal((await fetch(`${context.baseUrl}/api/admin/overview`, { headers: { cookie } })).status, 403);
 });
 
@@ -50,6 +51,7 @@ test("platform and organization administrators receive scoped administration", a
   t.after(() => context.server.close());
   const rootCookie = await login(context.baseUrl, "root@example.test");
   assert.equal((await fetch(`${context.baseUrl}/admin`, { headers: { cookie: rootCookie } })).status, 200);
+  assert.equal((await fetch(`${context.baseUrl}/admin/assets/admin.js`, { headers: { cookie: rootCookie } })).status, 200);
   assert.equal((await fetch(`${context.baseUrl}/api/admin/overview`, { headers: { cookie: rootCookie } })).status, 200);
 
   const orgCookie = await login(context.baseUrl, "org-admin@example.test");

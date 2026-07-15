@@ -26,8 +26,8 @@ export class MemoryPlatformRepository {
   }
 
   async createUser(input) {
-    const duplicate = [...this.#users.values()].find((user) => user.organizationId === input.organizationId && user.email === input.email.toLowerCase());
-    if (duplicate) throw new Error("Email already exists in this organization");
+    const duplicate = [...this.#users.values()].find((user) => user.email === input.email.toLowerCase());
+    if (duplicate) throw new Error("Email already exists");
     const user = {
       id: input.id ?? randomUUID(),
       organizationId: input.organizationId,
