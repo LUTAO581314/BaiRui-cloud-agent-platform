@@ -53,11 +53,12 @@ async function loadOverview() {
     (item) => item.targetType,
     (item) => new Date(item.createdAt).toLocaleString()
   ], "暂无记录"));
-  const [users, servers, licenses, releases] = await Promise.all([
+  const [users, servers, licenses, releases, integrations] = await Promise.all([
     request("/api/admin/users"),
     request("/api/admin/servers"),
     request("/api/admin/licenses"),
-    request("/api/admin/releases").catch((error) => error.status === 403 ? { releases: [] } : Promise.reject(error))
+    request("/api/admin/releases").catch((error) => error.status === 403 ? { releases: [] } : Promise.reject(error)),
+    request("/api/admin/integrations")
   ]);
   document.querySelector("#user-rows").replaceChildren(...tableRows(users.users, [
     (item) => `${item.displayName} (${item.email})`, (item) => item.role, (item) => item.status
@@ -71,7 +72,50 @@ async function loadOverview() {
   document.querySelector("#release-rows").replaceChildren(...tableRows(releases.releases, [
     (item) => item.version, (item) => item.status, (item) => item.agentCommit.slice(0, 12)
   ], "暂无发布"));
+  document.querySelector("#integration-rows").replaceChildren(...tableRows(integrations.catalog, [
+    (item) => item.name, (item) => item.layer, (item) => item.importType, (item) => item.status
+  ], "暂无集成项目"));
+  document.querySelector("#integration-run-rows").replaceChildren(...tableRows(integrations.runs, [
+    (item) => `${item.integrationId}.${item.capability}`,
+    (item) => item.status,
+    (item) => `${item.summary?.count ?? 0} 条`,
+    (item) => new Date(item.completedAt ?? item.createdAt).toLocaleString()
+  ], "暂无集成运行"));
 }
+
+async function loadProviderSettings() {
+  const form = document.querySelector("#provider-settings-form");
+  if (!form) return;
+  const { configuration } = await request("/api/admin/provider-settings");
+  form.elements.provider.value = configuration.provider;
+  form.elements.baseUrl.value = configuration.baseUrl;
+  form.elements.model.value = configuration.model;
+  document.querySelector("#provider-key-state").textContent = configuration.configured ? `已保存密钥 ${configuration.keyMasked}` : "尚未保存供应商密钥";
+  const status = document.querySelector("#provider-apply-status");
+  status.textContent = configuration.applyStatus === "pending" ? "待运行环境应用" : configuration.applyStatus;
+  status.className = `status ${configuration.applyStatus === "applied" ? "healthy" : "unknown"}`;
+}
+
+document.querySelector("#provider-settings-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await request("/api/admin/provider-settings", { method: "PATCH", body: JSON.stringify({ provider: form.elements.provider.value, baseUrl: form.elements.baseUrl.value, model: form.elements.model.value, apiKey: form.elements.apiKey.value }) });
+  form.elements.apiKey.value = "";
+  await loadProviderSettings();
+});
+
+document.querySelector("#refresh-hotspots").addEventListener("click", async (event) => {
+  event.currentTarget.disabled = true;
+  event.currentTarget.textContent = "采集中";
+  try {
+    await request("/api/admin/hotspots/refresh", { method: "POST", body: "{}" });
+    await loadOverview();
+  } finally {
+    event.currentTarget.disabled = false;
+    event.currentTarget.textContent = "刷新热点数据";
+  }
+});
 
 document.querySelector("#refresh-admin").addEventListener("click", loadOverview);
 loadOverview().catch(() => { document.querySelector("#control-status").textContent = "读取失败"; });
+loadProviderSettings().catch(() => {});

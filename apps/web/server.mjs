@@ -8,6 +8,7 @@ import { PostgresPlatformRepository } from "../../packages/db/postgres-repositor
 import { hashPassword } from "../../packages/auth/password.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
 import { BairuiRuntimeClient } from "../../packages/server-protocol/runtime-client.mjs";
+import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const production = process.env.NODE_ENV === "production";
@@ -19,6 +20,8 @@ if (production && !databaseUrl) throw new Error("DATABASE_URL is required in pro
 const repository = databaseUrl
   ? new PostgresPlatformRepository({ connectionString: databaseUrl, ssl: process.env.BAIRUI_DATABASE_SSL === "1" ? { rejectUnauthorized: true } : undefined })
   : new MemoryPlatformRepository();
+const providerEncryptionKey = process.env.BAIRUI_PROVIDER_ENCRYPTION_KEY ?? (production ? "" : "development-provider-encryption-key-change-me");
+if (!providerEncryptionKey) throw new Error("BAIRUI_PROVIDER_ENCRYPTION_KEY is required in production");
 const organization = await repository.createOrganization({ id: "org_bairui", name: "bairui-agent" });
 const adminEmail = process.env.BAIRUI_BOOTSTRAP_ADMIN_EMAIL ?? "admin@bairui.local";
 const adminPassword = process.env.BAIRUI_BOOTSTRAP_ADMIN_PASSWORD ?? (production ? "" : "Bairui-Admin-Change-Me-2026");
@@ -44,6 +47,7 @@ const server = createPlatformServer({
     baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
     sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET
   }) : undefined,
+  providerVault: new SecretEnvelope(providerEncryptionKey),
   licensePrivateKey: process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n"),
   styles: fs.readFileSync(path.join(appDir, "public", "styles.css"), "utf8"),
   logo: fs.readFileSync(path.join(appDir, "public", "bairui-agent-logo.png")),

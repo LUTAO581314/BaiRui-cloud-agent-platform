@@ -6,10 +6,11 @@ import { createPlatformServer } from "../apps/web/app.mjs";
 import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
+import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
 
 const sessionSecret = "http-test-session-secret-that-is-longer-than-32-characters";
 
-async function setup() {
+async function setup(options = {}) {
   const repository = new MemoryPlatformRepository();
   await repository.createOrganization({ id: "org_a", name: "Organization A" });
   await repository.createOrganization({ id: "org_b", name: "Organization B" });
@@ -21,7 +22,7 @@ async function setup() {
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", name: "Agent" });
   const conversation = await repository.createConversation({ id: "conversation_a", organizationId: "org_a", userId: user.id, agentId: agent.id, title: "Private" });
   const { privateKey } = generateKeyPairSync("ed25519");
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} } });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope("http-test-provider-encryption-key-longer-than-32-characters"), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", userScript: "user", adminScript: "admin-only", logger: { error() {} }, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -121,4 +122,37 @@ test("only platform administrators can issue licenses and create releases", asyn
   assert.equal((await fetch(`${context.baseUrl}/api/admin/licenses`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: licenseBody })).status, 201);
   const releaseBody = JSON.stringify({ version: "0.1.0", agentCommit: "a".repeat(40), status: "candidate" });
   assert.equal((await fetch(`${context.baseUrl}/api/admin/releases`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: releaseBody })).status, 201);
+});
+
+test("provider credentials are platform-admin only and responses are masked", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const userCookie = await login(context.baseUrl, "user@example.test");
+  const orgCookie = await login(context.baseUrl, "org-admin@example.test");
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/provider-settings`, { headers: { cookie: userCookie } })).status, 403);
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/provider-settings`, { headers: { cookie: orgCookie } })).status, 403);
+  const update = await fetch(`${context.baseUrl}/api/admin/provider-settings`, { method: "PATCH", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKey: "provider-secret-1234" }) });
+  assert.equal(update.status, 200);
+  const body = await update.json();
+  assert.equal(body.configuration.keyMasked, "****1234");
+  assert.equal(body.configuration.apiKey, undefined);
+  const stored = await context.repository.getProviderConfiguration("org_a");
+  assert.doesNotMatch(JSON.stringify(stored.apiKeyEnvelope), /provider-secret-1234/);
+});
+
+test("users own Obsidian notes and can read normalized hotspot data", async (t) => {
+  const runtimeClient = { invokeIntegration: async () => ({ status: "completed", completed_at: "2026-07-15T00:00:01.000Z", output: { sources: [{ source_id: "baidu", status: "ready", count: 1 }], items: [{ external_id: "one", source_id: "baidu", source_name: "百度热搜", rank: 1, title: "测试热点", url: "https://www.baidu.com/", mobile_url: "", heat: "", category: "", fetched_at: "2026-07-15T00:00:00.000Z" }] } }) };
+  const context = await setup({ runtimeClient });
+  t.after(() => context.server.close());
+  const userCookie = await login(context.baseUrl, "user@example.test");
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  const note = await fetch(`${context.baseUrl}/api/user/memory-notes`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ title: "测试记忆", body: "正文", wikilinks: ["项目"] }) });
+  assert.equal(note.status, 201);
+  const notes = await (await fetch(`${context.baseUrl}/api/user/memory-notes`, { headers: { cookie: userCookie } })).json();
+  assert.equal(notes.notes.length, 1);
+  assert.match(notes.notes[0].markdown, /\[\[项目\]\]/);
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/hotspots/refresh`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: "{}" })).status, 202);
+  const hotspots = await (await fetch(`${context.baseUrl}/api/user/hotspots`, { headers: { cookie: userCookie } })).json();
+  assert.equal(hotspots.items[0].title, "测试热点");
 });

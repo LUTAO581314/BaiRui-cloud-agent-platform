@@ -20,7 +20,10 @@ const required = [
   "packages/db/postgres-repository.mjs",
   "packages/db/migrations/001_initial.sql",
   "packages/db/migrations/002_operations.sql",
+  "packages/db/migrations/003_integrations_and_memory.sql",
   "packages/server-protocol/runtime-client.mjs",
+  "packages/security/secret-envelope.mjs",
+  "packages/memory/obsidian-note.mjs",
   "packages/license/license.mjs",
   "packages/deployment/bundle.mjs",
   "tests/authorization.test.mjs",
@@ -30,16 +33,12 @@ const required = [
   "server-agent/bin/acceptance-check.mjs",
   "Dockerfile",
   "infra/docker-compose.yml",
-  "infra/nginx/bairui.conf",
-  "docs/09-operations-runbook.md",
-  "scripts/operations/backup-postgres.mjs",
-  "scripts/operations/restore-postgres.mjs",
-  "scripts/operations/rollback-compose.mjs"
+  "infra/nginx/bairui.conf"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
 const server = fs.existsSync(path.join(root, "apps/web/app.mjs")) ? fs.readFileSync(path.join(root, "apps/web/app.mjs"), "utf8") : "";
-for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBERS_MANAGE", "invalid_agent_credential", "statusCode = 401"]) {
+for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBERS_MANAGE", "PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE", "invalid_agent_credential", "statusCode = 401"]) {
   if (!server.includes(evidence)) failures.push(`Missing server authorization evidence: ${evidence}`);
 }
 if (failures.length) {

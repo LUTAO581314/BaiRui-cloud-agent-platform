@@ -18,6 +18,7 @@ export const PERMISSIONS = Object.freeze({
   PLATFORM_LICENSES_MANAGE: "platform:licenses:manage",
   PLATFORM_SERVERS_MANAGE: "platform:servers:manage",
   PLATFORM_RELEASES_MANAGE: "platform:releases:manage",
+  PLATFORM_PROVIDER_SETTINGS_MANAGE: "platform:provider-settings:manage",
   CONTROL_PLANE_READ: "control-plane:read",
   CONTROL_PLANE_INGEST: "control-plane:ingest"
 });
