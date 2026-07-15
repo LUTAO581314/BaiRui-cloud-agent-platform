@@ -49,5 +49,5 @@ volumes:
 
 networks:
   backend:
-    internal: true
+    internal: false
   runtime:
