@@ -16,7 +16,6 @@ services:
     networks: [backend, runtime]
 
   platform:
-    image: ${BAIRUI_PLATFORM_IMAGE:-bairui-platform:local}
     build:
       context: ..
     restart: unless-stopped
@@ -36,6 +35,7 @@ services:
       BAIRUI_AGENT_INGEST_TOKEN: ${BAIRUI_AGENT_INGEST_TOKEN:?BAIRUI_AGENT_INGEST_TOKEN is required}
       BAIRUI_RUNTIME_URL: ${BAIRUI_RUNTIME_URL:-http://host.docker.internal:8787}
       BAIRUI_RUNTIME_SHARED_SECRET: ${BAIRUI_RUNTIME_SHARED_SECRET:?BAIRUI_RUNTIME_SHARED_SECRET is required}
+      BAIRUI_PROVIDER_ENCRYPTION_KEY: ${BAIRUI_PROVIDER_ENCRYPTION_KEY:?BAIRUI_PROVIDER_ENCRYPTION_KEY is required}
       BAIRUI_LICENSE_PRIVATE_KEY: ${BAIRUI_LICENSE_PRIVATE_KEY:?BAIRUI_LICENSE_PRIVATE_KEY is required}
     command: ["sh", "-c", "node packages/db/bin/migrate.mjs && node apps/web/server.mjs"]
     ports:
@@ -49,5 +49,5 @@ volumes:
 
 networks:
   backend:
-    internal: false
+    internal: true
   runtime:

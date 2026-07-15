@@ -19,8 +19,23 @@ import {
 } from "../../packages/auth/session.mjs";
 import { loginPage, userPage, adminPage } from "./views.mjs";
 import { issueLicense } from "../../packages/license/license.mjs";
+import { createObsidianNote } from "../../packages/memory/obsidian-note.mjs";
+import { secretHint } from "../../packages/security/secret-envelope.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
+const INTEGRATION_CATALOG = Object.freeze([
+  { id: "hermes", name: "Hermes Agent", layer: "核心运行层", importType: "submodule", status: "runtime-connected" },
+  { id: "openclaw", name: "OpenClaw", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "bailongma", name: "BaiLongma", layer: "渠道桥接 / UI", importType: "submodule", status: "ui-adapted" },
+  { id: "everos", name: "EverOS", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "mineru", name: "MinerU", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "funasr", name: "FunASR", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "trendradar", name: "TrendRadar", layer: "服务集成层", importType: "submodule", status: "adapter-ready" },
+  { id: "mirofish", name: "MiroFish", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "searxng", name: "SearXNG", layer: "服务集成层", importType: "registry-only", status: "adapter-needs-service" },
+  { id: "sonic", name: "Sonic", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "firecrawl", name: "Firecrawl", layer: "服务集成层", importType: "submodule", status: "adapter-needs-key" }
+]);
 
 function json(response, statusCode, body, headers = {}) {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", ...headers });
@@ -82,6 +97,19 @@ function securityHeaders(response) {
   response.setHeader("cache-control", "no-store");
 }
 
+function publicProviderConfiguration(configuration) {
+  if (!configuration) return { configured: false, provider: "", baseUrl: "", model: "", keyMasked: null, applyStatus: "missing", updatedAt: null };
+  return {
+    configured: Boolean(configuration.apiKeyEnvelope),
+    provider: configuration.provider,
+    baseUrl: configuration.baseUrl,
+    model: configuration.model,
+    keyMasked: configuration.keyHint ? `****${configuration.keyHint}` : null,
+    applyStatus: configuration.applyStatus,
+    updatedAt: configuration.updatedAt
+  };
+}
+
 export function createPlatformApp(options) {
   const {
     repository,
@@ -91,6 +119,7 @@ export function createPlatformApp(options) {
     allowRegistration = false,
     agentIngestToken,
     runtimeClient,
+    providerVault,
     licensePrivateKey,
     logger = console
   } = options;
@@ -236,9 +265,28 @@ export function createPlatformApp(options) {
         if (typeof body.content !== "string" || !body.content.trim() || body.content.length > 20_000) return json(response, 400, { error: "invalid_message" });
         const userMessage = await repository.appendMessage({ conversationId: conversation.id, organizationId: principal.organizationId, userId: principal.userId, role: "user", content: body.content.trim() });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable", message: userMessage });
-        const runtimeResult = await runtimeClient.invoke({ principal, conversation, content: userMessage.content });
+        const providerConfiguration = await repository.getProviderConfiguration(principal.organizationId);
+        const runtimeResult = await runtimeClient.invoke({ principal, conversation, content: userMessage.content, model: providerConfiguration?.applyStatus === "applied" ? providerConfiguration.model : undefined });
         const assistantMessage = await repository.appendMessage({ conversationId: conversation.id, organizationId: principal.organizationId, userId: principal.userId, role: "assistant", content: runtimeResult.content });
         return json(response, 201, { userMessage, assistantMessage, runtime: runtimeResult.metadata });
+      }
+
+      if (method === "GET" && url.pathname === "/api/user/hotspots") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
+        return json(response, 200, await repository.listLatestHotspots(principal.organizationId));
+      }
+      if (method === "GET" && url.pathname === "/api/user/memory-notes") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        return json(response, 200, { notes: await repository.listObsidianNotes(principal.organizationId, principal.userId), format: "obsidian-markdown" });
+      }
+      if (method === "POST" && url.pathname === "/api/user/memory-notes") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const body = await readJson(request);
+        if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
+        const note = createObsidianNote({ title: body.title, body: body.body, tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id });
+        return json(response, 201, { note: saved });
       }
 
       if (method === "GET" && url.pathname === "/api/admin/overview") {
@@ -276,6 +324,49 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
         return json(response, 200, { snapshots: await repository.latestControlPlaneSnapshots(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/provider-settings") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
+        return json(response, 200, { configuration: publicProviderConfiguration(await repository.getProviderConfiguration(principal.organizationId)) });
+      }
+      if (method === "PATCH" && url.pathname === "/api/admin/provider-settings") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
+        if (!providerVault) return json(response, 503, { error: "provider_secret_storage_unavailable" });
+        const body = await readJson(request);
+        if (typeof body.provider !== "string" || !body.provider.trim() || typeof body.model !== "string" || !body.model.trim()) return json(response, 400, { error: "invalid_provider_configuration" });
+        let parsedBaseUrl;
+        try { parsedBaseUrl = new URL(body.baseUrl); } catch { return json(response, 400, { error: "invalid_provider_base_url" }); }
+        if (parsedBaseUrl.protocol !== "https:") return json(response, 400, { error: "provider_base_url_requires_https" });
+        const previous = await repository.getProviderConfiguration(principal.organizationId);
+        if (!previous?.apiKeyEnvelope && (typeof body.apiKey !== "string" || !body.apiKey.trim())) return json(response, 400, { error: "provider_api_key_required" });
+        const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+        const saved = await repository.upsertProviderConfiguration({
+          organizationId: principal.organizationId,
+          provider: body.provider.trim().slice(0, 80),
+          baseUrl: parsedBaseUrl.toString().replace(/\/$/, ""),
+          model: body.model.trim().slice(0, 200),
+          apiKeyEnvelope: apiKey ? providerVault.seal(apiKey) : null,
+          keyHint: apiKey ? secretHint(apiKey) : null,
+          updatedBy: principal.userId
+        });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "provider.configuration.update", targetType: "provider_configuration", targetId: principal.organizationId, metadata: { provider: saved.provider, model: saved.model, keyChanged: Boolean(apiKey) } });
+        return json(response, 200, { configuration: publicProviderConfiguration(saved) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/integrations") {
+        requireLogin(principal);
+        if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
+        return json(response, 200, { catalog: INTEGRATION_CATALOG, runs: await repository.listIntegrationRuns(principal.organizationId) });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/hotspots/refresh") {
+        requireLogin(principal);
+        if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const body = await readJson(request);
+        const startedAt = new Date().toISOString();
+        const result = await runtimeClient.invokeIntegration({ integrationId: "trendradar", capability: "list_hotspots", input: { sources: Array.isArray(body.sources) ? body.sources : undefined } });
+        const run = await repository.saveIntegrationResult({ organizationId: principal.organizationId, integrationId: "trendradar", capability: "list_hotspots", status: result.status, summary: { sources: result.output?.sources ?? [], count: result.output?.items?.length ?? 0 }, items: result.output?.items ?? [], startedAt, completedAt: result.completed_at });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "integration.hotspots.refresh", targetType: "integration_run", targetId: run.id, metadata: { status: run.status, count: result.output?.items?.length ?? 0 } });
+        return json(response, 202, { run, count: result.output?.items?.length ?? 0 });
       }
       if (method === "GET" && url.pathname === "/api/admin/licenses") {
         requireLogin(principal);

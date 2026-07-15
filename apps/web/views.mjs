@@ -73,13 +73,18 @@ export function userPage(principal) {
       <span><small>认知界面</small><strong>bairui-agent</strong></span>
     </a>
     <nav class="brain-header-actions" aria-label="工作区导航">
+      <div class="brain-view-tabs" role="tablist" aria-label="工作视图">
+        <button class="brain-view-tab active" type="button" data-view-target="chat-view">对话</button>
+        <button class="brain-view-tab" type="button" data-view-target="hotspot-view">热点</button>
+        <button class="brain-view-tab" type="button" data-view-target="memory-view">记忆</button>
+      </div>
       ${adminLink}
       <span class="brain-account"><strong>${escapeHtml(principal.displayName)}</strong><small>${escapeHtml(principal.email)}</small></span>
       <button id="logout-button" class="brain-quiet-button" type="button">退出</button>
     </nav>
   </header>
 
-  <main class="brain-layout">
+  <main id="chat-view" class="brain-layout brain-work-view">
     <aside class="brain-panel brain-primary-panel" aria-label="会话处理器">
       <div class="brain-panel-title">
         <div><span class="brain-kicker">消息通道</span><h1>用户消息处理器</h1></div>
@@ -141,6 +146,38 @@ export function userPage(principal) {
       </section>
     </aside>
   </main>
+
+  <main id="hotspot-view" class="feature-workspace brain-work-view" hidden>
+    <header class="feature-header">
+      <div><span class="brain-kicker">实时数据</span><h1>热点分析</h1></div>
+      <div class="feature-meta"><span id="hotspot-updated">尚未采集</span><span id="hotspot-total">0 条</span></div>
+    </header>
+    <section class="feature-band" aria-labelledby="hotspot-sources-title">
+      <div class="section-heading"><h2 id="hotspot-sources-title">数据来源</h2><span id="hotspot-run-status" class="brain-pill unknown">等待数据</span></div>
+      <div id="hotspot-source-tabs" class="source-tabs" role="tablist"></div>
+    </section>
+    <section class="feature-band hotspot-results" aria-labelledby="hotspot-list-title">
+      <div class="section-heading"><h2 id="hotspot-list-title">热点榜单</h2><span class="feature-caption">TrendRadar / NewsNow 标准化数据</span></div>
+      <div id="hotspot-list" class="hotspot-list"></div>
+    </section>
+  </main>
+
+  <main id="memory-view" class="feature-workspace memory-workspace brain-work-view" hidden>
+    <header class="feature-header">
+      <div><span class="brain-kicker">Obsidian Markdown</span><h1>记忆与知识笔记</h1></div>
+      <span id="memory-count" class="feature-caption">0 篇</span>
+    </header>
+    <section class="memory-editor feature-band">
+      <form id="memory-form" class="memory-form">
+        <label>标题<input name="title" maxlength="160" required></label>
+        <label>标签<input name="tags" placeholder="项目, 决策, 客户"></label>
+        <label>关联笔记<input name="wikilinks" placeholder="项目总览, 技术框架"></label>
+        <label>正文<textarea name="body" rows="8" maxlength="50000" required></textarea></label>
+        <button class="primary-button" type="submit">保存笔记</button>
+      </form>
+      <div id="memory-list" class="memory-list" aria-live="polite"></div>
+    </section>
+  </main>
 </div>`
   });
 }
@@ -166,6 +203,26 @@ export function adminPage(principal) {
     <section class="admin-section">
       <div class="section-heading"><h2>模块与服务器状态</h2><button id="refresh-admin" class="quiet-button" type="button">刷新</button></div>
       <div class="table-wrap"><table><thead><tr><th>服务器</th><th>状态</th><th>时间</th></tr></thead><tbody id="snapshot-rows"></tbody></table></div>
+    </section>
+    ${principal.role === "platform_admin" ? `<section class="admin-section provider-settings-section">
+      <div class="section-heading"><div><p class="eyebrow">仅平台管理员</p><h2>Hermes 模型供应商</h2></div><span id="provider-apply-status" class="status unknown">未配置</span></div>
+      <form id="provider-settings-form" class="admin-form-grid">
+        <label>供应商<input name="provider" placeholder="openai-compatible" required></label>
+        <label>Base URL<input name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></label>
+        <label>模型<input name="model" placeholder="provider/model-name" required></label>
+        <label>API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="留空则保留现有密钥"></label>
+        <p id="provider-key-state" class="form-hint">尚未保存供应商密钥</p>
+        <button class="primary-button" type="submit">保存配置</button>
+      </form>
+      <p class="form-hint">配置会加密保存并进入待应用状态。Hermes API Server Key 与 Runtime Shared Secret 不在网页中暴露。</p>
+    </section>` : ""}
+    <section class="admin-section">
+      <div class="section-heading"><h2>集成项目</h2><button id="refresh-hotspots" class="quiet-button" type="button">刷新热点数据</button></div>
+      <div class="table-wrap"><table><thead><tr><th>项目</th><th>所在层</th><th>接入方式</th><th>状态</th></tr></thead><tbody id="integration-rows"></tbody></table></div>
+    </section>
+    <section class="admin-section">
+      <h2>最近集成运行</h2>
+      <div class="table-wrap"><table><thead><tr><th>能力</th><th>状态</th><th>结果</th><th>时间</th></tr></thead><tbody id="integration-run-rows"></tbody></table></div>
     </section>
     <section class="admin-section">
       <h2>成员</h2>

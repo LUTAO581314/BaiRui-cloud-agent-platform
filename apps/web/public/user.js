@@ -29,6 +29,8 @@ const sendButton = document.querySelector("#send-message");
 
 let workspace;
 let activeConversation;
+let hotspotData = { run: null, items: [] };
+let activeHotspotSource = "all";
 
 document.querySelector("#logout-button").addEventListener("click", async () => {
   await request("/api/auth/logout", { method: "POST" });
@@ -170,6 +172,109 @@ messageForm.addEventListener("submit", async (event) => {
     sendButton.textContent = "发送";
     messageInput.focus();
   }
+});
+
+function switchWorkView(targetId) {
+  document.querySelectorAll(".brain-work-view").forEach((view) => { view.hidden = view.id !== targetId; });
+  document.querySelectorAll(".brain-view-tab").forEach((button) => { button.classList.toggle("active", button.dataset.viewTarget === targetId); });
+}
+
+function renderHotspots() {
+  const items = activeHotspotSource === "all" ? hotspotData.items : hotspotData.items.filter((item) => item.sourceId === activeHotspotSource);
+  const list = document.querySelector("#hotspot-list");
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "feature-empty";
+    empty.textContent = hotspotData.run ? "当前来源没有可展示的数据。" : "管理员尚未执行热点采集。";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...items.map((item) => {
+    const article = document.createElement("article");
+    article.className = "hotspot-item";
+    const rank = document.createElement("strong");
+    rank.className = "hotspot-rank";
+    rank.textContent = String(item.rank);
+    const content = document.createElement("div");
+    const title = item.url ? document.createElement("a") : document.createElement("span");
+    title.className = "hotspot-title";
+    title.textContent = item.title;
+    if (item.url) { title.href = item.url; title.target = "_blank"; title.rel = "noreferrer"; }
+    const meta = document.createElement("small");
+    meta.textContent = [item.sourceName, item.heat, item.category].filter(Boolean).join(" · ");
+    content.append(title, meta);
+    article.append(rank, content);
+    return article;
+  }));
+}
+
+async function loadHotspots() {
+  hotspotData = await request("/api/user/hotspots");
+  const sourceMap = new Map(hotspotData.items.map((item) => [item.sourceId, item.sourceName]));
+  const tabs = [{ id: "all", name: "全部" }, ...[...sourceMap].map(([id, name]) => ({ id, name }))];
+  document.querySelector("#hotspot-source-tabs").replaceChildren(...tabs.map((source) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `source-tab${source.id === activeHotspotSource ? " active" : ""}`;
+    button.textContent = source.name;
+    button.addEventListener("click", () => { activeHotspotSource = source.id; loadHotspots().catch(() => {}); });
+    return button;
+  }));
+  document.querySelector("#hotspot-total").textContent = `${hotspotData.items.length} 条`;
+  document.querySelector("#hotspot-updated").textContent = hotspotData.run ? new Date(hotspotData.run.completedAt).toLocaleString() : "尚未采集";
+  const runStatus = document.querySelector("#hotspot-run-status");
+  runStatus.textContent = hotspotData.run?.status ?? "等待数据";
+  runStatus.className = `brain-pill ${hotspotData.run?.status === "completed" ? "healthy" : hotspotData.run ? "degraded" : "unknown"}`;
+  renderHotspots();
+}
+
+function renderMemoryNotes(notes) {
+  document.querySelector("#memory-count").textContent = `${notes.length} 篇`;
+  const list = document.querySelector("#memory-list");
+  if (!notes.length) {
+    const empty = document.createElement("p");
+    empty.className = "feature-empty";
+    empty.textContent = "还没有 Obsidian 笔记。";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...notes.map((note) => {
+    const details = document.createElement("details");
+    details.className = "memory-note";
+    const summary = document.createElement("summary");
+    const title = document.createElement("strong");
+    title.textContent = note.title;
+    const meta = document.createElement("span");
+    meta.textContent = `${note.slug}.md · ${new Date(note.updatedAt).toLocaleString()}`;
+    summary.append(title, meta);
+    const markdown = document.createElement("pre");
+    markdown.textContent = note.markdown;
+    details.append(summary, markdown);
+    return details;
+  }));
+}
+
+async function loadMemoryNotes() {
+  const data = await request("/api/user/memory-notes");
+  renderMemoryNotes(data.notes);
+}
+
+document.querySelectorAll(".brain-view-tab").forEach((button) => {
+  button.addEventListener("click", () => {
+    switchWorkView(button.dataset.viewTarget);
+    if (button.dataset.viewTarget === "hotspot-view") loadHotspots().catch(() => renderHotspots());
+    if (button.dataset.viewTarget === "memory-view") loadMemoryNotes().catch(() => renderMemoryNotes([]));
+  });
+});
+
+document.querySelector("#memory-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const split = (value) => String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  await request("/api/user/memory-notes", { method: "POST", body: JSON.stringify({ title: data.get("title"), body: data.get("body"), tags: split(data.get("tags")), wikilinks: split(data.get("wikilinks")) }) });
+  form.reset();
+  await loadMemoryNotes();
 });
 
 loadWorkspace().catch(() => {

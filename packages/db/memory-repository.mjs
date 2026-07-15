@@ -17,6 +17,10 @@ export class MemoryPlatformRepository {
   #licenses = [];
   #servers = [];
   #releases = [];
+  #providerConfigurations = new Map();
+  #integrationRuns = [];
+  #hotspots = new Map();
+  #obsidianNotes = [];
 
   async createOrganization(input) {
     const organization = { id: input.id ?? randomUUID(), name: input.name, createdAt: new Date().toISOString() };
@@ -160,5 +164,58 @@ export class MemoryPlatformRepository {
 
   async listReleases() {
     return [...this.#releases];
+  }
+
+  async getProviderConfiguration(organizationId) {
+    return this.#providerConfigurations.get(organizationId) ?? null;
+  }
+
+  async upsertProviderConfiguration(input) {
+    const previous = this.#providerConfigurations.get(input.organizationId);
+    const configuration = {
+      organizationId: input.organizationId,
+      provider: input.provider,
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiKeyEnvelope: input.apiKeyEnvelope ?? previous?.apiKeyEnvelope ?? null,
+      keyHint: input.keyHint ?? previous?.keyHint ?? null,
+      applyStatus: "pending",
+      updatedBy: input.updatedBy,
+      updatedAt: new Date().toISOString()
+    };
+    this.#providerConfigurations.set(input.organizationId, configuration);
+    return configuration;
+  }
+
+  async saveIntegrationResult(input) {
+    const run = { id: input.id ?? randomUUID(), organizationId: input.organizationId, integrationId: input.integrationId, capability: input.capability, status: input.status, summary: input.summary ?? {}, startedAt: input.startedAt, completedAt: input.completedAt ?? new Date().toISOString(), createdAt: new Date().toISOString() };
+    this.#integrationRuns.push(run);
+    this.#hotspots.set(run.id, (input.items ?? []).map((item) => ({ id: randomUUID(), runId: run.id, externalId: item.external_id, sourceId: item.source_id, sourceName: item.source_name, rank: Number(item.rank) || 0, title: item.title, url: item.url ?? "", mobileUrl: item.mobile_url ?? "", heat: item.heat ?? "", category: item.category ?? "", fetchedAt: item.fetched_at })));
+    return run;
+  }
+
+  async listIntegrationRuns(organizationId, limit = 20) {
+    return this.#integrationRuns.filter((item) => item.organizationId === organizationId).toReversed().slice(0, limit);
+  }
+
+  async listLatestHotspots(organizationId) {
+    const run = this.#integrationRuns.findLast((item) => item.organizationId === organizationId && item.integrationId === "trendradar") ?? null;
+    return { run, items: run ? [...(this.#hotspots.get(run.id) ?? [])] : [] };
+  }
+
+  async createObsidianNote(input) {
+    const duplicate = this.#obsidianNotes.find((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.slug === input.slug);
+    const now = new Date().toISOString();
+    if (duplicate) {
+      Object.assign(duplicate, input, { updatedAt: now });
+      return duplicate;
+    }
+    const note = { id: input.id ?? randomUUID(), ...input, createdAt: now, updatedAt: now };
+    this.#obsidianNotes.push(note);
+    return note;
+  }
+
+  async listObsidianNotes(organizationId, userId) {
+    return this.#obsidianNotes.filter((item) => item.organizationId === organizationId && item.userId === userId).toReversed();
   }
 }

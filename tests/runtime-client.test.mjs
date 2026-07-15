@@ -24,3 +24,15 @@ test("runtime client does not convert runtime failures into assistant text", asy
   const client = new BairuiRuntimeClient({ sharedSecret: secret, fetch: async () => Response.json({ error: "runtime_failed" }, { status: 502 }) });
   await assert.rejects(() => client.invoke({ principal: { userId: "u", organizationId: "o", role: "user" }, conversation: { id: "c" }, content: "x" }), { statusCode: 503 });
 });
+
+test("runtime client signs service integration requests", async () => {
+  let captured;
+  const client = new BairuiRuntimeClient({ sharedSecret: secret, fetch: async (url, options) => {
+    captured = { url, body: JSON.parse(options.body), headers: options.headers };
+    return Response.json({ status: "completed", output: { items: [] } });
+  } });
+  await client.invokeIntegration({ integrationId: "trendradar", capability: "list_hotspots" });
+  assert.match(captured.url, /\/v1\/integrations\/requests$/);
+  assert.equal(captured.body.request.integration_id, "trendradar");
+  assert.ok(captured.headers["x-bairui-signature"]);
+});
