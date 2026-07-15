@@ -92,3 +92,7 @@ jobs:
       - run: npm ci
       - run: npm run db:migrate
       - run: npm run db:schema:check
+      - name: Exercise PostgreSQL control transactions
+        env:
+          BAIRUI_POSTGRES_INTEGRATION: "1"
+        run: node --test tests/postgres-control.test.mjs

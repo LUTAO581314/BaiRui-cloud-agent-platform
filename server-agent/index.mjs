@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { signedMachinePost } from "./control-client.mjs";
 
 const execFile = promisify(execFileCallback);
 
@@ -62,14 +63,11 @@ export function buildAgentHeartbeat(snapshot, options) {
 }
 
 export async function sendAgentHeartbeat(options) {
-  if (!options.platformUrl || !options.ingestToken || !options.organizationId || !options.userId || !options.agentId || !options.runtimeId) throw new TypeError("Platform URL, ingest token, organization, user, Agent, and Runtime ids are required");
+  if (!options.platformUrl || (!options.controlToken && !options.ingestToken) || !options.organizationId || !options.userId || !options.agentId || !options.runtimeId) throw new TypeError("Platform URL, machine credential, organization, user, Agent, and Runtime ids are required");
   const heartbeat = options.heartbeat ?? buildAgentHeartbeat(options.snapshot ?? await collectControlPlaneSnapshot(options), options);
-  const response = await (options.fetch ?? globalThis.fetch)(`${String(options.platformUrl).replace(/\/$/, "")}/api/internal/control-plane/heartbeats`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${options.ingestToken}`, "content-type": "application/json" },
-    body: JSON.stringify(heartbeat),
-    signal: AbortSignal.timeout(options.httpTimeoutMs ?? 15_000)
-  });
+  const response = options.controlToken
+    ? await signedMachinePost({ platformUrl: options.platformUrl, machineId: options.agentId, token: options.controlToken, path: "/api/internal/control-plane/heartbeats", payload: heartbeat, fetch: options.fetch, timeoutMs: options.httpTimeoutMs })
+    : await (options.fetch ?? globalThis.fetch)(`${String(options.platformUrl).replace(/\/$/, "")}/api/internal/control-plane/heartbeats`, { method: "POST", headers: { authorization: `Bearer ${options.ingestToken}`, "content-type": "application/json" }, body: JSON.stringify(heartbeat), signal: AbortSignal.timeout(options.httpTimeoutMs ?? 15_000) });
   if (!response.ok) throw new Error(`Platform rejected Agent heartbeat with HTTP ${response.status}`);
   return response.json();
 }
@@ -84,7 +82,8 @@ export async function main(env = process.env) {
     userId: env.BAIRUI_USER_ID,
     agentId: env.BAIRUI_AGENT_ID,
     runtimeId: env.BAIRUI_RUNTIME_ID,
-    configRevisionId: env.BAIRUI_CONFIG_REVISION_ID
+    configRevisionId: env.BAIRUI_CONFIG_REVISION_ID,
+    controlToken: env.BAIRUI_AGENT_CONTROL_TOKEN
   };
   const snapshot = await collectControlPlaneSnapshot(options);
   const server = await sendHeartbeat({ ...options, snapshot });

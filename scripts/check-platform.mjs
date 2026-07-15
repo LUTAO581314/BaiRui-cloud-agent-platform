@@ -23,6 +23,7 @@ const required = [
   "packages/db/migrations/004_control_plane.sql",
   "packages/db/migrations/005_multi_tenant_agents.sql",
   "packages/db/migrations/006_agent_fleet_telemetry.sql",
+  "packages/db/migrations/007_control_command_delivery.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -38,6 +39,11 @@ const required = [
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "server-agent/index.mjs",
+  "server-agent/control-client.mjs",
+  "server-agent/daemon.mjs",
+  "server-agent/supervisor.mjs",
+  "infra/systemd/bairui-server-agent.service",
+  "infra/server-agent.env.example",
   "server-agent/bin/acceptance-check.mjs",
   "Dockerfile",
   "infra/docker-compose.yml",
@@ -54,7 +60,8 @@ const required = [
   "docs/12-control-plane-security.md",
   "docs/13-control-plane-operations.md",
   "docs/14-multi-tenant-agent-runtime.md",
-  "docs/15-agent-fleet-control.md"
+  "docs/15-agent-fleet-control.md",
+  "docs/16-control-command-delivery.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -106,6 +113,18 @@ for (const table of ["agent_components", "heartbeats", "telemetry_events", "usag
 for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
 }
+const deliveryMigrationPath = path.join(root, "packages/db/migrations/007_control_command_delivery.sql");
+const deliveryMigration = fs.existsSync(deliveryMigrationPath) ? fs.readFileSync(deliveryMigrationPath, "utf8") : "";
+for (const table of ["server_credentials", "agent_runtime_credentials", "machine_request_nonces", "command_receipts"]) {
+  if (!deliveryMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing command delivery table: ${table}`);
+}
+for (const evidence of ["/api/internal/control-plane/commands/lease", "recordCommandReceipt", "verifyMachineRequest", "revealLease"]) {
+  if (!server.includes(evidence)) failures.push(`Missing command delivery server evidence: ${evidence}`);
+}
+const supervisorPath = path.join(root, "server-agent/supervisor.mjs");
+const supervisor = fs.existsSync(supervisorPath) ? fs.readFileSync(supervisorPath, "utf8") : "";
+if (!supervisor.includes('this.execFile("docker", args')) failures.push("Supervisor must use fixed docker execFile arguments");
+for (const forbidden of ["exec(", "shell: true", "rm -rf", "child_process.exec("]) if (supervisor.includes(forbidden)) failures.push(`Forbidden Supervisor execution pattern: ${forbidden}`);
 if (failures.length) {
   console.error("Platform check failed:");
   for (const failure of failures) console.error(`- ${failure}`);

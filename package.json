@@ -23,6 +23,7 @@
     "delivery:release": "node packages/deployment/bin/release-delivery.mjs",
     "platform:dev": "node apps/web/server.mjs",
     "server-agent:once": "node server-agent/index.mjs",
+    "server-agent:daemon": "node server-agent/daemon.mjs",
     "server-agent:acceptance": "node server-agent/bin/acceptance-check.mjs",
     "license:generate": "node packages/license/bin/generate-license.mjs",
     "operations:backup": "node scripts/operations/backup-postgres.mjs",
