@@ -137,6 +137,34 @@ Runtime responsibilities:
 Hermes limits currently enforced by the projection are 2,200 characters for
 `MEMORY.md` and 1,375 characters for `USER.md`.
 
+### 5.1 Agent-owned third-party authorization
+
+User-supplied Firecrawl, SearXNG, FunASR, MinerU, and permitted personal model
+credentials are stored in PostgreSQL `agent_authorizations`. Ownership is bound
+by `organization_id`, `user_id`, and `agent_id`; the credential value is an
+AES-256-GCM envelope and is never returned by `/app` or `/admin` APIs.
+
+The user manages metadata and encrypted values through:
+
+```text
+GET    /api/user/agents/{agent_id}/authorizations
+POST   /api/user/agents/{agent_id}/authorizations
+DELETE /api/user/agents/{agent_id}/authorizations/{authorization_id}
+```
+
+An adapter inside the matching Agent Runtime resolves a stored credential with
+its independent signed machine identity:
+
+```text
+POST /api/internal/runtime/agents/{agent_id}/authorizations/{authorization_id}/resolve
+```
+
+The platform verifies method, path, body, timestamp, nonce, signature, active
+Runtime credential, and matching Agent id. Resolution is audited without the
+credential body. Revocation clears the encrypted envelope, so an old reference
+cannot be resolved again. Personal model credentials additionally require the
+organization policy `user_custom_keys_allowed=true`.
+
 ## 6. Control plane and Server Agent
 
 The Server Agent calls the cloud platform over outbound HTTPS:

@@ -42,6 +42,15 @@ const CONTAINER_RESOURCE_ROLES = new Set(["hermes", "runtime-boundary"]);
 const CONTAINER_RESOURCE_STATUSES = new Set(["running", "paused", "restarting", "exited", "dead", "created", "removing", "unknown"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
+const USER_AUTHORIZATION_SERVICES = Object.freeze({
+  firecrawl: { name: "Firecrawl", purpose: "网页抓取" },
+  searxng: { name: "SearXNG", purpose: "网页搜索" },
+  funasr: { name: "FunASR", purpose: "语音识别" },
+  mineru: { name: "MinerU", purpose: "文档解析" },
+  "model-provider": { name: "个人模型 Provider", purpose: "个人模型调用", policy: "userCustomKeysAllowed" }
+});
+const USER_AUTHORIZATION_TYPES = new Set(["api_key", "bearer_token"]);
+const AUTHORIZATION_METADATA_KEYS = new Set(["provider", "model", "region", "projectId"]);
 const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
@@ -255,6 +264,30 @@ function publicChannelBinding(binding) {
   if (!binding) return null;
   const { credentialEnvelope, ...safe } = binding;
   return { ...safe, configured: Boolean(credentialEnvelope), credentialMasked: binding.credentialHint ? `****${binding.credentialHint}` : null };
+}
+
+function publicAgentAuthorization(authorization) {
+  if (!authorization) return null;
+  const { credentialEnvelope, credentialHint, ...safe } = authorization;
+  return { ...safe, configured: Boolean(credentialEnvelope), credentialMasked: authorization.credentialHint ? `****${authorization.credentialHint}` : null };
+}
+
+function authorizationMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, item]) => AUTHORIZATION_METADATA_KEYS.has(key) && typeof item === "string" && item.trim()).map(([key, item]) => [key, item.trim().slice(0, 200)]));
+}
+
+function authorizationEndpoint(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (String(value).length > 2_000) return undefined;
+  let endpoint;
+  try { endpoint = new URL(String(value)); } catch { return undefined; }
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return undefined;
+  return endpoint.toString().replace(/\/$/, "");
+}
+
+function publicAuthorizationServices(policy) {
+  return Object.entries(USER_AUTHORIZATION_SERVICES).map(([id, item]) => ({ id, ...item, enabled: item.policy !== "userCustomKeysAllowed" || policy?.userCustomKeysAllowed === true }));
 }
 
 function channelSecretHint(credentials) {
@@ -675,7 +708,8 @@ export function createPlatformApp(options) {
       }
       if (method === "GET" && url.pathname === "/api/user/bootstrap") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
-        return json(response, 200, { models: await modelAccess(principal.organizationId), channels: [...USER_CHANNELS], memoryFormat: "obsidian-markdown" });
+        const [models, policy] = await Promise.all([modelAccess(principal.organizationId), repository.getModelPolicy(principal.organizationId)]);
+        return json(response, 200, { models, channels: [...USER_CHANNELS], authorizationServices: publicAuthorizationServices(policy), memoryFormat: "obsidian-markdown" });
       }
 
       if (method === "GET" && url.pathname === "/api/user/agents") {
@@ -1053,6 +1087,47 @@ export function createPlatformApp(options) {
         return json(response, channel === "web" ? 200 : 202, { binding: publicChannelBinding(binding) });
       }
 
+      const authorizationsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/authorizations(?:\/([^/]+))?$/);
+      if (authorizationsMatch && ["GET", "POST", "DELETE"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, authorizationsMatch[1]);
+        if (method === "GET") {
+          const [authorizations, policy] = await Promise.all([
+            repository.listAgentAuthorizations(principal.organizationId, principal.userId, agent.id),
+            repository.getModelPolicy(principal.organizationId)
+          ]);
+          const services = publicAuthorizationServices(policy);
+          return json(response, 200, { services, authorizations: authorizations.map(publicAgentAuthorization) });
+        }
+        const authorizationId = authorizationsMatch[2] ? decodeURIComponent(authorizationsMatch[2]) : null;
+        if (method === "DELETE") {
+          if (!authorizationId) return json(response, 404, { error: "authorization_not_found" });
+          const authorization = await repository.revokeAgentAuthorization(principal.organizationId, principal.userId, agent.id, authorizationId);
+          if (!authorization) return json(response, 404, { error: "authorization_not_found" });
+          await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.authorization.revoke", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, service: authorization.service, label: authorization.label } });
+          return json(response, 200, { authorization: publicAgentAuthorization(authorization) });
+        }
+        if (authorizationId) return json(response, 405, { error: "method_not_allowed" });
+        if (!providerVault) return json(response, 503, { error: "authorization_secret_storage_unavailable" });
+        const body = await readJson(request);
+        const service = typeof body.service === "string" ? body.service.trim() : "";
+        const serviceDefinition = Object.hasOwn(USER_AUTHORIZATION_SERVICES, service) ? USER_AUTHORIZATION_SERVICES[service] : null;
+        if (!serviceDefinition) return json(response, 400, { error: "authorization_service_not_supported" });
+        if (serviceDefinition.policy === "userCustomKeysAllowed" && (await repository.getModelPolicy(principal.organizationId))?.userCustomKeysAllowed !== true) return json(response, 403, { error: "user_custom_keys_disabled" });
+        const label = typeof body.label === "string" ? body.label.trim().slice(0, 100) : "";
+        const authType = typeof body.authType === "string" ? body.authType : "api_key";
+        const secret = typeof body.secret === "string" ? body.secret.trim() : "";
+        const endpointUrl = authorizationEndpoint(body.endpointUrl);
+        if (!label || !USER_AUTHORIZATION_TYPES.has(authType) || !secret || secret.length > 64_000 || endpointUrl === undefined) return json(response, 400, { error: "invalid_agent_authorization" });
+        const authorization = await repository.upsertAgentAuthorization({
+          organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id,
+          service, label, authType, endpointUrl, metadata: authorizationMetadata(body.metadata),
+          credentialEnvelope: providerVault.seal(JSON.stringify({ secret })), credentialHint: secretHint(secret)
+        });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.authorization.store", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, service, label, authType, endpointHost: endpointUrl ? new URL(endpointUrl).host : null } });
+        return json(response, 201, { authorization: publicAgentAuthorization(authorization) });
+      }
+
       const agentHotspotsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/hotspots$/);
       if (agentHotspotsMatch && method === "GET") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
@@ -1420,7 +1495,8 @@ export function createPlatformApp(options) {
         requireLogin(principal);
         if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
-        return json(response, 200, { catalog: INTEGRATION_CATALOG, runs: await repository.listIntegrationRuns(scope) });
+        const [runs, authorizations] = await Promise.all([repository.listIntegrationRuns(scope), repository.listAgentAuthorizations(scope)]);
+        return json(response, 200, { catalog: INTEGRATION_CATALOG, runs, authorizations: authorizations.map(publicAgentAuthorization) });
       }
       if (method === "POST" && url.pathname === "/api/admin/hotspots/refresh") {
         requireLogin(principal);
@@ -1490,6 +1566,23 @@ export function createPlatformApp(options) {
         const release = await repository.createRelease({ version: body.version, agentCommit: body.agentCommit, status: body.status, notes: body.notes });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "release.create", targetType: "release", targetId: release.id, metadata: { version: release.version } });
         return json(response, 201, { release });
+      }
+      const runtimeAuthorizationMatch = url.pathname.match(/^\/api\/internal\/runtime\/agents\/([^/]+)\/authorizations\/([^/]+)\/resolve$/);
+      if (runtimeAuthorizationMatch && method === "POST") {
+        if (!providerVault) return json(response, 503, { error: "authorization_secret_storage_unavailable" });
+        const signed = await readSignedJson(request);
+        const machine = await authenticateMachine(request, url, signed.raw, "agent-runtime");
+        const agentId = decodeURIComponent(runtimeAuthorizationMatch[1]);
+        const authorizationId = decodeURIComponent(runtimeAuthorizationMatch[2]);
+        if (!machine || machine.machineId !== agentId) return json(response, 401, { error: "invalid_agent_credential" });
+        const agent = await repository.getAgent(agentId);
+        if (!agent) return json(response, 404, { error: "agent_not_found" });
+        const authorization = await repository.getAgentAuthorization(agent.organizationId, agent.ownerUserId, agent.id, authorizationId);
+        if (!authorization || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
+        const credential = JSON.parse(providerVault.open(authorization.credentialEnvelope));
+        await repository.markAgentAuthorizationUsed(authorization.id);
+        await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: null, action: "agent.authorization.resolve", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, runtimeCredentialId: machine.credential.id, service: authorization.service } });
+        return json(response, 200, { authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
       }
       if (method === "POST" && url.pathname === "/api/internal/control-plane/snapshots") {
         const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];

@@ -37,6 +37,7 @@ export class MemoryPlatformRepository {
   #obsidianNotes = [];
   #agentSkillPreferences = [];
   #agentChannelBindings = [];
+  #agentAuthorizations = [];
   #agentRuns = [];
   #agentHotspotBookmarks = [];
   #providerChannels = [];
@@ -892,6 +893,44 @@ export class MemoryPlatformRepository {
     if (index < 0) return false;
     this.#agentChannelBindings.splice(index, 1);
     return true;
+  }
+
+  async listAgentAuthorizations(organizationId, userId, agentId) {
+    return this.#agentAuthorizations
+      .filter((item) => (!organizationId || item.organizationId === organizationId) && (!userId || item.userId === userId) && (!agentId || item.agentId === agentId))
+      .toSorted((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+  }
+
+  async getAgentAuthorization(organizationId, userId, agentId, authorizationId) {
+    return this.#agentAuthorizations.find((item) => item.id === authorizationId && item.organizationId === organizationId && item.userId === userId && item.agentId === agentId) ?? null;
+  }
+
+  async upsertAgentAuthorization(input) {
+    const existing = this.#agentAuthorizations.find((item) => item.agentId === input.agentId && item.service === input.service && item.label === input.label);
+    const now = new Date().toISOString();
+    const value = {
+      id: existing?.id ?? input.id ?? randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: input.agentId,
+      service: input.service, label: input.label, authType: input.authType, endpointUrl: input.endpointUrl ?? null,
+      credentialEnvelope: input.credentialEnvelope, credentialHint: input.credentialHint, metadata: input.metadata ?? {},
+      status: "stored", lastErrorCode: null, lastUsedAt: existing?.lastUsedAt ?? null,
+      createdAt: existing?.createdAt ?? now, updatedAt: now
+    };
+    if (existing) Object.assign(existing, value); else this.#agentAuthorizations.push(value);
+    return existing ?? value;
+  }
+
+  async revokeAgentAuthorization(organizationId, userId, agentId, authorizationId) {
+    const authorization = await this.getAgentAuthorization(organizationId, userId, agentId, authorizationId);
+    if (!authorization) return null;
+    Object.assign(authorization, { credentialEnvelope: null, credentialHint: null, status: "revoked", updatedAt: new Date().toISOString() });
+    return authorization;
+  }
+
+  async markAgentAuthorizationUsed(authorizationId) {
+    const authorization = this.#agentAuthorizations.find((item) => item.id === authorizationId);
+    if (!authorization) return null;
+    authorization.lastUsedAt = new Date().toISOString();
+    return authorization;
   }
 
   async createAgentRun(input) {

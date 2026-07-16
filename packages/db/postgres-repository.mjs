@@ -41,6 +41,7 @@ const mapHotspot = (row) => ({ id: row.id, runId: row.run_id, externalId: row.ex
 const mapObsidianNote = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, slug: row.slug, markdown: row.markdown, frontmatter: row.frontmatter, wikilinks: row.wikilinks, memoryKind: row.memory_kind, importance: row.importance, hermesTarget: row.hermes_target, sourceRef: row.source_ref, revision: row.revision, hermesSyncStatus: row.hermes_sync_status, hermesSyncedRevision: row.hermes_synced_revision, hermesSyncedAt: row.hermes_synced_at?.toISOString?.() ?? row.hermes_synced_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapSkillPreference = (row) => row ? ({ agentId: row.agent_id, organizationId: row.organization_id, userId: row.user_id, skillId: row.skill_id, enabled: row.enabled, applyStatus: row.apply_status, lastErrorCode: row.last_error_code, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapChannelBinding = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, channel: row.channel, displayName: row.display_name, status: row.status, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, lastErrorCode: row.last_error_code, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapAgentAuthorization = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, service: row.service, label: row.label, authType: row.auth_type, endpointUrl: row.endpoint_url, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, status: row.status, lastErrorCode: row.last_error_code, lastUsedAt: row.last_used_at?.toISOString?.() ?? row.last_used_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapUsageRollup = (row) => ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, bucketStart: row.bucket_start?.toISOString?.() ?? row.bucket_start, bucketSeconds: row.bucket_seconds, model: row.model, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), runCount: Number(row.run_count), failedRunCount: Number(row.failed_run_count), latencySumMs: Number(row.latency_sum_ms) });
 
 export class PostgresPlatformRepository {
@@ -1201,6 +1202,45 @@ export class PostgresPlatformRepository {
   async deleteAgentChannelBinding(organizationId, userId, agentId, channel) {
     const { rowCount } = await this.pool.query("DELETE FROM agent_channel_bindings WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND channel=$4", [organizationId, userId, agentId, channel]);
     return rowCount === 1;
+  }
+
+  async listAgentAuthorizations(organizationId, userId, agentId) {
+    const values = [];
+    const conditions = [];
+    if (organizationId) { values.push(organizationId); conditions.push(`organization_id=$${values.length}`); }
+    if (userId) { values.push(userId); conditions.push(`user_id=$${values.length}`); }
+    if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const { rows } = await this.pool.query(`SELECT * FROM agent_authorizations${where} ORDER BY updated_at DESC`, values);
+    return rows.map(mapAgentAuthorization);
+  }
+
+  async getAgentAuthorization(organizationId, userId, agentId, authorizationId) {
+    const { rows } = await this.pool.query("SELECT * FROM agent_authorizations WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4", [authorizationId, organizationId, userId, agentId]);
+    return mapAgentAuthorization(rows[0]);
+  }
+
+  async upsertAgentAuthorization(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO agent_authorizations (id, organization_id, user_id, agent_id, service, label, auth_type, endpoint_url, credential_envelope, credential_hint, metadata, status, last_error_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'stored',NULL)
+       ON CONFLICT (agent_id, service, label) DO UPDATE SET auth_type=EXCLUDED.auth_type, endpoint_url=EXCLUDED.endpoint_url,
+         credential_envelope=EXCLUDED.credential_envelope, credential_hint=EXCLUDED.credential_hint, metadata=EXCLUDED.metadata,
+         status='stored', last_error_code=NULL, updated_at=now()
+       RETURNING *`,
+      [input.id ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.service, input.label, input.authType, input.endpointUrl ?? null, input.credentialEnvelope, input.credentialHint, input.metadata ?? {}]
+    );
+    return mapAgentAuthorization(rows[0]);
+  }
+
+  async revokeAgentAuthorization(organizationId, userId, agentId, authorizationId) {
+    const { rows } = await this.pool.query("UPDATE agent_authorizations SET credential_envelope=NULL, credential_hint=NULL, status='revoked', updated_at=now() WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *", [authorizationId, organizationId, userId, agentId]);
+    return mapAgentAuthorization(rows[0]);
+  }
+
+  async markAgentAuthorizationUsed(authorizationId) {
+    const { rows } = await this.pool.query("UPDATE agent_authorizations SET last_used_at=now() WHERE id=$1 RETURNING *", [authorizationId]);
+    return mapAgentAuthorization(rows[0]);
   }
 
   async createAgentRun(input) {

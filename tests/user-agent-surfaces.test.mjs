@@ -28,12 +28,13 @@ async function setup() {
     invokeIntegration: async () => ({ status: "completed", completed_at: "2026-07-15T00:00:01.000Z", output: { sources: [{ source_id: "baidu", status: "ready", count: 1 }], items: [{ external_id: "one", source_id: "baidu", source_name: "Baidu", rank: 1, title: "Test hotspot", url: "https://www.baidu.com/", mobile_url: "", heat: "", category: "", fetched_at: "2026-07-15T00:00:00.000Z" }] } })
   };
   const { privateKey } = generateKeyPairSync("ed25519");
+  const providerVault = new SecretEnvelope("user-surfaces-encryption-key-longer-than-32-characters");
   const server = createPlatformServer({
     repository,
     runtimeClient,
     sessionSecret: "user-surfaces-session-secret-longer-than-32-characters",
     secureCookies: false,
-    providerVault: new SecretEnvelope("user-surfaces-encryption-key-longer-than-32-characters"),
+    providerVault,
     bailongmaUi,
     licensePrivateKey: privateKey,
     styles: "",
@@ -45,7 +46,7 @@ async function setup() {
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  return { repository, agent, runtime, server, baseUrl: `http://127.0.0.1:${server.address().port}` };
+  return { repository, agent, runtime, providerVault, server, baseUrl: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(baseUrl, email) {
@@ -95,6 +96,34 @@ test("Agent workspaces isolate memory, skills, channels, hotspots and usage", as
   assert.doesNotMatch(JSON.stringify(publicBinding), new RegExp(channelSecret));
   const storedBinding = await context.repository.getAgentChannelBinding("org_a", "user_a", context.agent.id, "feishu");
   assert.doesNotMatch(JSON.stringify(storedBinding.credentialEnvelope), new RegExp(channelSecret));
+
+  const personalSecret = "firecrawl-user-secret-value";
+  const authorizationResponse = await fetch(`${base}/authorizations`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ service: "firecrawl", label: "My crawler", authType: "api_key", endpointUrl: "https://api.firecrawl.dev/v1", secret: personalSecret, metadata: { projectId: "project-a", ignored: "must-not-store" } }) });
+  assert.equal(authorizationResponse.status, 201);
+  const authorization = (await authorizationResponse.json()).authorization;
+  assert.equal(authorization.status, "stored");
+  assert.equal(authorization.credentialEnvelope, undefined);
+  assert.equal(authorization.credentialHint, undefined);
+  assert.equal(authorization.credentialMasked, "****alue");
+  assert.doesNotMatch(JSON.stringify(authorization), new RegExp(personalSecret));
+  assert.equal((await fetch(`${base}/authorizations`, { headers: { cookie: peerCookie } })).status, 404);
+  const storedAuthorization = await context.repository.getAgentAuthorization("org_a", "user_a", context.agent.id, authorization.id);
+  assert.doesNotMatch(JSON.stringify(storedAuthorization.credentialEnvelope), new RegExp(personalSecret));
+  assert.deepEqual(JSON.parse(context.providerVault.open(storedAuthorization.credentialEnvelope)), { secret: personalSecret });
+  assert.deepEqual(storedAuthorization.metadata, { projectId: "project-a" });
+  const adminAuthorizations = (await (await fetch(`${context.baseUrl}/api/admin/integrations`, { headers: { cookie: rootCookie } })).json()).authorizations;
+  assert.equal(adminAuthorizations[0].credentialMasked, "****alue");
+  assert.doesNotMatch(JSON.stringify(adminAuthorizations), new RegExp(personalSecret));
+  const personalModelDenied = await fetch(`${base}/authorizations`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ service: "model-provider", label: "Personal model", authType: "api_key", secret: "personal-model-secret" }) });
+  assert.equal(personalModelDenied.status, 403);
+  assert.equal((await personalModelDenied.json()).error, "user_custom_keys_disabled");
+  await context.repository.upsertModelPolicy({ organizationId: "org_a", allowedModels: ["example/model"], defaultModel: "example/model", userCustomKeysAllowed: true, updatedBy: "root" });
+  const personalModelAllowed = await fetch(`${base}/authorizations`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ service: "model-provider", label: "Personal model", authType: "api_key", secret: "personal-model-secret", metadata: { provider: "compatible", model: "example/model" } }) });
+  assert.equal(personalModelAllowed.status, 201);
+  const revoke = await fetch(`${base}/authorizations/${authorization.id}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  assert.equal(revoke.status, 200);
+  assert.equal((await revoke.json()).authorization.status, "revoked");
+  assert.equal((await context.repository.getAgentAuthorization("org_a", "user_a", context.agent.id, authorization.id)).credentialEnvelope, null);
 
   assert.equal((await fetch(`${context.baseUrl}/api/admin/hotspots/refresh`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: "{}" })).status, 202);
   const hotspots = await (await fetch(`${base}/hotspots`, { headers: { cookie: ownerCookie } })).json();

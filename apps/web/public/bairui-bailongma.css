@@ -379,6 +379,18 @@
   letter-spacing: 0;
 }
 
+.bairui-onboarding-form fieldset {
+  margin: 20px 0 14px;
+  border: 1px solid rgba(126, 153, 181, 0.24);
+  border-radius: 6px;
+  padding: 4px 14px 10px;
+}
+
+.bairui-onboarding-form legend {
+  color: #d7e5f2;
+  padding: 0 6px;
+}
+
 .bairui-onboarding-form label {
   display: grid;
   gap: 6px;
@@ -643,9 +655,9 @@ body.bairui-streaming #send-btn {
   white-space: nowrap;
 }
 
-.bw-status-ready, .bw-status-active, .bw-status-connected, .bw-status-applied, .bw-status-available, .bw-status-materialized { border-color: #34795a; color: #62d49a; }
+.bw-status-ready, .bw-status-active, .bw-status-connected, .bw-status-applied, .bw-status-available, .bw-status-materialized, .bw-status-stored { border-color: #34795a; color: #62d49a; }
 .bw-status-pending, .bw-status-provisioning, .bw-status-starting, .bw-status-initializing, .bw-status-upgrading, .bw-status-model_unconfigured, .bw-status-suspended, .bw-status-stopped, .bw-status-excluded { border-color: #927138; color: #efc36b; }
-.bw-status-failed, .bw-status-degraded, .bw-status-unavailable, .bw-status-offline, .bw-status-quota_exhausted, .bw-status-deleting, .bw-status-deleted, .bw-status-conflict { border-color: #93453f; color: #ff8b80; }
+.bw-status-failed, .bw-status-degraded, .bw-status-unavailable, .bw-status-offline, .bw-status-quota_exhausted, .bw-status-deleting, .bw-status-deleted, .bw-status-conflict, .bw-status-revoked { border-color: #93453f; color: #ff8b80; }
 
 .bw-memory-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-bottom: 18px; border: 1px solid #2b3d4c; background: #2b3d4c; }
 .bw-memory-meter, .bw-memory-sync { min-width: 0; background: #0d1720; padding: 13px 14px; }
@@ -664,6 +676,7 @@ body.bairui-streaming #send-btn {
 
 .bw-split { display: grid; grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr); gap: 34px; }
 .bw-split > section { min-width: 0; }
+.bw-authorizations { margin-top: 34px; }
 .bw-details { margin: 14px 0 0; border-top: 1px solid #253443; }
 .bw-details > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); padding: 12px 0; border-bottom: 1px solid #253443; }
 .bw-details dt { color: #8196a8; }
