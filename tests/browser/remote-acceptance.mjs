@@ -107,7 +107,7 @@ async function platformAdmin(browser, baseUrl) {
   const expectedPanels = ["overview", "users", "agents", "operations", "providers", "integrations", "channels", "config", "versions", "alerts", "audit", "release", "backups", "retention", "sensitive"];
   for (const panel of expectedPanels) assert.equal(await page.locator(`[data-view-panel="${panel}"]`).count(), 1, `missing admin panel: ${panel}`);
   await page.locator('[data-admin-view="agents"]').click();
-  await page.getByText("Hermes Memory Agent", { exact: true }).waitFor();
+  await page.locator("#agent-rows").getByText("Hermes Memory Agent", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "admin-agent-fleet.png"), fullPage: true });
   await context.close();
