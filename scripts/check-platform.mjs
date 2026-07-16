@@ -181,7 +181,7 @@ for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/
 }
 const authorizationMigration = fs.readFileSync(path.join(root, "packages/db/migrations/016_agent_authorizations.sql"), "utf8");
 for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_authorizations", "agent_authorizations_owner_fkey", "credential_envelope"]) if (!authorizationMigration.includes(fragment)) failures.push(`Agent authorization migration is missing ${fragment}`);
-for (const evidence of ["/authorizations", "publicAgentAuthorization", "/api/internal/runtime/agents/"]) if (!server.includes(evidence)) failures.push(`Missing Agent authorization evidence: ${evidence}`);
+for (const evidence of ["/authorizations", "publicAgentAuthorization", "runtimeAuthorizationMatch", "authorization_not_available"]) if (!server.includes(evidence)) failures.push(`Missing Agent authorization evidence: ${evidence}`);
 const adminDomainsMigrationPath = path.join(root, "packages/db/migrations/009_control_plane_admin_domains.sql");
 const adminDomainsMigration = fs.existsSync(adminDomainsMigrationPath) ? fs.readFileSync(adminDomainsMigrationPath, "utf8") : "";
 for (const table of ["provider_channels", "model_policies", "data_retention_policies", "sensitive_access_grants", "sensitive_access_events"]) {
