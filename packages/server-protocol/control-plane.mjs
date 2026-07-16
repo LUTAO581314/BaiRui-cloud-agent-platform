@@ -38,7 +38,7 @@ const ARGUMENTS = Object.freeze({
   "upstream.check": [["upstream_id"], []],
   "config.stage": [["config_revision_id"], []],
   "config.apply": [["config_revision_id"], []],
-  "backup.create": [["backup_policy_id"], []],
+  "backup.create": [["backup_policy_id"], ["backup_id"]],
   "backup.verify": [["backup_id"], []],
   "release.stage": [["release_id"], ["rollout_id"]],
   "release.apply": [["release_id"], ["rollout_id"]],
