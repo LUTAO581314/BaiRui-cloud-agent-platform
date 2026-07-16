@@ -80,11 +80,11 @@
 /* BaiLongma remains the visual upstream; this turns its console into a stable
    Hermes session column using the interaction density of mature chat clients. */
 .console {
-  top: 72px !important;
-  bottom: auto !important;
-  height: calc(100vh - 90px) !important;
-  height: calc(100dvh - 90px) !important;
-  max-height: calc(100dvh - 90px) !important;
+  top: 72px;
+  bottom: auto;
+  height: calc(100vh - 90px);
+  height: calc(100dvh - 90px);
+  max-height: calc(100dvh - 90px);
   min-height: 0;
   box-sizing: border-box;
   display: grid !important;
@@ -752,13 +752,13 @@ body.bairui-streaming #send-btn {
   }
 
   .console {
-    top: 62px !important;
+    top: 62px;
     right: 10px !important;
-    bottom: auto !important;
+    bottom: auto;
     left: 10px !important;
-    height: calc(100vh - 72px) !important;
-    height: calc(100dvh - 72px) !important;
-    max-height: calc(100dvh - 72px) !important;
+    height: calc(100vh - 72px);
+    height: calc(100dvh - 72px);
+    max-height: calc(100dvh - 72px);
   }
 
   .bairui-chat-header { min-height: 48px; padding: 7px 10px; }
