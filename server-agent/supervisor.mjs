@@ -64,15 +64,35 @@ function envFile(values) {
 
 function disabledSkills(configDocument, ownerScoped = false) {
   if (!configDocument || typeof configDocument !== "object" || Array.isArray(configDocument)) throw Object.assign(new Error("Skill configuration document is invalid"), { code: "invalid_user_config_scope" });
-  if (ownerScoped) {
-    const change = configDocument.owner_change;
-    if (!change || change.scope !== "skills" || !Number.isSafeInteger(change.generation) || change.generation < 1 || Object.keys(change).some((key) => !["scope", "generation"].includes(key))) throw Object.assign(new Error("Owner configuration scope is invalid"), { code: "invalid_user_config_scope" });
-  }
+  if (ownerScoped) ownerChange(configDocument, "skills");
   const skills = configDocument.skills ?? { disabled: [] };
   if (!skills || typeof skills !== "object" || Array.isArray(skills) || Object.keys(skills).some((key) => key !== "disabled") || !Array.isArray(skills.disabled) || skills.disabled.length > 500) throw Object.assign(new Error("Skill preference structure is invalid"), { code: "invalid_user_config_scope" });
   const values = [...new Set(skills.disabled)];
   if (values.some((value) => typeof value !== "string" || !SKILL_ID.test(value))) throw Object.assign(new Error("Skill identifier is invalid"), { code: "invalid_user_config_scope" });
   return values.sort();
+}
+
+function ownerChange(configDocument, expectedScope) {
+  if (!configDocument || typeof configDocument !== "object" || Array.isArray(configDocument)) throw Object.assign(new Error("Owner configuration document is invalid"), { code: "invalid_user_config_scope" });
+  const change = configDocument.owner_change;
+  if (!change || change.scope !== expectedScope || !Number.isSafeInteger(change.generation) || change.generation < 1 || Object.keys(change).some((key) => !["scope", "generation"].includes(key))) throw Object.assign(new Error("Owner configuration scope is invalid"), { code: "invalid_user_config_scope" });
+  return change;
+}
+
+function identityDocument(configDocument, agentId) {
+  ownerChange(configDocument, "identity");
+  const agent = configDocument.agent;
+  if (!agent || typeof agent !== "object" || Array.isArray(agent) || Object.keys(agent).some((key) => !["id", "name", "soul_markdown"].includes(key))) throw Object.assign(new Error("Agent identity structure is invalid"), { code: "invalid_user_config_scope" });
+  if (agent.id !== agentId || typeof agent.name !== "string" || !agent.name.trim() || agent.name.length > 64 || /[\0\r\n\u0001-\u001f\u007f]/u.test(agent.name)) throw Object.assign(new Error("Agent identity is invalid"), { code: "invalid_user_config_scope" });
+  if (typeof agent.soul_markdown !== "string" || agent.soul_markdown.length > 50_000 || /[\0\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(agent.soul_markdown)) throw Object.assign(new Error("Agent SOUL document is invalid"), { code: "invalid_user_config_scope" });
+  return { name: agent.name.trim(), soulMarkdown: agent.soul_markdown.replaceAll("\r\n", "\n").replaceAll("\r", "\n") };
+}
+
+function atomicWriteSecure(destination, content) {
+  const temporary = `${destination}.bairui-${process.pid}-${randomBytes(6).toString("hex")}`;
+  fs.writeFileSync(temporary, content, { mode: 0o600 });
+  fs.renameSync(temporary, destination);
+  fs.chmodSync(destination, 0o600);
 }
 
 function mergeSkillConfiguration(configPath, disabled) {
@@ -352,33 +372,45 @@ export class AgentSupervisor {
     const agentId = this.commandAgentId(command);
     const metadata = this.readMetadata(agentId);
     const revisionId = identifier(command.arguments?.config_revision_id, "config_revision_id");
-    const disabled = disabledSkills(command.config?.document, true);
+    const scope = command.config?.document?.owner_change?.scope;
+    if (!new Set(["skills", "identity"]).has(scope)) throw Object.assign(new Error("Owner configuration scope is invalid"), { code: "invalid_user_config_scope" });
     const instancePath = this.instancePath(agentId);
-    const configPath = path.join(instancePath, "hermes-data", "config.yaml");
+    const activePath = path.join(instancePath, "hermes-data", scope === "skills" ? "config.yaml" : "SOUL.md");
     const rollbackPath = path.join(instancePath, "config-history", metadata.configRevisionId ?? `before-${revisionId}`);
-    const rollbackConfig = path.join(rollbackPath, "config.yaml");
+    const rollbackFile = path.join(rollbackPath, path.basename(activePath));
     const hermesEnv = path.join(instancePath, "hermes.env");
-    const hadConfig = fs.existsSync(configPath);
+    const hadFile = fs.existsSync(activePath);
     const previousStatus = await this.containerStatus(metadata.names.hermes);
     let configurationChanged = false;
     fs.mkdirSync(rollbackPath, { recursive: true, mode: 0o700 });
-    if (hadConfig) copyFileSecure(configPath, rollbackConfig);
+    if (hadFile) copyFileSecure(activePath, rollbackFile);
+    let summary;
+    let digest;
     try {
-      mergeSkillConfiguration(configPath, disabled);
+      if (scope === "skills") {
+        const disabled = disabledSkills(command.config?.document, true);
+        mergeSkillConfiguration(activePath, disabled);
+        summary = { skills: disabled.length, containers: 1, applied: 1 };
+        digest = `skills-sha256:${createHash("sha256").update(JSON.stringify(disabled)).digest("hex")}`;
+      } else {
+        const identity = identityDocument(command.config?.document, agentId);
+        atomicWriteSecure(activePath, identity.soulMarkdown);
+        summary = { identity: 1, soulChars: identity.soulMarkdown.length, containers: 1, applied: 1 };
+        digest = `soul-sha256:${createHash("sha256").update(identity.soulMarkdown).digest("hex")}`;
+      }
       configurationChanged = true;
       await this.runHermesContainer(metadata, hermesEnv);
       await this.restoreHermesLifecycle(metadata.names.hermes, previousStatus);
       this.writeMetadata(agentId, { ...metadata, configRevisionId: revisionId, idempotencyKey: command.idempotency_key });
     } catch (error) {
       if (configurationChanged) {
-        if (hadConfig && fs.existsSync(rollbackConfig)) copyFileSecure(rollbackConfig, configPath);
-        else fs.rmSync(configPath, { force: true });
+        if (hadFile && fs.existsSync(rollbackFile)) copyFileSecure(rollbackFile, activePath);
+        else fs.rmSync(activePath, { force: true });
         await this.runHermesContainer(metadata, hermesEnv).then(() => this.restoreHermesLifecycle(metadata.names.hermes, previousStatus)).catch(() => {});
       }
       throw error;
     }
-    const digest = createHash("sha256").update(JSON.stringify(disabled)).digest("hex");
-    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { skills: disabled.length, containers: 1, applied: 1 }, evidenceRefs: [`config:${revisionId}:applied`, `skills-sha256:${digest}`, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
+    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary, evidenceRefs: [`config:${revisionId}:applied`, digest, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
   }
 
   backupPath(backupId) {

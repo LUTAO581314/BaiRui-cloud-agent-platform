@@ -470,6 +470,93 @@
     return button;
   }
 
+  function characterCardPayload(file) {
+    if (!file || file.size < 1 || file.size > 8 * 1024 * 1024) throw new Error("角色卡文件必须小于 8 MB");
+    const png = file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
+    if (!png && file.type !== "application/json" && !file.name.toLowerCase().endsWith(".json")) throw new Error("仅支持 SillyTavern JSON 或 PNG 角色卡");
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("error", () => reject(new Error("无法读取角色卡文件")), { once: true });
+      reader.addEventListener("load", () => resolve({ format: png ? "png" : "json", content: String(reader.result) }), { once: true });
+      if (png) reader.readAsDataURL(file); else reader.readAsText(file, "utf-8");
+    });
+  }
+
+  function cardNotice(message, tone = "info") {
+    const notice = document.createElement("div");
+    notice.className = `bairui-card-notice tone-${tone}`;
+    notice.setAttribute("role", "status");
+    notice.textContent = message;
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add("visible"));
+    setTimeout(() => { notice.classList.remove("visible"); setTimeout(() => notice.remove(), 180); }, 3600);
+  }
+
+  async function showCharacterCardImport(agent, card, filename) {
+    const endpoint = `/api/user/agents/${encodeURIComponent(agent.id)}/character-card`;
+    const preview = await requestJson(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card, previewOnly: true }) });
+    const dialog = document.createElement("dialog");
+    dialog.className = "bairui-card-dialog";
+    dialog.innerHTML = `<form method="dialog">
+      <header><div><span>角色卡预检</span><strong>${escapeHtml(preview.card.name)}</strong></div><button type="button" data-close title="关闭" aria-label="关闭">×</button></header>
+      <div class="bairui-card-body">
+        <dl><div><dt>文件</dt><dd>${escapeHtml(filename)}</dd></div><div><dt>规范</dt><dd>${escapeHtml(preview.card.spec)} ${escapeHtml(preview.card.specVersion)}</dd></div><div><dt>Hermes 身份</dt><dd>${preview.card.soulChars.toLocaleString()} 字符</dd></div><div><dt>Obsidian 资料</dt><dd>${preview.card.loreNotes + 1} 条</dd></div></dl>
+        <section><strong>导入边界</strong><p>身份、性格、场景和系统指引将更新 Hermes 的 SOUL.md。开场白、示例对话和 Lorebook 仅保存为 Obsidian 来源资料，不会伪装成 Hermes 原生记忆。</p></section>
+        <label class="bairui-card-confirm"><input type="checkbox" required><span>我确认该角色卡来自可信来源，并允许其中的提示词改变当前 Agent 身份。扩展脚本和执行配置不会导入。</span></label>
+        <p class="bairui-card-error" role="alert"></p>
+      </div>
+      <footer><button type="button" data-cancel>取消</button><button type="submit" class="primary" disabled>导入角色卡</button></footer>
+    </form>`;
+    document.body.appendChild(dialog);
+    const form = dialog.querySelector("form");
+    const confirmation = dialog.querySelector('input[type="checkbox"]');
+    const submit = dialog.querySelector('button[type="submit"]');
+    const error = dialog.querySelector(".bairui-card-error");
+    const close = () => { dialog.close(); dialog.remove(); };
+    dialog.querySelector("[data-close]").addEventListener("click", close);
+    dialog.querySelector("[data-cancel]").addEventListener("click", close);
+    confirmation.addEventListener("change", () => { submit.disabled = !confirmation.checked; });
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!confirmation.checked) return;
+      submit.disabled = true;
+      submit.textContent = "正在导入";
+      error.textContent = "";
+      try {
+        const result = await requestJson(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card, confirmUntrustedPrompts: true }) });
+        const index = state.agents.findIndex((item) => item.id === agent.id);
+        if (index >= 0) state.agents[index] = { ...state.agents[index], ...result.agent };
+        state.activeAgent = { ...state.activeAgent, ...result.agent };
+        close();
+        cardNotice(result.application.state === "queued" ? "角色卡已导入，Hermes 正在应用新身份" : "角色卡已导入，将在 Agent 初始化时应用", "success");
+        setTimeout(() => location.reload(), 900);
+      } catch (cause) {
+        const labels = { invalid_character_card: "无法解析该角色卡", character_card_metadata_missing: "PNG 中没有角色卡元数据", character_card_confirmation_required: "请先确认导入风险" };
+        error.textContent = labels[cause.message] || cause.message;
+        submit.disabled = false;
+        submit.textContent = "导入角色卡";
+      }
+    });
+    dialog.showModal();
+  }
+
+  function chooseCharacterCard(agent) {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = ".json,.png,application/json,image/png";
+    picker.hidden = true;
+    document.body.appendChild(picker);
+    picker.addEventListener("change", async () => {
+      const file = picker.files?.[0];
+      picker.remove();
+      if (!file) return;
+      try { await showCharacterCardImport(agent, await characterCardPayload(file), file.name); }
+      catch (error) { cardNotice(error.message || "角色卡预检失败", "error"); }
+    }, { once: true });
+    picker.click();
+  }
+
   function mountHermesChatSurface(agent) {
     const chatArea = document.querySelector("#chat-area");
     const inputRow = document.querySelector("#input-row");
@@ -552,6 +639,70 @@
     input.value = text;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
+  }
+
+  function mountPanelControls() {
+    const left = document.querySelector("#panel-l1-tab");
+    const right = document.querySelector("#panel-l2-tab");
+    if (!left || !right || document.querySelector(".bairui-panel-scrim")) return;
+    const scrim = document.createElement("button");
+    scrim.type = "button";
+    scrim.className = "bairui-panel-scrim";
+    scrim.title = "关闭侧栏";
+    scrim.setAttribute("aria-label", "关闭侧栏");
+    document.body.appendChild(scrim);
+
+    const mobile = () => window.matchMedia("(max-width: 780px)").matches;
+    let mobileMode = mobile();
+    let desktopState = { left: document.body.classList.contains("l1-collapsed"), right: document.body.classList.contains("l2-collapsed") };
+    const closeMobilePanels = () => {
+      if (mobile()) document.body.classList.add("l1-collapsed", "l2-collapsed");
+    };
+    const sync = () => {
+      const leftOpen = !document.body.classList.contains("l1-collapsed");
+      const rightOpen = !document.body.classList.contains("l2-collapsed");
+      left.setAttribute("aria-expanded", String(leftOpen));
+      right.setAttribute("aria-expanded", String(rightOpen));
+      left.title = `${leftOpen ? "收起" : "展开"}左侧认知面板`;
+      right.title = `${rightOpen ? "收起" : "展开"}右侧运行面板`;
+    };
+    closeMobilePanels();
+    sync();
+
+    left.addEventListener("click", () => {
+      if (mobile() && document.body.classList.contains("l1-collapsed")) {
+        document.body.classList.add("l2-collapsed");
+        try { localStorage.setItem("bailongma-panel-l2-collapsed", "1"); } catch {}
+      }
+      queueMicrotask(sync);
+    }, true);
+    right.addEventListener("click", () => {
+      if (mobile() && document.body.classList.contains("l2-collapsed")) {
+        document.body.classList.add("l1-collapsed");
+        try { localStorage.setItem("bailongma-panel-l1-collapsed", "1"); } catch {}
+      }
+      queueMicrotask(sync);
+    }, true);
+    scrim.addEventListener("click", () => {
+      if (!document.body.classList.contains("l1-collapsed")) left.click();
+      if (!document.body.classList.contains("l2-collapsed")) right.click();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && mobile()) scrim.click();
+    });
+    window.addEventListener("resize", () => {
+      const nextMobile = mobile();
+      if (nextMobile && !mobileMode) {
+        desktopState = { left: document.body.classList.contains("l1-collapsed"), right: document.body.classList.contains("l2-collapsed") };
+        closeMobilePanels();
+      } else if (!nextMobile && mobileMode) {
+        document.body.classList.toggle("l1-collapsed", desktopState.left);
+        document.body.classList.toggle("l2-collapsed", desktopState.right);
+      }
+      mobileMode = nextMobile;
+      sync();
+    }, { passive: true });
+    new MutationObserver(sync).observe(document.body, { attributes: true, attributeFilter: ["class"] });
   }
 
   function mountOperationalSurface(agent) {
@@ -668,6 +819,10 @@
       activateAgent(created.id);
     });
     tools.appendChild(addAgent);
+    const importCard = iconButton("导入 SillyTavern 角色卡", "⇧");
+    importCard.dataset.action = "import-character-card";
+    importCard.addEventListener("click", () => chooseCharacterCard(state.activeAgent));
+    tools.appendChild(importCard);
     if (["org_admin", "platform_admin"].includes(state.user.role)) {
       const admin = document.createElement("a");
       admin.href = "/admin";
@@ -684,6 +839,7 @@
     tools.appendChild(logout);
     Object.assign(tools.style, { position: "fixed", zIndex: "2147483000", pointerEvents: "auto" });
     document.body.appendChild(tools);
+    mountPanelControls();
     mountHermesChatSurface(agent);
     mountOperationalSurface(agent);
 

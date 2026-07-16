@@ -143,6 +143,46 @@ test("Agent workspaces isolate memory, skills, channels, hotspots and usage", as
   assert.equal((await (await fetch(`${base}/memory-notes`, { headers: { cookie: ownerCookie } })).json()).notes.length, 0);
 });
 
+test("owners preview and import character cards without exposing prompts or activating Lorebook", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const ownerCookie = await login(context.baseUrl, "owner@example.test");
+  const peerCookie = await login(context.baseUrl, "peer@example.test");
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  const endpoint = `${context.baseUrl}/api/user/agents/${context.agent.id}/character-card`;
+  const card = { format: "json", content: { spec: "chara_card_v2", spec_version: "2.0", data: { name: "Research Ada", description: "Research partner", personality: "Precise", first_mes: "Private greeting", mes_example: "Private example", character_book: { entries: [{ keys: ["engine"], content: "Private lore", enabled: true }] }, extensions: { javascript: "must-not-run()" } } } };
+
+  assert.equal((await fetch(endpoint, { method: "POST", headers: { cookie: peerCookie, "content-type": "application/json" }, body: JSON.stringify({ card, previewOnly: true }) })).status, 404);
+  const preview = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ card, previewOnly: true }) });
+  assert.equal(preview.status, 200);
+  const previewBody = await preview.json();
+  assert.equal(previewBody.card.name, "Research Ada");
+  assert.equal(previewBody.mapping.executableExtensions, "ignored");
+  assert.doesNotMatch(JSON.stringify(previewBody), /Private greeting|Private lore|must-not-run/);
+  assert.equal((await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ card }) })).status, 400);
+
+  const imported = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ card, confirmUntrustedPrompts: true }) });
+  assert.equal(imported.status, 202);
+  const result = await imported.json();
+  assert.equal(result.application.state, "pending_initialization");
+  assert.deepEqual(result.notes, { stored: 2, hermesActive: 0 });
+  const storedAgent = await context.repository.getAgent(context.agent.id);
+  assert.equal(storedAgent.name, "Research Ada");
+  assert.match(storedAgent.soulMarkdown, /Precise/);
+  assert.doesNotMatch(storedAgent.soulMarkdown, /Private greeting|Private example|Private lore|must-not-run/);
+  const notes = await context.repository.listObsidianNotes("org_a", "user_a", context.agent.id);
+  assert.equal(notes.length, 2);
+  assert.ok(notes.every((note) => note.hermesTarget === "none"));
+  assert.match(notes.map((note) => note.markdown).join("\n"), /Private greeting/);
+
+  const fleet = await (await fetch(`${context.baseUrl}/api/admin/agents`, { headers: { cookie: rootCookie } })).json();
+  const fleetAgent = fleet.agents.find((item) => item.id === context.agent.id);
+  assert.equal(fleetAgent.soulMarkdown, undefined);
+  assert.equal(fleetAgent.settings, undefined);
+  assert.equal(fleetAgent.description, undefined);
+  assert.doesNotMatch(JSON.stringify(fleetAgent), /Private greeting|Private lore|Precise/);
+});
+
 test("skill preferences flow through provision and owner-scoped config receipts", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
@@ -176,5 +216,17 @@ test("skill preferences flow through provision and owner-scoped config receipts"
   await context.repository.recordCommandReceipt({ ...applyReceipt, state: "accepted" });
   await context.repository.recordCommandReceipt({ ...applyReceipt, state: "running" });
   await context.repository.recordCommandReceipt({ ...applyReceipt, state: "succeeded" });
+  assert.equal((await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id))[0].applyStatus, "applied");
+
+  const identityResponse = await fetch(base, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Hermes Ada", soulMarkdown: "# Identity\n\nEvidence first." }) });
+  assert.equal(identityResponse.status, 200);
+  assert.equal((await identityResponse.json()).application.state, "queued");
+  const [identityCommand] = await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 });
+  assert.equal(identityCommand.config.document.owner_change.scope, "identity");
+  assert.deepEqual(identityCommand.config.document.agent, { id: context.agent.id, name: "Hermes Ada", soul_markdown: "# Identity\n\nEvidence first." });
+  const identityReceipt = { commandId: identityCommand.command_id, serverId: "server_skill", attempt: identityCommand.attempt };
+  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "running" });
+  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "succeeded" });
   assert.equal((await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id))[0].applyStatus, "applied");
 });

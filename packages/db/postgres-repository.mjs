@@ -480,6 +480,15 @@ export class PostgresPlatformRepository {
   }
 
   async requestAgentSkillConfiguration(input) {
+    return this.requestAgentOwnerConfiguration(input, "skills");
+  }
+
+  async requestAgentIdentityConfiguration(input) {
+    return this.requestAgentOwnerConfiguration(input, "identity");
+  }
+
+  async requestAgentOwnerConfiguration(input, scope) {
+    if (!["skills", "identity"].includes(scope)) throw new TypeError("Unsupported owner configuration scope");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -502,7 +511,7 @@ export class PostgresPlatformRepository {
       const revision = Number(revisionRows[0].next_revision);
       const { rows: preferenceRows } = await client.query("SELECT skill_id,enabled FROM agent_skill_preferences WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 ORDER BY skill_id", [input.organizationId, input.userId, input.agentId]);
       const disabled = preferenceRows.filter((item) => item.enabled === false).map((item) => item.skill_id);
-      const configDocument = { ...current.config_document, owner_change: { scope: "skills", generation: revision }, skills: { disabled } };
+      const configDocument = { ...current.config_document, agent: { id: identity.id, name: identity.name, soul_markdown: identity.soul_markdown }, owner_change: { scope, generation: revision }, skills: { disabled } };
       const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
       const configId = randomUUID();
       const { rows: insertedConfigs } = await client.query(
@@ -510,8 +519,13 @@ export class PostgresPlatformRepository {
         [configId, input.organizationId, input.agentId, revision, configDocument, current.secret_envelope, contentHash, input.requestedBy]
       );
       const { rows: superseded } = await client.query(
-        "UPDATE control_commands SET state='cancelled', updated_at=now() WHERE deployment_id=$1 AND action='config.apply-user' AND state='queued' RETURNING arguments->>'config_revision_id' AS config_id",
-        [deployment.id]
+        `UPDATE control_commands command SET state='cancelled', updated_at=now()
+         FROM config_revisions revision
+         WHERE command.deployment_id=$1 AND command.action='config.apply-user' AND command.state='queued'
+           AND revision.id=command.arguments->>'config_revision_id'
+           AND revision.config_document->'owner_change'->>'scope'=$2
+         RETURNING command.arguments->>'config_revision_id' AS config_id`,
+        [deployment.id, scope]
       );
       if (superseded.length) await client.query("UPDATE config_revisions SET status='superseded' WHERE id=ANY($1::text[]) AND status='approved'", [superseded.map((item) => item.config_id)]);
       const commandId = randomUUID();
@@ -846,7 +860,8 @@ export class PostgresPlatformRepository {
         if (input.state === "succeeded") await client.query("UPDATE config_revisions SET status=$2 WHERE id=$1", [configId, command.action === "config.stage" ? "staged" : "applied"]);
         if (input.state === "failed") await client.query("UPDATE config_revisions SET status='failed' WHERE id=$1", [configId]);
         if (input.state === "succeeded" && ["config.apply", "config.apply-user"].includes(command.action)) await client.query("UPDATE agent_runtimes runtime SET config_revision_id=$2, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, configId]);
-        if (command.action === "config.apply-user" && ["succeeded", "failed"].includes(input.state)) {
+        const { rows: ownerScopeRows } = command.action === "config.apply-user" ? await client.query("SELECT config_document->'owner_change'->>'scope' AS scope FROM config_revisions WHERE id=$1", [configId]) : { rows: [] };
+        if (command.action === "config.apply-user" && ownerScopeRows[0]?.scope === "skills" && ["succeeded", "failed"].includes(input.state)) {
           await client.query(
             `UPDATE agent_skill_preferences preference
              SET apply_status=$2, last_error_code=$3, updated_at=now()

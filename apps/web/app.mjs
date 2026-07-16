@@ -31,9 +31,11 @@ import {
   toBailongmaHotspots,
   toBailongmaMemories
 } from "../../packages/bailongma-ui/compatibility.mjs";
+import { parseTavernCharacterCard } from "../../packages/character-card/tavern-card.mjs";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
+const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
 const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
 const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
@@ -328,6 +330,18 @@ function publicAgentRun(record) {
   if (!record) return null;
   const { inputText, ...value } = record;
   return { ...value, inputPreview: String(inputText ?? "").slice(0, 500) };
+}
+
+function publicFleetAgent(agent) {
+  if (!agent) return null;
+  const { description, settings, soulMarkdown, ...metadata } = agent;
+  return metadata;
+}
+
+function configurationApplication(application) {
+  return application?.command
+    ? { state: application.command.state, commandId: application.command.id, configRevisionId: application.revision.id }
+    : { state: "pending_initialization", commandId: null, configRevisionId: null };
 }
 
 function agentRunError(value) {
@@ -786,8 +800,33 @@ export function createPlatformApp(options) {
           patch.settings = settings;
         }
         const updated = await repository.updateAgent(agent.id, patch);
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch) } });
-        return json(response, 200, { agent: updated });
+        const identityChanged = Object.hasOwn(patch, "name") || Object.hasOwn(patch, "soulMarkdown");
+        const application = identityChanged ? configurationApplication(await repository.requestAgentIdentityConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId })) : null;
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch), ...(application ? { application } : {}) } });
+        return json(response, 200, { agent: updated, application });
+      }
+      const characterCardMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/character-card$/);
+      if (characterCardMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, characterCardMatch[1]);
+        const body = await readJson(request, MAX_CHARACTER_CARD_BODY_BYTES);
+        let imported;
+        try { imported = parseTavernCharacterCard(body.card); }
+        catch (error) { return json(response, error.code === "character_card_too_large" ? 413 : 400, { error: error.code ?? "invalid_character_card" }); }
+        const cardView = { name: imported.card.name, spec: imported.card.spec, specVersion: imported.card.specVersion, loreNotes: imported.loreNotes.length, soulChars: imported.agent.soulMarkdown.length, digest: imported.digest };
+        if (body.previewOnly === true) return json(response, 200, { card: cardView, mapping: { soul: ["description", "personality", "scenario", "system_prompt", "post_history_instructions"], obsidianOnly: ["first_mes", "alternate_greetings", "mes_example", "creator_notes", "character_book"], executableExtensions: "ignored" } });
+        if (body.confirmUntrustedPrompts !== true) return json(response, 400, { error: "character_card_confirmation_required" });
+        const settings = { ...(agent.settings ?? {}), characterCard: imported.provenance };
+        const updated = await repository.updateAgent(agent.id, { ...imported.agent, settings });
+        const noteInputs = [imported.sourceNote, ...imported.loreNotes];
+        const notes = [];
+        for (const noteInput of noteInputs) {
+          const note = createObsidianNote({ ...noteInput, memoryKind: "knowledge" });
+          notes.push(await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id }));
+        }
+        const application = configurationApplication(await repository.requestAgentIdentityConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId }));
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.character-card.import", targetType: "agent", targetId: agent.id, metadata: { digest: imported.digest, spec: imported.card.spec, loreNotes: imported.loreNotes.length, application } });
+        return json(response, 202, { agent: updated, card: cardView, notes: { stored: notes.length, hermesActive: 0 }, application });
       }
       const initializeAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/initialize$/);
       if (initializeAgentMatch && method === "POST") {
@@ -1050,7 +1089,7 @@ export function createPlatformApp(options) {
         if (!SKILL_ID.test(skillId)) return json(response, 400, { error: "invalid_skill_id" });
         const preference = await repository.upsertAgentSkillPreference({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, skillId, enabled: body.enabled, applyStatus: "pending" });
         const application = await repository.requestAgentSkillConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId });
-        const applicationView = application?.command ? { state: application.command.state, commandId: application.command.id, configRevisionId: application.revision.id } : { state: "pending_initialization", commandId: null, configRevisionId: null };
+        const applicationView = configurationApplication(application);
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.skill.preference.update", targetType: "agent", targetId: agent.id, metadata: { skillId, enabled: body.enabled, applyStatus: "pending", application: applicationView } });
         return json(response, 202, { preference, application: applicationView });
       }
@@ -1251,7 +1290,7 @@ export function createPlatformApp(options) {
         const usersById = new Map(users.map((user) => [user.id, user]));
         return json(response, 200, { agents: agents.map((agent) => {
           const runtime = runtimeByAgent.get(agent.id) ?? null;
-          return { ...agent, owner: usersById.get(agent.ownerUserId) ?? null, runtime, heartbeat: runtime ? heartbeatByRuntime.get(runtime.id) ?? null : null, resource: runtime ? resourceByRuntime.get(runtime.id) ?? null : null, components: runtime ? componentsByRuntime.get(runtime.id) ?? [] : [] };
+          return { ...publicFleetAgent(agent), owner: usersById.get(agent.ownerUserId) ?? null, runtime, heartbeat: runtime ? heartbeatByRuntime.get(runtime.id) ?? null : null, resource: runtime ? resourceByRuntime.get(runtime.id) ?? null : null, components: runtime ? componentsByRuntime.get(runtime.id) ?? [] : [] };
         }) });
       }
       const agentResourcesMatch = url.pathname.match(/^\/api\/admin\/agents\/([^/]+)\/resources$/);

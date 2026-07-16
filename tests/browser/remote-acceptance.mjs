@@ -35,6 +35,16 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.waitForFunction(() => document.querySelectorAll("#graph circle").length >= 3);
   await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
   await page.locator(".bairui-chat-header").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#panel-l1-tab").count(), 1, "missing left panel control");
+  assert.equal(await page.locator("#panel-l2-tab").count(), 1, "missing right panel control");
+  const chatWidthBeforeCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
+  await page.locator("#panel-l1-tab").click();
+  await page.waitForFunction(() => document.body.classList.contains("l1-collapsed"));
+  await page.waitForTimeout(450);
+  const chatWidthAfterCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
+  assert.ok(chatWidthAfterCollapse > chatWidthBeforeCollapse + 200, "collapsing the left panel must expand the Hermes chat column");
+  await page.locator("#panel-l1-tab").click();
+  await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed"));
   assert.equal(await page.locator('head link[data-bairui-overlay][href="/assets/bairui-bailongma.css"]').count(), 1, "BaiRui overlay link is not in the document head");
   assert.equal((await page.request.get(`${baseUrl}/assets/bairui-bailongma.css`)).status(), 200, "BaiRui overlay stylesheet request failed");
   assert.equal(await page.locator('.bairui-attach-button[data-action="attach-image"]').count(), 1);
@@ -105,6 +115,16 @@ async function ordinaryMobile(browser, baseUrl) {
   const page = await context.newPage();
   await login(page, baseUrl, fixtureCredentials.user, "/app");
   await page.locator("#graph").waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  await page.locator("#panel-l1-tab").click();
+  await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  const mobilePanel = await page.locator("#panel-l1").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, viewport: innerWidth };
+  });
+  assert.ok(mobilePanel.left >= 0 && mobilePanel.right <= mobilePanel.viewport, `mobile left panel is not a bounded drawer: ${JSON.stringify(mobilePanel)}`);
+  await page.locator(".bairui-panel-scrim").click({ position: { x: 380, y: 500 } });
+  await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator('.bairui-platform-tools [data-action="workspace"]').click();
   await page.locator('.bw-nav [data-view="memory"]').click();
   await page.getByText("Hermes memory mapping", { exact: true }).waitFor();
