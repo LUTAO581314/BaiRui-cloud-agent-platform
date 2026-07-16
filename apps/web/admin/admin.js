@@ -1,7 +1,7 @@
 const shell = document.querySelector(".control-shell");
 const role = shell.dataset.adminRole;
 const ownOrganizationId = shell.dataset.organizationId;
-const state = { view: "overview", organizationId: role === "platform_admin" ? "" : ownOrganizationId };
+const state = { view: "overview", organizationId: role === "platform_admin" ? "" : ownOrganizationId, agentId: "" };
 
 async function request(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
@@ -86,6 +86,44 @@ function publicMetadata(value) {
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 
+function showError(error) {
+  const message = document.querySelector("#admin-error");
+  message.textContent = `操作失败：${error.message}`;
+  message.hidden = false;
+}
+
+function operationReason(title) {
+  const dialog = document.querySelector("#operation-reason-dialog");
+  const input = document.querySelector("#operation-reason");
+  document.querySelector("#operation-reason-title").textContent = title;
+  input.value = "";
+  dialog.showModal();
+  return new Promise((resolve) => dialog.addEventListener("close", () => {
+    const reason = input.value.trim();
+    resolve(dialog.returnValue === "confirm" && reason.length >= 10 ? reason : null);
+  }, { once: true }));
+}
+
+async function issueControl(action, payload = {}, options = {}) {
+  try {
+    const agentId = options.agentId ?? state.agentId;
+    if (!agentId) throw new Error("请先选择目标 Agent");
+    const reason = options.reasonRequired ? await operationReason(`确认 ${action}`) : null;
+    if (options.reasonRequired && !reason) return;
+    await request(scoped("/api/admin/control-commands"), { method: "POST", body: JSON.stringify({ agentId, action, ...payload, ...(reason ? { reason } : {}) }) });
+    await refresh();
+  } catch (error) { showError(error); }
+}
+
+async function decideApproval(approval, decision) {
+  try {
+    const reason = await operationReason(decision === "approved" ? `批准 ${approval.action}` : `拒绝 ${approval.action}`);
+    if (!reason) return;
+    await request(`/api/admin/control-approvals/${encodeURIComponent(approval.id)}`, { method: "PATCH", body: JSON.stringify({ decision, reason }) });
+    await loadRelease();
+  } catch (error) { showError(error); }
+}
+
 async function fleetData() {
   return (await request(scoped("/api/admin/agents"))).agents;
 }
@@ -122,12 +160,13 @@ async function loadAgents() {
 }
 
 async function loadOperations() {
-  const [usage, telemetry] = await Promise.all([request(scoped("/api/admin/usage")), request(scoped("/api/admin/telemetry"))]);
+  const [usage, telemetry, commands] = await Promise.all([request(scoped("/api/admin/usage")), request(scoped("/api/admin/telemetry")), request(scoped("/api/admin/control-commands"))]);
   const totals = usage.rollups.reduce((sum, item) => ({ runs: sum.runs + item.runCount, failures: sum.failures + item.failedRunCount, tokens: sum.tokens + item.inputTokens + item.outputTokens, latency: sum.latency + item.latencySumMs }), { runs: 0, failures: 0, tokens: 0, latency: 0 });
   document.querySelector("#usage-runs").textContent = formatNumber(totals.runs);
   document.querySelector("#usage-failures").textContent = formatNumber(totals.failures);
   document.querySelector("#usage-tokens").textContent = formatNumber(totals.tokens);
   document.querySelector("#usage-latency").textContent = totals.runs ? `${formatNumber(totals.latency / totals.runs)} ms` : "-";
+  rows("control-command-rows", commands.commands, [item => formatTime(item.createdAt), item => item.agentId, item => item.action, item => statusNode(item.state), item => item.approvalId ?? "不需要", item => item.requestedBy]);
   rows("telemetry-rows", telemetry.events, [item => formatTime(item.occurredAt), item => statusNode(item.severity), item => item.agentId, item => item.layer, item => item.componentId, item => item.eventType, item => item.traceId]);
 }
 
@@ -157,13 +196,30 @@ async function loadChannels() {
 
 async function loadConfig() {
   const { revisions } = await request(scoped("/api/admin/config-revisions"));
-  rows("config-rows", revisions, [item => `#${item.revision}`, item => item.agentId ?? "平台", item => statusNode(item.status), item => item.contentHash?.slice(0, 16), item => item.createdBy, item => formatTime(item.createdAt)]);
+  rows("config-rows", revisions, [item => `#${item.revision}`, item => item.agentId ?? "平台", item => statusNode(item.status), item => item.contentHash?.slice(0, 16), item => item.createdBy, item => formatTime(item.createdAt), item => {
+    const group = document.createElement("div");
+    group.className = "table-actions";
+    if (role === "platform_admin" && item.agentId) {
+      group.append(commandButton("暂存", () => issueControl("config.stage", { configRevisionId: item.id }, { agentId: item.agentId })));
+      group.append(commandButton("应用", () => issueControl("config.apply", { configRevisionId: item.id }, { agentId: item.agentId, reasonRequired: true })));
+    }
+    return group;
+  }]);
 }
 
 async function loadVersions() {
-  const [upstreams, releases] = await Promise.all([request("/api/admin/upstreams"), request("/api/admin/releases")]);
+  const [upstreams, releases, manifests] = await Promise.all([request("/api/admin/upstreams"), request("/api/admin/releases"), request("/api/admin/release-manifests")]);
   rows("upstream-rows", upstreams.candidates, [item => item.upstreamId, item => item.currentRef, item => item.candidateRef, item => item.compatibilityTestRunId, item => statusNode(item.status), item => formatTime(item.updatedAt)]);
   rows("release-rows", releases.releases, [item => item.version, item => statusNode(item.status), item => item.agentCommit?.slice(0, 12), item => formatTime(item.createdAt)]);
+  rows("release-manifest-rows", manifests.manifests, [item => item.version, item => statusNode(item.status), item => item.agentCommit?.slice(0, 12), item => item.imageDigest?.slice(0, 34), item => formatTime(item.createdAt), item => {
+    const group = document.createElement("div");
+    group.className = "table-actions";
+    if (role === "platform_admin") {
+      group.append(commandButton("暂存", () => issueControl("release.stage", { releaseId: item.id })));
+      group.append(commandButton("发布", () => issueControl("release.apply", { releaseId: item.id }, { reasonRequired: true })));
+    }
+    return group;
+  }]);
 }
 
 async function updateAlert(alert, status) {
@@ -188,13 +244,22 @@ async function loadAudit() {
 }
 
 async function loadRelease() {
-  const { gates } = await request(scoped("/api/admin/release-gates"));
+  const [{ gates }, { approvals }] = await Promise.all([request(scoped("/api/admin/release-gates")), request(scoped("/api/admin/control-approvals"))]);
   rows("release-gate-rows", gates, [item => item.gateName, item => statusNode(item.outcome), item => item.deploymentId, item => publicMetadata(item.evidenceRefs), item => formatTime(item.evaluatedAt)]);
+  rows("approval-rows", approvals, [item => formatTime(item.createdAt), item => item.action, item => item.riskLevel, item => item.requestedBy, item => item.reason, item => formatTime(item.expiresAt), item => statusNode(item.decision), item => {
+    const group = document.createElement("div");
+    group.className = "table-actions";
+    if (role === "platform_admin" && item.decision === "pending") {
+      group.append(commandButton("批准", () => decideApproval(item, "approved")));
+      group.append(commandButton("拒绝", () => decideApproval(item, "rejected"), true));
+    }
+    return group;
+  }]);
 }
 
 async function loadBackups() {
   const { backups } = await request(scoped("/api/admin/backups"));
-  rows("backup-rows", backups, [item => item.backupType, item => statusNode(item.status), item => item.deploymentId, item => item.sizeBytes == null ? "-" : `${formatNumber(item.sizeBytes / 1024 / 1024)} MB`, item => item.encrypted ? "是" : "否", item => formatTime(item.verifiedAt), item => formatTime(item.expiresAt)]);
+  rows("backup-rows", backups, [item => item.backupType, item => statusNode(item.status), item => item.deploymentId, item => item.sizeBytes == null ? "-" : `${formatNumber(item.sizeBytes / 1024 / 1024)} MB`, item => item.encrypted ? "是" : "否", item => formatTime(item.verifiedAt), item => formatTime(item.expiresAt), item => ["created", "verified"].includes(item.status) ? commandButton("验证", () => issueControl("backup.verify", { backupId: item.id })) : "-"]);
 }
 
 async function loadRetention() {
@@ -245,11 +310,18 @@ async function showView(id) {
 
 document.querySelectorAll("[data-admin-view]").forEach(button => button.addEventListener("click", () => showView(button.dataset.adminView)));
 document.querySelectorAll("[data-goto]").forEach(button => button.addEventListener("click", () => showView(button.dataset.goto)));
+document.querySelectorAll("[data-control-action]").forEach(button => button.addEventListener("click", () => {
+  const action = button.dataset.controlAction;
+  const payload = action === "probe.run" ? { probeIds: ["runtime.health", "hermes.health"] } : action === "contract.test" ? { suiteId: "runtime-boundary-v1" } : { suiteId: "agent-runtime-v1" };
+  return issueControl(action, payload);
+}));
 document.querySelector("#refresh-admin").addEventListener("click", refresh);
 document.querySelector("#logout-button").addEventListener("click", async () => { await request("/api/auth/logout", { method: "POST" }); location.href = "/login"; });
 
 document.querySelector("#new-provider-channel")?.addEventListener("click", () => { document.querySelector("#provider-channel-form").hidden = false; });
 document.querySelector("#new-sensitive-grant")?.addEventListener("click", () => { document.querySelector("#sensitive-grant-form").hidden = false; });
+document.querySelector("#new-release-manifest")?.addEventListener("click", () => { document.querySelector("#release-manifest-form").hidden = false; });
+document.querySelector("#create-agent-backup")?.addEventListener("click", () => issueControl("backup.create", { backupPolicyId: "manual" }));
 document.querySelectorAll("[data-close-form]").forEach(button => button.addEventListener("click", () => { document.querySelector(`#${button.dataset.closeForm}`).hidden = true; }));
 
 document.querySelector("#provider-channel-form")?.addEventListener("submit", async event => {
@@ -289,6 +361,17 @@ document.querySelector("#sensitive-grant-form")?.addEventListener("submit", asyn
   await loadSensitive();
 });
 
+document.querySelector("#release-manifest-form")?.addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    await request("/api/admin/release-manifests", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    form.reset();
+    form.hidden = true;
+    await loadVersions();
+  } catch (error) { showError(error); }
+});
+
 document.querySelector("#refresh-hotspots")?.addEventListener("click", async event => {
   event.currentTarget.disabled = true;
   try { await request(scoped("/api/admin/hotspots/refresh", role === "platform_admin"), { method: "POST", body: "{}" }); await loadIntegrations(); }
@@ -305,11 +388,30 @@ async function loadOrganizations() {
     option.textContent = organization.name;
     select.append(option);
   }
-  select.addEventListener("change", async () => { state.organizationId = select.value; await refresh(); });
+  select.addEventListener("change", async () => { state.organizationId = select.value; state.agentId = ""; await loadAgentOptions(); await refresh(); });
+}
+
+async function loadAgentOptions() {
+  const select = document.querySelector("#control-agent-scope");
+  const agents = await fleetData();
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "选择 Agent";
+  select.append(placeholder);
+  for (const agent of agents) {
+    const option = document.createElement("option");
+    option.value = agent.id;
+    option.textContent = `${agent.name} · ${agent.owner?.displayName ?? agent.ownerUserId}`;
+    select.append(option);
+  }
+  if (agents.some((agent) => agent.id === state.agentId)) select.value = state.agentId;
+  select.onchange = () => { state.agentId = select.value; };
 }
 
 async function bootstrap() {
   await loadOrganizations();
+  await loadAgentOptions();
   await showView("overview");
 }
 bootstrap().catch((error) => {

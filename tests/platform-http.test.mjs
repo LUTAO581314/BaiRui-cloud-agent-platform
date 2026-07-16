@@ -400,6 +400,48 @@ test("control-plane administration is scoped, masked and audited", async (t) => 
   assert.ok(audit.events.some((item) => item.action === "alert.acknowledged"));
 });
 
+test("administrators issue governed control commands through approval-gated workflows", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const userCookie = await login(context.baseUrl, "user@example.test");
+  const orgCookie = await login(context.baseUrl, "org-admin@example.test");
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+  const server = await context.repository.createServer({ id: "server_control", organizationId: "org_a", name: "Control host", status: "healthy" });
+  const provision = await context.repository.requestAgentProvisioning({ agentId: context.agent.id, requestedBy: context.users.platformAdmin.id, provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" }, secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { encrypted: true }, hermesApiServerKey: { encrypted: true }, agentControlToken: { encrypted: true } }, agentCredentialHash: "c".repeat(64), agentCredentialHint: "test" });
+  const [provisionCommand] = await context.repository.leaseControlCommands({ serverId: server.id, limit: 5, leaseSeconds: 120 });
+  for (const state of ["accepted", "running"]) await context.repository.recordCommandReceipt({ commandId: provisionCommand.command_id, serverId: server.id, attempt: provisionCommand.attempt, state });
+  await context.repository.recordCommandReceipt({ commandId: provisionCommand.command_id, serverId: server.id, attempt: provisionCommand.attempt, state: "succeeded", runtimeEndpointRef: "http://127.0.0.1:19123" });
+
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "probe.run", probeIds: ["runtime.health"] }) })).status, 403);
+  const probeResponse = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: orgCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "probe.run", probeIds: ["runtime.health"] }) });
+  assert.equal(probeResponse.status, 202);
+  assert.equal((await probeResponse.json()).approval, null);
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: orgCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "config.apply", configRevisionId: provision.runtime.configRevisionId, reason: "Apply an approved configuration revision" }) })).status, 403);
+
+  const applyResponse = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "config.apply", configRevisionId: provision.runtime.configRevisionId, reason: "Apply an approved configuration revision" }) });
+  assert.equal(applyResponse.status, 202);
+  const apply = await applyResponse.json();
+  assert.equal(apply.approval.decision, "pending");
+  const leasedBeforeApproval = await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 });
+  assert.ok(leasedBeforeApproval.some((item) => item.action === "probe.run"));
+  assert.ok(!leasedBeforeApproval.some((item) => item.command_id === apply.command.id));
+  const decision = await fetch(`${context.baseUrl}/api/admin/control-approvals/${apply.approval.id}`, { method: "PATCH", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ decision: "approved", reason: "Reviewed configuration scope and rollback evidence" }) });
+  assert.equal(decision.status, 200);
+  const leasedAfterApproval = await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 });
+  assert.ok(leasedAfterApproval.some((item) => item.command_id === apply.command.id));
+
+  const digest = (letter) => `ghcr.io/bairui/image@sha256:${letter.repeat(64)}`;
+  const manifestResponse = await fetch(`${context.baseUrl}/api/admin/release-manifests`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ version: "1.0.0", agentCommit: "a".repeat(40), imageDigest: digest("a"), hermesImage: digest("b"), runtimeImage: digest("c"), sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64) }) });
+  assert.equal(manifestResponse.status, 201);
+  const manifest = (await manifestResponse.json()).manifest;
+  assert.equal(manifest.compatibility.runtime_image, digest("c"));
+  const releaseStage = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "release.stage", releaseId: manifest.id }) });
+  assert.equal(releaseStage.status, 202);
+  const releaseLease = (await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 })).find((item) => item.action === "release.stage");
+  assert.equal(releaseLease.release.runtime_image, digest("c"));
+  assert.equal(releaseLease.arguments.runtime_image, undefined);
+});
+
 test("users own Obsidian notes and can read normalized hotspot data", async (t) => {
   const runtimeClient = { invokeIntegration: async () => ({ status: "completed", completed_at: "2026-07-15T00:00:01.000Z", output: { sources: [{ source_id: "baidu", status: "ready", count: 1 }], items: [{ external_id: "one", source_id: "baidu", source_name: "百度热搜", rank: 1, title: "测试热点", url: "https://www.baidu.com/", mobile_url: "", heat: "", category: "", fetched_at: "2026-07-15T00:00:00.000Z" }] } }) };
   const context = await setup({ runtimeClient });

@@ -23,6 +23,9 @@ const mapAudit = (row) => ({ id: row.id, organizationId: row.organization_id, ac
 const mapLicense = (row) => ({ id: row.id, organizationId: row.organization_id, plan: row.plan, status: row.status, document: row.document, issuedAt: row.issued_at?.toISOString?.() ?? row.issued_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapServer = (row) => ({ id: row.id, organizationId: row.organization_id, name: row.name, status: row.status, runtimeVersion: row.runtime_version, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapRelease = (row) => ({ id: row.id, version: row.version, agentCommit: row.agent_commit, status: row.status, notes: row.notes, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
+const mapControlCommand = (row) => row ? ({ id: row.id, organizationId: row.organization_id, deploymentId: row.deployment_id, agentId: row.agent_id, idempotencyKey: row.idempotency_key, action: row.action, arguments: row.arguments, approvalId: row.approval_id, state: row.state, priority: row.priority, requestedBy: row.requested_by, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapControlApproval = (row) => row ? ({ id: row.id, organizationId: row.organization_id, commandId: row.command_id, action: row.action, riskLevel: row.risk_level, requestedBy: row.requested_by, decidedBy: row.decided_by, decision: row.decision, reason: row.reason, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, decidedAt: row.decided_at?.toISOString?.() ?? row.decided_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
+const mapReleaseManifest = (row) => row ? ({ id: row.id, releaseId: row.release_id, version: row.version, agentCommit: row.agent_commit, imageDigest: row.image_digest, sbomUri: row.sbom_uri, provenanceUri: row.provenance_uri, signature: row.signature, migrationVersion: row.migration_version, compatibility: row.compatibility, status: row.status, createdBy: row.created_by, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
 const mapProviderConfiguration = (row) => row ? ({ organizationId: row.organization_id, provider: row.provider, baseUrl: row.base_url, model: row.model, apiKeyEnvelope: row.api_key_envelope, keyHint: row.key_hint, applyStatus: row.apply_status, updatedBy: row.updated_by, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapProviderChannel = (row) => row ? ({ id: row.id, organizationId: row.organization_id, name: row.name, provider: row.provider, baseUrl: row.base_url, model: row.model, apiKeyEnvelope: row.api_key_envelope, keyHint: row.key_hint, status: row.status, priority: row.priority, weight: row.weight, maxConcurrency: row.max_concurrency, monthlyBudgetUsd: row.monthly_budget_usd === null ? null : Number(row.monthly_budget_usd), enabled: row.enabled, lastErrorCode: row.last_error_code, updatedBy: row.updated_by, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapModelPolicy = (row) => row ? ({ organizationId: row.organization_id, allowedModels: row.allowed_models, defaultModel: row.default_model, userCustomKeysAllowed: row.user_custom_keys_allowed, dailyTokenLimit: row.daily_token_limit === null ? null : Number(row.daily_token_limit), monthlyBudgetUsd: row.monthly_budget_usd === null ? null : Number(row.monthly_budget_usd), updatedBy: row.updated_by, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
@@ -402,6 +405,111 @@ export class PostgresPlatformRepository {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
+  async requestControlOperation(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: deploymentRows } = await client.query("SELECT deployment.* FROM control_deployments deployment JOIN agents agent ON agent.id=deployment.agent_id WHERE deployment.agent_id=$1 AND deployment.organization_id=$2 AND deployment.status<>'revoked' ORDER BY deployment.created_at DESC LIMIT 1 FOR UPDATE OF deployment", [input.agentId, input.organizationId]);
+      const deployment = deploymentRows[0];
+      if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
+      if (["config.stage", "config.apply"].includes(input.action)) {
+        const { rowCount } = await client.query("SELECT id FROM config_revisions WHERE id=$1 AND organization_id=$2 AND agent_id=$3", [input.arguments.config_revision_id, input.organizationId, input.agentId]);
+        if (rowCount !== 1) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      if (input.action === "backup.verify") {
+        const { rowCount } = await client.query("SELECT id FROM backup_records WHERE id=$1 AND deployment_id=$2", [input.arguments.backup_id, deployment.id]);
+        if (rowCount !== 1) throw Object.assign(new Error("Backup does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      if (["release.stage", "release.apply"].includes(input.action)) {
+        const { rowCount } = await client.query("SELECT id FROM release_manifests WHERE id=$1 AND status IN ('candidate','approved','released')", [input.arguments.release_id]);
+        if (rowCount !== 1) throw Object.assign(new Error("Release manifest is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      if (input.action === "release.rollback") {
+        const { rows } = await client.query("SELECT id FROM release_manifests WHERE id=ANY($1::text[])", [[input.arguments.release_id, input.arguments.rollback_release_id]]);
+        if (new Set(rows.map((row) => row.id)).size !== 2) throw Object.assign(new Error("Rollback manifests are unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      if (input.action === "upstream.check" && input.arguments.candidate_id) {
+        const { rowCount } = await client.query("SELECT id FROM upstream_candidates WHERE id=$1 AND upstream_id=$2", [input.arguments.candidate_id, input.arguments.upstream_id]);
+        if (rowCount !== 1) throw Object.assign(new Error("Upstream candidate is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      if (input.action === "credential.revoke") {
+        const { rowCount } = await client.query("SELECT id FROM agent_runtime_credentials WHERE id=$1 AND agent_id=$2 AND status='active'", [input.arguments.identity_id, input.agentId]);
+        if (rowCount !== 1) throw Object.assign(new Error("Agent credential is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+      }
+      const idempotencyKey = input.idempotencyKey ?? `${deployment.id}/${input.action}/${randomUUID()}`;
+      const { rows: existingRows } = await client.query("SELECT command.*, $2::text AS organization_id, $3::text AS agent_id FROM control_commands command WHERE command.deployment_id=$1 AND command.idempotency_key=$4", [deployment.id, input.organizationId, input.agentId, idempotencyKey]);
+      if (existingRows[0]) { await client.query("COMMIT"); return { command: mapControlCommand(existingRows[0]), approval: null }; }
+      const commandId = input.commandId ?? randomUUID();
+      const approvalId = input.approvalRequired ? input.approvalId ?? randomUUID() : null;
+      const expiresAt = new Date(Date.now() + Math.max(5 * 60_000, Math.min(input.expiresInMs ?? 30 * 60_000, 24 * 60 * 60_000))).toISOString();
+      await client.query(
+        `INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, approval_id, expected_observation_version, state, priority, expires_at, requested_by)
+         VALUES ($1,$2,$3,$4,'bairui.supervisor',$5,$6,$7,$8,'queued',$9,$10,$11)`,
+        [commandId, deployment.id, idempotencyKey, input.action, input.agentId, input.arguments, approvalId, Number(deployment.observed_state_version), input.priority ?? 100, expiresAt, input.requestedBy]
+      );
+      let approval = null;
+      if (approvalId) {
+        const { rows } = await client.query("INSERT INTO control_approvals (id, command_id, risk_level, requested_by, decision, reason, expires_at) VALUES ($1,$2,$3,$4,'pending',$5,$6) RETURNING *", [approvalId, commandId, input.riskLevel ?? "high", input.requestedBy, input.reason ?? "", expiresAt]);
+        approval = mapControlApproval({ ...rows[0], organization_id: input.organizationId, action: input.action });
+      }
+      if (["probe.run", "contract.test", "smoke.test"].includes(input.action) && input.arguments.test_run_id) {
+        const testType = input.action === "probe.run" ? "probe" : input.action === "contract.test" ? "contract" : "smoke";
+        const suiteId = input.action === "probe.run" ? input.arguments.probe_ids.join(",") : input.arguments.suite_id;
+        await client.query("INSERT INTO test_runs (id, deployment_id, suite_id, test_type, status) VALUES ($1,$2,$3,$4,'queued') ON CONFLICT (id) DO NOTHING", [input.arguments.test_run_id, deployment.id, suiteId, testType]);
+      }
+      if (input.action === "backup.create" && input.arguments.backup_id) await client.query("INSERT INTO backup_records (id, deployment_id, policy_id, backup_type, status, encrypted) VALUES ($1,$2,$3,'runtime-files','creating',true) ON CONFLICT (id) DO NOTHING", [input.arguments.backup_id, deployment.id, input.arguments.backup_policy_id]);
+      await client.query("COMMIT");
+      return { command: { id: commandId, organizationId: input.organizationId, deploymentId: deployment.id, agentId: input.agentId, idempotencyKey, action: input.action, arguments: input.arguments, approvalId, state: "queued", priority: input.priority ?? 100, requestedBy: input.requestedBy, expiresAt, createdAt: new Date().toISOString() }, approval };
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async listControlCommands(organizationId, limit = 500) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 2000));
+    const query = organizationId
+      ? ["SELECT command.*, deployment.organization_id, deployment.agent_id FROM control_commands command JOIN control_deployments deployment ON deployment.id=command.deployment_id WHERE deployment.organization_id=$1 ORDER BY command.created_at DESC LIMIT $2", [organizationId, safeLimit]]
+      : ["SELECT command.*, deployment.organization_id, deployment.agent_id FROM control_commands command JOIN control_deployments deployment ON deployment.id=command.deployment_id ORDER BY command.created_at DESC LIMIT $1", [safeLimit]];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapControlCommand);
+  }
+
+  async listControlApprovals(organizationId, limit = 500) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 2000));
+    const query = organizationId
+      ? ["SELECT approval.*, command.action, deployment.organization_id FROM control_approvals approval JOIN control_commands command ON command.id=approval.command_id JOIN control_deployments deployment ON deployment.id=command.deployment_id WHERE deployment.organization_id=$1 ORDER BY approval.created_at DESC LIMIT $2", [organizationId, safeLimit]]
+      : ["SELECT approval.*, command.action, deployment.organization_id FROM control_approvals approval JOIN control_commands command ON command.id=approval.command_id JOIN control_deployments deployment ON deployment.id=command.deployment_id ORDER BY approval.created_at DESC LIMIT $1", [safeLimit]];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapControlApproval);
+  }
+
+  async decideControlApproval(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query("SELECT approval.*, command.action, deployment.organization_id FROM control_approvals approval JOIN control_commands command ON command.id=approval.command_id JOIN control_deployments deployment ON deployment.id=command.deployment_id WHERE approval.id=$1 FOR UPDATE OF approval", [input.approvalId]);
+      const current = rows[0];
+      if (!current || (input.organizationId && current.organization_id !== input.organizationId)) { await client.query("ROLLBACK"); return null; }
+      if (current.decision !== "pending" || new Date(current.expires_at).getTime() <= Date.now()) throw Object.assign(new Error("Approval is no longer pending"), { code: "approval_not_pending", statusCode: 409 });
+      const { rows: updated } = await client.query("UPDATE control_approvals SET decision=$2, decided_by=$3, reason=$4, decided_at=now() WHERE id=$1 RETURNING *", [input.approvalId, input.decision, input.decidedBy, input.reason]);
+      if (input.decision === "rejected") await client.query("UPDATE control_commands SET state='cancelled', updated_at=now() WHERE id=$1 AND state='queued'", [current.command_id]);
+      await client.query("COMMIT");
+      return mapControlApproval({ ...updated[0], organization_id: current.organization_id, action: current.action });
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async createReleaseManifest(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO release_manifests (id, release_id, version, agent_commit, image_digest, sbom_uri, provenance_uri, signature, migration_version, compatibility, status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [input.id ?? randomUUID(), input.releaseId ?? null, input.version, input.agentCommit, input.imageDigest, input.sbomUri, input.provenanceUri, input.signature, input.migrationVersion ?? null, input.compatibility, input.status ?? "candidate", input.createdBy]
+    );
+    return mapReleaseManifest(rows[0]);
+  }
+
+  async listReleaseManifests() {
+    const { rows } = await this.pool.query("SELECT * FROM release_manifests ORDER BY created_at DESC");
+    return rows.map(mapReleaseManifest);
+  }
+
   async createServerCredential(input) {
     const client = await this.pool.connect();
     try {
@@ -439,11 +547,15 @@ export class PostgresPlatformRepository {
       const { rows } = await client.query(
         `SELECT command.*, deployment.agent_id, deployment.server_id, deployment.organization_id,
                 runtime.id AS runtime_id, runtime.owner_user_id, runtime.workspace_ref,
-                config.config_document, config.secret_envelope
+                config.config_document, config.secret_envelope,
+                release.id AS release_manifest_id, release.version AS release_version, release.compatibility AS release_compatibility,
+                rollback.id AS rollback_manifest_id, rollback.version AS rollback_version, rollback.compatibility AS rollback_compatibility
          FROM control_commands command
          JOIN control_deployments deployment ON deployment.id=command.deployment_id
          JOIN agent_runtimes runtime ON runtime.agent_id=deployment.agent_id
          LEFT JOIN config_revisions config ON config.id=(command.arguments->>'config_revision_id')
+         LEFT JOIN release_manifests release ON release.id=(command.arguments->>'release_id')
+         LEFT JOIN release_manifests rollback ON rollback.id=(command.arguments->>'rollback_release_id')
          WHERE deployment.server_id=$1 AND command.state='queued' AND command.not_before <= now() AND command.expires_at > now()
            AND (command.approval_id IS NULL OR EXISTS (SELECT 1 FROM control_approvals approval WHERE approval.id=command.approval_id AND approval.command_id=command.id AND approval.decision='approved' AND approval.expires_at > now()))
          ORDER BY command.priority, command.created_at
@@ -465,7 +577,9 @@ export class PostgresPlatformRepository {
           expected_observation_version: Number(row.expected_observation_version), created_at: row.created_at.toISOString(), expires_at: row.expires_at.toISOString(),
           attempt, lease_expires_at: leaseExpiresAt,
           placement: { server_id: row.server_id, agent_id: row.agent_id, runtime_id: row.runtime_id, organization_id: row.organization_id, user_id: row.owner_user_id, workspace_ref: row.workspace_ref },
-          config: row.config_document ? { document: row.config_document, secret_envelope: row.secret_envelope } : null
+          config: row.config_document ? { document: row.config_document, secret_envelope: row.secret_envelope } : null,
+          ...(row.release_manifest_id ? { release: { id: row.release_manifest_id, version: row.release_version, hermes_image: row.release_compatibility?.hermes_image, runtime_image: row.release_compatibility?.runtime_image } } : {}),
+          ...(row.rollback_manifest_id ? { rollback_release: { id: row.rollback_manifest_id, version: row.rollback_version, hermes_image: row.rollback_compatibility?.hermes_image, runtime_image: row.rollback_compatibility?.runtime_image } } : {})
         });
       }
       await client.query("COMMIT");
@@ -520,11 +634,43 @@ export class PostgresPlatformRepository {
         await client.query("UPDATE agents agent SET status='failed', initialization_status='failed', last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed"]);
         await client.query("UPDATE control_deployments SET status='degraded', updated_at=now() WHERE id=$1", [command.deployment_id]);
       }
-      if (input.state === "failed" && command.action !== "deployment.provision") {
+      if (input.state === "failed" && ["deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "config.apply", "release.apply", "release.rollback", "service.restart", "credential.revoke"].includes(command.action)) {
         await client.query("UPDATE agent_runtimes runtime SET status=CASE WHEN $4='deployment.delete' THEN 'degraded' ELSE runtime.status END, last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed", command.action]);
         await client.query("UPDATE agents agent SET status='degraded', initialization_status=CASE WHEN $4='deployment.delete' THEN 'failed' ELSE agent.initialization_status END, last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed", command.action]);
         await client.query("UPDATE control_deployments SET status='degraded', updated_at=now() WHERE id=$1", [command.deployment_id]);
       }
+      if (["config.stage", "config.apply"].includes(command.action)) {
+        const configId = command.arguments.config_revision_id;
+        if (input.state === "running" && command.action === "config.apply") await client.query("UPDATE config_revisions SET status='applying' WHERE id=$1", [configId]);
+        if (input.state === "succeeded") await client.query("UPDATE config_revisions SET status=$2 WHERE id=$1", [configId, command.action === "config.stage" ? "staged" : "applied"]);
+        if (input.state === "failed") await client.query("UPDATE config_revisions SET status='failed' WHERE id=$1", [configId]);
+        if (input.state === "succeeded" && command.action === "config.apply") await client.query("UPDATE agent_runtimes runtime SET config_revision_id=$2, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, configId]);
+      }
+      if (["probe.run", "contract.test", "smoke.test"].includes(command.action) && command.arguments.test_run_id) {
+        const status = input.state === "running" ? "running" : input.state === "succeeded" ? "passed" : input.state === "failed" ? "failed" : null;
+        if (status) await client.query("UPDATE test_runs SET status=$2, started_at=CASE WHEN $2='running' THEN COALESCE(started_at,now()) ELSE started_at END, completed_at=CASE WHEN $2 IN ('passed','failed') THEN now() ELSE completed_at END WHERE id=$1", [command.arguments.test_run_id, status]);
+      }
+      if (["backup.create", "backup.verify"].includes(command.action)) {
+        const backupId = command.arguments.backup_id;
+        if (backupId && input.state === "running" && command.action === "backup.verify") await client.query("UPDATE backup_records SET status='verifying' WHERE id=$1", [backupId]);
+        if (backupId && input.state === "succeeded" && command.action === "backup.create") {
+          const sha256 = input.evidenceRefs?.find((item) => item.startsWith("sha256:"))?.slice(7) ?? null;
+          await client.query("UPDATE backup_records SET status='created', storage_uri=$2, sha256=$3, size_bytes=$4 WHERE id=$1", [backupId, `bairui-backup://${input.serverId}/${backupId}`, sha256, input.resultSummary?.bytes ?? null]);
+        }
+        if (backupId && input.state === "succeeded" && command.action === "backup.verify") await client.query("UPDATE backup_records SET status='verified', verified_at=now() WHERE id=$1", [backupId]);
+        if (backupId && input.state === "failed") await client.query("UPDATE backup_records SET status='failed' WHERE id=$1", [backupId]);
+      }
+      if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
+        if (command.action === "release.stage" && input.state === "succeeded") await client.query("UPDATE release_manifests SET status='approved' WHERE id=$1 AND status='candidate'", [command.arguments.release_id]);
+        if (command.action === "release.apply" && input.state === "running") await client.query("UPDATE release_manifests SET status='rolling_out' WHERE id=$1", [command.arguments.release_id]);
+        if (command.action === "release.apply" && input.state === "succeeded") await client.query("UPDATE release_manifests SET status='released' WHERE id=$1", [command.arguments.release_id]);
+        if (command.action === "release.rollback" && input.state === "succeeded") {
+          await client.query("UPDATE release_manifests SET status='withdrawn' WHERE id=$1", [command.arguments.release_id]);
+          await client.query("UPDATE release_manifests SET status='released' WHERE id=$1", [command.arguments.rollback_release_id]);
+        }
+        if (input.state === "failed") await client.query("UPDATE release_manifests SET status='blocked' WHERE id=$1", [command.arguments.release_id]);
+      }
+      if (command.action === "upstream.check" && command.arguments.candidate_id && ["succeeded", "failed"].includes(input.state)) await client.query("UPDATE upstream_candidates SET status=$2, updated_at=now() WHERE id=$1", [command.arguments.candidate_id, input.state === "succeeded" ? "compatible" : "incompatible"]);
       let receipt = inserted[0];
       if (!receipt) ({ rows: [receipt] } = await client.query("SELECT * FROM command_receipts WHERE command_id=$1 AND attempt=$2 AND state=$3", [command.id, input.attempt, input.state]));
       await client.query("COMMIT");

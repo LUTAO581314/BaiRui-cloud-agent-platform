@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   PERMISSIONS,
   ROLES,
@@ -34,6 +34,10 @@ const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
+const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
 
 function numericMetrics(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -161,6 +165,26 @@ function publicProviderChannel(channel) {
 function boundedInteger(value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= minimum && number <= maximum ? number : null;
+}
+
+function controlOperationArguments(action, body) {
+  const id = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value) ? value : null;
+  if (action === "snapshot.collect") return {};
+  if (action === "probe.run") {
+    const probeIds = Array.isArray(body.probeIds) ? [...new Set(body.probeIds)].filter((item) => ["runtime.health", "hermes.health"].includes(item)) : [];
+    return probeIds.length ? { probe_ids: probeIds, test_run_id: randomUUID() } : null;
+  }
+  if (action === "contract.test") return ["runtime-boundary-v1", "hermes-api-v1"].includes(body.suiteId) ? { suite_id: body.suiteId, test_run_id: randomUUID() } : null;
+  if (action === "smoke.test") return body.suiteId === "agent-runtime-v1" ? { suite_id: body.suiteId, test_run_id: randomUUID() } : null;
+  if (action === "upstream.check") return ["hermes", "bairui-runtime"].includes(body.upstreamId) ? { upstream_id: body.upstreamId, ...(id(body.candidateId) ? { candidate_id: body.candidateId } : {}) } : null;
+  if (["config.stage", "config.apply"].includes(action)) return id(body.configRevisionId) ? { config_revision_id: body.configRevisionId } : null;
+  if (action === "backup.create") return id(body.backupPolicyId) ? { backup_policy_id: body.backupPolicyId, backup_id: randomUUID() } : null;
+  if (action === "backup.verify") return id(body.backupId) ? { backup_id: body.backupId } : null;
+  if (["release.stage", "release.apply"].includes(action)) return id(body.releaseId) ? { release_id: body.releaseId } : null;
+  if (action === "release.rollback") return id(body.releaseId) && id(body.rollbackReleaseId) ? { release_id: body.releaseId, rollback_release_id: body.rollbackReleaseId } : null;
+  if (action === "service.restart") return ["hermes", "runtime-boundary"].includes(body.serviceId) ? { service_id: body.serviceId } : null;
+  if (action === "credential.revoke") return id(body.identityId) ? { identity_id: body.identityId } : null;
+  return null;
 }
 
 function publicChannelBinding(binding) {
@@ -929,6 +953,59 @@ export function createPlatformApp(options) {
         if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         return json(response, 200, { events: (await repository.listAudit(scope)).slice(0, 2000) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/control-commands") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { commands: await repository.listControlCommands(scope, url.searchParams.get("limit")) });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/control-commands") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_MANAGE, { organizationId: principal.organizationId });
+        const body = await readJson(request);
+        if (!ADMIN_CONTROL_ACTIONS.has(body.action) || typeof body.agentId !== "string") return json(response, 400, { error: "invalid_control_operation" });
+        if (PLATFORM_CONTROL_ACTIONS.has(body.action) && principal.role !== ROLES.PLATFORM_ADMIN) throw new AuthorizationError();
+        const agent = await repository.getAgent(body.agentId);
+        if (!agent || (principal.role !== ROLES.PLATFORM_ADMIN && agent.organizationId !== principal.organizationId)) return json(response, 404, { error: "agent_not_found" });
+        const requestedOrganization = url.searchParams.get("organization_id");
+        if (requestedOrganization && requestedOrganization !== agent.organizationId) return json(response, 400, { error: "agent_scope_mismatch" });
+        const operationArguments = controlOperationArguments(body.action, body);
+        if (!operationArguments) return json(response, 400, { error: "invalid_control_arguments" });
+        const approvalRequired = APPROVAL_CONTROL_ACTIONS.has(body.action);
+        if (approvalRequired && (typeof body.reason !== "string" || body.reason.trim().length < 10)) return json(response, 400, { error: "control_reason_required" });
+        const suppliedIdempotencyKey = request.headers["idempotency-key"];
+        const idempotencyToken = typeof suppliedIdempotencyKey === "string" && /^[A-Za-z0-9._:-]{8,128}$/.test(suppliedIdempotencyKey) ? suppliedIdempotencyKey : randomUUID();
+        const result = await repository.requestControlOperation({ organizationId: agent.organizationId, agentId: agent.id, action: body.action, arguments: operationArguments, requestedBy: principal.userId, idempotencyKey: `${agent.id}/${body.action}/${idempotencyToken}`, approvalRequired, riskLevel: ["release.apply", "release.rollback", "credential.revoke"].includes(body.action) ? "critical" : approvalRequired ? "high" : "medium", reason: typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : "" });
+        await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: principal.userId, action: "control.command.request", targetType: "control_command", targetId: result.command.id, metadata: { agentId: agent.id, action: body.action, approvalRequired, arguments: operationArguments } });
+        return json(response, 202, result);
+      }
+      if (method === "GET" && url.pathname === "/api/admin/control-approvals") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { approvals: await repository.listControlApprovals(scope, url.searchParams.get("limit")) });
+      }
+      const approvalDecisionMatch = url.pathname.match(/^\/api\/admin\/control-approvals\/([^/]+)$/);
+      if (approvalDecisionMatch && method === "PATCH") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
+        const body = await readJson(request);
+        if (!["approved", "rejected"].includes(body.decision) || typeof body.reason !== "string" || body.reason.trim().length < 10) return json(response, 400, { error: "invalid_approval_decision" });
+        const approval = await repository.decideControlApproval({ approvalId: approvalDecisionMatch[1], decision: body.decision, reason: body.reason.trim().slice(0, 1000), decidedBy: principal.userId });
+        if (!approval) return json(response, 404, { error: "approval_not_found" });
+        await repository.recordAudit({ organizationId: approval.organizationId, actorUserId: principal.userId, action: `control.approval.${body.decision}`, targetType: "control_approval", targetId: approval.id, metadata: { commandId: approval.commandId, action: approval.action, reason: approval.reason } });
+        return json(response, 200, { approval });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/release-manifests") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        return json(response, 200, { manifests: await repository.listReleaseManifests() });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/release-manifests") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
+        const body = await readJson(request);
+        if (typeof body.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.version) || typeof body.agentCommit !== "string" || !/^[0-9a-f]{40}$/.test(body.agentCommit) || !IMMUTABLE_IMAGE.test(body.hermesImage) || !IMMUTABLE_IMAGE.test(body.runtimeImage) || !IMMUTABLE_IMAGE.test(body.imageDigest)) return json(response, 400, { error: "invalid_release_manifest" });
+        const trustedUrl = (value) => { try { const parsed = new URL(value); return parsed.protocol === "https:" && !parsed.username && !parsed.password; } catch { return false; } };
+        if (!trustedUrl(body.sbomUri) || !trustedUrl(body.provenanceUri) || typeof body.signature !== "string" || body.signature.length < 32 || body.signature.length > 20_000) return json(response, 400, { error: "invalid_release_evidence" });
+        const manifest = await repository.createReleaseManifest({ version: body.version, agentCommit: body.agentCommit, imageDigest: body.imageDigest, sbomUri: body.sbomUri, provenanceUri: body.provenanceUri, signature: body.signature, migrationVersion: typeof body.migrationVersion === "string" ? body.migrationVersion.slice(0, 200) : null, compatibility: { hermes_image: body.hermesImage, runtime_image: body.runtimeImage }, status: "candidate", createdBy: principal.userId });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "release.manifest.create", targetType: "release_manifest", targetId: manifest.id, metadata: { version: manifest.version, agentCommit: manifest.agentCommit, imageDigest: manifest.imageDigest } });
+        return json(response, 201, { manifest });
       }
       const alertStatusMatch = url.pathname.match(/^\/api\/admin\/alerts\/([^/]+)\/status$/);
       if (alertStatusMatch && method === "PATCH") {

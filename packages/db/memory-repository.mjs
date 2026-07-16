@@ -41,6 +41,9 @@ export class MemoryPlatformRepository {
   #controlDeployments = [];
   #configRevisions = [];
   #controlCommands = [];
+  #controlApprovals = [];
+  #releaseManifests = [];
+  #testRuns = [];
   #serverCredentials = [];
   #agentRuntimeCredentials = [];
   #machineNonces = new Set();
@@ -300,10 +303,67 @@ export class MemoryPlatformRepository {
     const approvalId = input.request === "delete" ? randomUUID() : null;
     const command = { id: randomUUID(), deploymentId: runtime.deploymentId, agentId: agent.id, action, target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { agent_id: agent.id }, approvalId, expectedObservationVersion: 0, state: "queued", priority: 100, attempt: 0, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: new Date().toISOString() };
     this.#controlCommands.push(command);
+    if (approvalId) this.#controlApprovals.push({ id: approvalId, organizationId: agent.organizationId, commandId: command.id, action, riskLevel: "high", requestedBy: input.requestedBy, decidedBy: input.requestedBy, decision: "approved", reason: input.reason ?? "Agent owner confirmed deletion", expiresAt: command.expiresAt, decidedAt: new Date().toISOString(), createdAt: new Date().toISOString() });
     agent.desiredRuntimeState = input.request === "pause" ? "suspended" : input.request === "resume" ? "running" : "deleted";
     if (input.request === "delete") { agent.initializationStatus = "deleting"; runtime.status = "deleting"; }
     agent.updatedAt = new Date().toISOString();
     return { agentId: agent.id, action, state: "queued", deleted: false, command: { id: command.id, action, state: "queued", approvalId } };
+  }
+
+  async requestControlOperation(input) {
+    const deployment = this.#controlDeployments.findLast((item) => item.agentId === input.agentId && item.organizationId === input.organizationId && item.status !== "revoked");
+    if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
+    if (["config.stage", "config.apply"].includes(input.action) && !this.#configRevisions.some((item) => item.id === input.arguments.config_revision_id && item.organizationId === input.organizationId && item.agentId === input.agentId)) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+    if (input.action === "backup.verify" && !this.#backupRecords.some((item) => item.id === input.arguments.backup_id && item.deploymentId === deployment.id)) throw Object.assign(new Error("Backup does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+    if (["release.stage", "release.apply"].includes(input.action) && !this.#releaseManifests.some((item) => item.id === input.arguments.release_id && ["candidate", "approved", "released"].includes(item.status))) throw Object.assign(new Error("Release manifest is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+    if (input.action === "release.rollback" && ![input.arguments.release_id, input.arguments.rollback_release_id].every((id) => this.#releaseManifests.some((item) => item.id === id))) throw Object.assign(new Error("Rollback manifests are unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+    if (input.action === "upstream.check" && input.arguments.candidate_id && !this.#upstreamCandidates.some((item) => item.id === input.arguments.candidate_id && item.upstreamId === input.arguments.upstream_id)) throw Object.assign(new Error("Upstream candidate is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+    if (input.action === "credential.revoke" && !this.#agentRuntimeCredentials.some((item) => item.id === input.arguments.identity_id && item.agentId === input.agentId && item.status === "active")) throw Object.assign(new Error("Agent credential is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
+    const idempotencyKey = input.idempotencyKey ?? `${deployment.id}/${input.action}/${randomUUID()}`;
+    const existing = this.#controlCommands.find((item) => item.deploymentId === deployment.id && item.idempotencyKey === idempotencyKey);
+    if (existing) return { command: existing, approval: this.#controlApprovals.find((item) => item.commandId === existing.id) ?? null };
+    const expiresAt = new Date(Date.now() + Math.max(5 * 60_000, Math.min(input.expiresInMs ?? 30 * 60_000, 24 * 60 * 60_000))).toISOString();
+    const approvalId = input.approvalRequired ? input.approvalId ?? randomUUID() : null;
+    const command = { id: input.commandId ?? randomUUID(), organizationId: input.organizationId, deploymentId: deployment.id, agentId: input.agentId, idempotencyKey, action: input.action, target: { module_id: "bairui.supervisor", instance_id: input.agentId }, arguments: input.arguments, approvalId, expectedObservationVersion: deployment.observedStateVersion ?? 0, state: "queued", priority: input.priority ?? 100, attempt: 0, requestedBy: input.requestedBy, expiresAt, createdAt: new Date().toISOString() };
+    this.#controlCommands.push(command);
+    let approval = null;
+    if (approvalId) {
+      approval = { id: approvalId, organizationId: input.organizationId, commandId: command.id, action: command.action, riskLevel: input.riskLevel ?? "high", requestedBy: input.requestedBy, decidedBy: null, decision: "pending", reason: input.reason ?? "", expiresAt, decidedAt: null, createdAt: new Date().toISOString() };
+      this.#controlApprovals.push(approval);
+    }
+    if (["probe.run", "contract.test", "smoke.test"].includes(input.action) && input.arguments.test_run_id) this.#testRuns.push({ id: input.arguments.test_run_id, deploymentId: deployment.id, suiteId: input.arguments.suite_id ?? input.arguments.probe_ids.join(","), testType: input.action === "probe.run" ? "probe" : input.action === "contract.test" ? "contract" : "smoke", status: "queued", createdAt: new Date().toISOString() });
+    if (input.action === "backup.create" && input.arguments.backup_id) this.#backupRecords.push({ id: input.arguments.backup_id, deploymentId: deployment.id, policyId: input.arguments.backup_policy_id, backupType: "runtime-files", status: "creating", encrypted: true, createdAt: new Date().toISOString() });
+    return { command, approval };
+  }
+
+  async listControlCommands(organizationId, limit = 500) {
+    return this.#controlCommands.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  }
+
+  async listControlApprovals(organizationId, limit = 500) {
+    return this.#controlApprovals.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  }
+
+  async decideControlApproval(input) {
+    const approval = this.#controlApprovals.find((item) => item.id === input.approvalId && (!input.organizationId || item.organizationId === input.organizationId));
+    if (!approval) return null;
+    if (approval.decision !== "pending" || Date.parse(approval.expiresAt) <= Date.now()) throw Object.assign(new Error("Approval is no longer pending"), { code: "approval_not_pending", statusCode: 409 });
+    Object.assign(approval, { decision: input.decision, decidedBy: input.decidedBy, reason: input.reason, decidedAt: new Date().toISOString() });
+    if (input.decision === "rejected") {
+      const command = this.#controlCommands.find((item) => item.id === approval.commandId);
+      if (command?.state === "queued") command.state = "cancelled";
+    }
+    return approval;
+  }
+
+  async createReleaseManifest(input) {
+    const manifest = { id: input.id ?? randomUUID(), releaseId: input.releaseId ?? null, version: input.version, agentCommit: input.agentCommit, imageDigest: input.imageDigest, sbomUri: input.sbomUri, provenanceUri: input.provenanceUri, signature: input.signature, migrationVersion: input.migrationVersion ?? null, compatibility: input.compatibility, status: input.status ?? "candidate", createdBy: input.createdBy, createdAt: new Date().toISOString() };
+    this.#releaseManifests.push(manifest);
+    return manifest;
+  }
+
+  async listReleaseManifests() {
+    return this.#releaseManifests.toReversed();
   }
 
   async createServerCredential(input) {
@@ -336,6 +396,10 @@ export class MemoryPlatformRepository {
       if (leased.length >= (input.limit ?? 10) || !deployments.has(command.deploymentId)) continue;
       if (["leased", "accepted", "running"].includes(command.state) && Date.parse(command.leaseExpiresAt) <= now) command.state = "queued";
       if (command.state !== "queued" || Date.parse(command.expiresAt) <= now) continue;
+      if (command.approvalId) {
+        const approval = this.#controlApprovals.find((item) => item.id === command.approvalId && item.commandId === command.id);
+        if (!approval || approval.decision !== "approved" || Date.parse(approval.expiresAt) <= now) continue;
+      }
       command.state = "leased";
       command.leaseServerId = input.serverId;
       command.leaseExpiresAt = new Date(now + (input.leaseSeconds ?? 60) * 1000).toISOString();
@@ -343,14 +407,18 @@ export class MemoryPlatformRepository {
       const deployment = deployments.get(command.deploymentId);
       const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
       const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      const release = this.#releaseManifests.find((item) => item.id === command.arguments.release_id);
+      const rollback = this.#releaseManifests.find((item) => item.id === command.arguments.rollback_release_id);
       leased.push({
-        schema_version: "1.0", command_id: command.id, idempotency_key: `${command.deploymentId}/${command.action}/${command.arguments.config_revision_id ?? command.id}`,
+        schema_version: "1.0", command_id: command.id, idempotency_key: command.idempotencyKey ?? `${command.deploymentId}/${command.action}/${command.arguments.config_revision_id ?? command.id}`,
         deployment_id: command.deploymentId, action: command.action, target: command.target, arguments: command.arguments,
         ...(command.approvalId ? { approval_id: command.approvalId } : {}),
         expected_observation_version: command.expectedObservationVersion, created_at: command.createdAt, expires_at: command.expiresAt,
         attempt: command.attempt, lease_expires_at: command.leaseExpiresAt,
         placement: { server_id: deployment.serverId, agent_id: deployment.agentId, runtime_id: runtime.id, organization_id: deployment.organizationId, user_id: runtime.ownerUserId, workspace_ref: runtime.workspaceRef },
-        config: config ? { document: config.configDocument, secret_envelope: config.secretEnvelope } : null
+        config: config ? { document: config.configDocument, secret_envelope: config.secretEnvelope } : null,
+        ...(release ? { release: { id: release.id, version: release.version, hermes_image: release.compatibility?.hermes_image, runtime_image: release.compatibility?.runtime_image } } : {}),
+        ...(rollback ? { rollback_release: { id: rollback.id, version: rollback.version, hermes_image: rollback.compatibility?.hermes_image, runtime_image: rollback.compatibility?.runtime_image } } : {})
       });
     }
     return leased;
@@ -401,13 +469,51 @@ export class MemoryPlatformRepository {
       Object.assign(agent, { status: "failed", initializationStatus: "failed", lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary });
       deployment.status = "degraded";
     }
-    if (input.state === "failed" && command.action !== "deployment.provision") {
+    if (input.state === "failed" && ["deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "config.apply", "release.apply", "release.rollback", "service.restart", "credential.revoke"].includes(command.action)) {
       const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
       const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
       const agent = this.#agents.get(deployment.agentId);
       Object.assign(runtime, { ...(command.action === "deployment.delete" ? { status: "degraded" } : {}), lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary, updatedAt: new Date().toISOString() });
       Object.assign(agent, { status: "degraded", ...(command.action === "deployment.delete" ? { initializationStatus: "failed" } : {}), lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary, updatedAt: new Date().toISOString() });
       deployment.status = "degraded";
+    }
+    if (["config.stage", "config.apply"].includes(command.action)) {
+      const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      if (config && input.state === "running" && command.action === "config.apply") config.status = "applying";
+      if (config && input.state === "succeeded") config.status = command.action === "config.stage" ? "staged" : "applied";
+      if (config && input.state === "failed") config.status = "failed";
+      if (config && input.state === "succeeded" && command.action === "config.apply") {
+        const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+        const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+        runtime.configRevisionId = config.id;
+      }
+    }
+    if (["probe.run", "contract.test", "smoke.test"].includes(command.action) && command.arguments.test_run_id) {
+      const run = this.#testRuns.find((item) => item.id === command.arguments.test_run_id);
+      if (run && input.state === "running") Object.assign(run, { status: "running", startedAt: run.startedAt ?? new Date().toISOString() });
+      if (run && input.state === "succeeded") Object.assign(run, { status: "passed", completedAt: new Date().toISOString() });
+      if (run && input.state === "failed") Object.assign(run, { status: "failed", completedAt: new Date().toISOString() });
+    }
+    if (["backup.create", "backup.verify"].includes(command.action)) {
+      const backup = this.#backupRecords.find((item) => item.id === command.arguments.backup_id);
+      if (backup && input.state === "running" && command.action === "backup.verify") backup.status = "verifying";
+      if (backup && input.state === "succeeded" && command.action === "backup.create") Object.assign(backup, { status: "created", storageUri: `bairui-backup://${input.serverId}/${backup.id}`, sha256: input.evidenceRefs?.find((item) => item.startsWith("sha256:"))?.slice(7) ?? null, sizeBytes: input.resultSummary?.bytes ?? null });
+      if (backup && input.state === "succeeded" && command.action === "backup.verify") Object.assign(backup, { status: "verified", verifiedAt: new Date().toISOString() });
+      if (backup && input.state === "failed") backup.status = "failed";
+    }
+    if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
+      const current = this.#releaseManifests.find((item) => item.id === command.arguments.release_id);
+      const rollback = this.#releaseManifests.find((item) => item.id === command.arguments.rollback_release_id);
+      if (current && command.action === "release.stage" && input.state === "succeeded") current.status = "approved";
+      if (current && command.action === "release.apply" && input.state === "running") current.status = "rolling_out";
+      if (current && command.action === "release.apply" && input.state === "succeeded") current.status = "released";
+      if (current && command.action === "release.rollback" && input.state === "succeeded") current.status = "withdrawn";
+      if (rollback && command.action === "release.rollback" && input.state === "succeeded") rollback.status = "released";
+      if (current && input.state === "failed") current.status = "blocked";
+    }
+    if (command.action === "upstream.check" && command.arguments.candidate_id && ["succeeded", "failed"].includes(input.state)) {
+      const candidate = this.#upstreamCandidates.find((item) => item.id === command.arguments.candidate_id);
+      if (candidate) candidate.status = input.state === "succeeded" ? "compatible" : "incompatible";
     }
     return receipt;
   }

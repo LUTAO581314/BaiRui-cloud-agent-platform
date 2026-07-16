@@ -142,7 +142,7 @@ const adminDomainsMigration = fs.existsSync(adminDomainsMigrationPath) ? fs.read
 for (const table of ["provider_channels", "model_policies", "data_retention_policies", "sensitive_access_grants", "sensitive_access_events"]) {
   if (!adminDomainsMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing control-plane admin table: ${table}`);
 }
-for (const evidence of ["/api/admin/provider-channels", "/api/admin/model-policy", "/api/admin/data-retention", "/api/admin/sensitive-access", "/api/admin/release-gates", "/api/admin/backups", "/api/admin/upstreams"]) {
+for (const evidence of ["/api/admin/provider-channels", "/api/admin/model-policy", "/api/admin/data-retention", "/api/admin/sensitive-access", "/api/admin/release-gates", "/api/admin/backups", "/api/admin/upstreams", "/api/admin/control-commands", "/api/admin/control-approvals", "/api/admin/release-manifests"]) {
   if (!server.includes(evidence)) failures.push(`Missing control-plane administration API: ${evidence}`);
 }
 const adminViewPath = path.join(root, "apps/web/views.mjs");
