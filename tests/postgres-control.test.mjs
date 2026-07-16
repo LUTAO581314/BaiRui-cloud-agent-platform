@@ -58,6 +58,12 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.deepEqual(channel.credentialEnvelope, { encrypted: true });
     assert.equal((await repository.listAgentChannelBindings(organizationId, userId, agentId)).length, 1);
 
+    const agentRun = await repository.createAgentRun({ id: `run_${suffix}`, organizationId, userId, agentId, inputText: "PostgreSQL runtime history", model: "example/model", status: "started" });
+    assert.equal(agentRun.status, "started");
+    await repository.updateAgentRun({ id: agentRun.id, organizationId, userId, agentId, status: "failed", lastError: "test failure", completedAt: new Date().toISOString() });
+    assert.equal((await repository.getAgentRun(organizationId, userId, agentId, agentRun.id)).lastError, "test failure");
+    assert.equal((await repository.listAgentRuns(organizationId, userId, agentId)).length, 1);
+
     await repository.saveIntegrationResult({ organizationId, integrationId: "trendradar", capability: "list_hotspots", status: "completed", startedAt: new Date().toISOString(), items: [{ external_id: "one", source_id: "test", source_name: "Test", rank: 1, title: "Hotspot", fetched_at: new Date().toISOString() }] });
     const hotspot = (await repository.listLatestHotspots(organizationId)).items[0];
     assert.equal(await repository.setAgentHotspotBookmark({ organizationId, userId, agentId, hotspotItemId: hotspot.id, bookmarked: true }), true);

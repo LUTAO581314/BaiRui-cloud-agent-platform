@@ -29,6 +29,7 @@ const required = [
   "packages/db/migrations/010_backup_restore.sql",
   "packages/db/migrations/011_retention_enforcement.sql",
   "packages/db/migrations/012_agent_resource_telemetry.sql",
+  "packages/db/migrations/013_user_runtime_history.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -147,6 +148,10 @@ const userSurfaceMigrationPath = path.join(root, "packages/db/migrations/008_use
 const userSurfaceMigration = fs.existsSync(userSurfaceMigrationPath) ? fs.readFileSync(userSurfaceMigrationPath, "utf8") : "";
 for (const table of ["agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks"]) {
   if (!userSurfaceMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent user-surface table: ${table}`);
+}
+const runtimeHistoryMigration = fs.readFileSync(path.join(root, "packages/db/migrations/013_user_runtime_history.sql"), "utf8");
+for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_runs", "agent_runs_owner_fkey", "parent_run_id", "input_text"]) {
+  if (!runtimeHistoryMigration.includes(fragment)) throw new Error(`Runtime history migration is missing ${fragment}`);
 }
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);

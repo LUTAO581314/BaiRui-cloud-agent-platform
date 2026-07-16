@@ -15,6 +15,11 @@
     model_unconfigured: "模型未配置", quota_exhausted: "额度已用尽", deleting: "删除中", deleted: "已删除",
     failed: "失败", degraded: "降级", unavailable: "不可用", unconfigured: "未配置", disabled: "已停用", unknown: "未知"
   };
+  Object.assign(STATUS_LABELS, {
+    started: "已启动", queued: "排队中", running: "运行中", waiting_for_approval: "等待审批",
+    stopping: "停止中", completed: "已完成", cancelled: "已取消", scheduled: "已计划",
+    paused: "已暂停", ok: "成功", error: "失败"
+  });
   const workspaceState = { view: "conversations", runId: null, runStream: null };
   let root;
   let content;
@@ -286,7 +291,7 @@
     workspaceState.runStream = controller;
     const response = await fetch(agentApi(`/runs/${encodeURIComponent(runId)}/events`), { signal: controller.signal });
     if (!response.ok || !response.body) throw new Error("run_stream_unavailable");
-    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; let terminalEvent = false;
     while (true) {
       const { done, value } = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
       const blocks = buffer.replaceAll("\r\n", "\n").split("\n\n"); buffer = blocks.pop() || "";
@@ -298,25 +303,34 @@
           approval.hidden = false;
           approval.querySelector("p").textContent = event.command || event.prompt || "Hermes 请求执行受保护操作";
         }
-        if (["run.completed", "run.failed", "run.cancelled"].includes(event.event)) { approval.hidden = true; workspaceState.runStream = null; }
+        if (["run.completed", "run.failed", "run.cancelled"].includes(event.event)) { approval.hidden = true; workspaceState.runStream = null; terminalEvent = true; }
       }
       if (done) break;
     }
+    if (terminalEvent) await bridge.request(agentApi(`/runs/${encodeURIComponent(runId)}`)).catch(() => null);
   }
 
   async function renderRuns() {
-    content.innerHTML = `<div class="bw-section-head"><div><h3>结构化运行</h3><p>长任务使用 Hermes Runs API，审批和停止直接作用于当前 Run</p></div><button type="button" class="primary" data-start>＋ 新运行</button></div><div class="bw-run-console"><div class="bw-run-state">${workspaceState.runId ? `Run ${escapeHtml(workspaceState.runId)}` : "尚未启动运行"}</div><div class="bw-run-log" data-log></div><section class="bw-approval" data-approval hidden><h4>等待你的审批</h4><p></p><div>${["once", "session", "always", "deny"].map((choice) => `<button type="button" data-choice="${choice}" class="${choice === "deny" ? "danger" : ""}">${{ once: "仅本次", session: "本次运行", always: "始终允许", deny: "拒绝" }[choice]}</button>`).join("")}</div></section><div class="bw-actions"><button type="button" data-stop ${workspaceState.runId ? "" : "disabled"}>停止运行</button><button type="button" data-refresh ${workspaceState.runId ? "" : "disabled"}>刷新状态</button></div></div>`;
+    const result = await bridge.request(agentApi("/runs?limit=50"));
+    const runs = normalizeList(result, ["runs"]);
+    if (!runs.some((item) => item.id === workspaceState.runId)) workspaceState.runId = runs[0]?.id || null;
+    const selected = runs.find((item) => item.id === workspaceState.runId) || null;
+    const terminal = selected && ["completed", "failed", "cancelled"].includes(selected.status);
+    content.innerHTML = `<div class="bw-section-head"><div><h3>结构化运行</h3><p>长任务由 Hermes 执行，历史记录保存在当前用户的 Agent 空间</p></div><button type="button" class="primary" data-start>＋ 新运行</button></div><div class="bw-run-console"><div class="bw-run-state">${selected ? `${escapeHtml(selected.id)} · ${escapeHtml(STATUS_LABELS[selected.status] || selected.status)}` : "尚未启动运行"}</div><div class="bw-run-log" data-log></div><section class="bw-approval" data-approval hidden><h4>等待你的审批</h4><p></p><div>${["once", "session", "always", "deny"].map((choice) => `<button type="button" data-choice="${choice}" class="${choice === "deny" ? "danger" : ""}">${{ once: "仅本次", session: "本次运行", always: "始终允许", deny: "拒绝" }[choice]}</button>`).join("")}</div></section><div class="bw-actions"><button type="button" data-stop ${selected && !terminal ? "" : "disabled"}>停止运行</button><button type="button" data-refresh ${selected ? "" : "disabled"}>刷新状态</button></div></div><div class="bw-section-head"><h3>运行历史</h3><span>${runs.length} 条</span></div><div class="bw-list">${runs.length ? runs.map((run) => `<article class="bw-row ${run.id === workspaceState.runId ? "selected" : ""}"><div><strong>${escapeHtml(run.inputPreview || "未命名任务")}</strong><span>${formatTime(run.createdAt)}${run.model ? ` · ${escapeHtml(run.model)}` : ""}</span>${run.lastError ? `<p>${escapeHtml(run.lastError)}</p>` : ""}</div><div class="bw-actions">${status(run.status)}<button type="button" data-select-run="${escapeHtml(run.id)}">查看</button>${["completed", "failed", "cancelled"].includes(run.status) ? `<button type="button" data-retry-run="${escapeHtml(run.id)}">${run.status === "failed" ? "重试" : "再次运行"}</button>` : ""}</div></article>`).join("") : '<div class="bw-empty">还没有运行记录</div>'}</div>`;
     const log = content.querySelector("[data-log]"); const approval = content.querySelector("[data-approval]");
-    content.querySelector("[data-start]").addEventListener("click", async () => { const values = await openForm({ heading: "创建运行", fields: [{ name: "input", label: "任务内容", type: "textarea", rows: 10, required: true }] }); if (!values) return; const run = await bridge.request(agentApi("/runs"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); workspaceState.runId = run.run_id; renderRuns().then(() => { const nextLog = content.querySelector("[data-log]"); const nextApproval = content.querySelector("[data-approval]"); streamRun(run.run_id, nextLog, nextApproval).catch((error) => toast(error.message, "error")); }); });
+    const followRun = async (runId) => { await renderRuns(); streamRun(runId, content.querySelector("[data-log]"), content.querySelector("[data-approval]")).then(() => renderRuns()).catch((error) => toast(error.message, "error")); };
+    content.querySelector("[data-start]").addEventListener("click", async () => { const values = await openForm({ heading: "创建运行", fields: [{ name: "input", label: "任务内容", type: "textarea", rows: 10, required: true }] }); if (!values) return; const run = await bridge.request(agentApi("/runs"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); workspaceState.runId = run.run_id; followRun(run.run_id); });
     content.querySelectorAll("[data-choice]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}/approval`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ choice: button.dataset.choice }) }); approval.hidden = true; toast("审批已提交"); }));
     content.querySelector("[data-stop]").addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}/stop`), { method: "POST" }); workspaceState.runStream?.abort(); toast("停止请求已提交"); });
-    content.querySelector("[data-refresh]").addEventListener("click", async () => { const run = await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}`)); content.querySelector(".bw-run-state").textContent = `${run.run_id}: ${run.status}`; });
+    content.querySelector("[data-refresh]").addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}`)); renderRuns(); });
+    content.querySelectorAll("[data-select-run]").forEach((button) => button.addEventListener("click", () => { workspaceState.runId = button.dataset.selectRun; renderRuns(); }));
+    content.querySelectorAll("[data-retry-run]").forEach((button) => button.addEventListener("click", async () => { const run = await bridge.request(agentApi(`/runs/${encodeURIComponent(button.dataset.retryRun)}/retry`), { method: "POST" }); workspaceState.runId = run.run_id; followRun(run.run_id); }));
   }
 
   async function renderJobs() {
     const result = await bridge.request(agentApi("/jobs?include_disabled=true"));
     const jobs = normalizeList(result, ["jobs"]);
-    content.innerHTML = `<div class="bw-section-head"><div><h3>Hermes 定时任务</h3><p>计划、执行和运行历史由用户专属 Hermes 管理</p></div><button type="button" class="primary" data-new>＋ 新任务</button></div><div class="bw-list">${jobs.length ? jobs.map((job) => `<article class="bw-row"><div><strong>${escapeHtml(job.name || job.id)}</strong><span>${escapeHtml(job.schedule_display || job.schedule?.display || job.schedule?.expr || job.schedule || "")}</span><p>${escapeHtml(job.prompt || "")}</p></div><div class="bw-actions">${status(job.enabled === false ? "disabled" : job.state || "ready")}<button type="button" data-run="${job.id}">运行</button><button type="button" data-toggle="${job.id}" data-enabled="${job.enabled !== false ? "1" : "0"}">${job.enabled === false ? "恢复" : "暂停"}</button><button type="button" data-delete="${job.id}" class="danger-icon">×</button></div></article>`).join("") : '<div class="bw-empty">还没有定时任务</div>'}</div>`;
+    content.innerHTML = `<div class="bw-section-head"><div><h3>Hermes 定时任务</h3><p>显示 Hermes 返回的真实计划、最近结果和下次执行时间</p></div><button type="button" class="primary" data-new>＋ 新任务</button></div><div class="bw-list">${jobs.length ? jobs.map((job) => `<article class="bw-row"><div><strong>${escapeHtml(job.name || job.id)}</strong><span>${escapeHtml(job.schedule_display || job.schedule?.display || job.schedule?.expr || job.schedule || "")}${job.next_run_at ? ` · 下次 ${formatTime(job.next_run_at)}` : ""}</span><p>${escapeHtml(job.prompt || "")}</p>${job.last_run_at ? `<p>上次 ${formatTime(job.last_run_at)} · ${escapeHtml(STATUS_LABELS[job.last_status] || job.last_status || "未知")}${job.last_error ? ` · ${escapeHtml(job.last_error)}` : ""}</p>` : ""}</div><div class="bw-actions">${status(job.last_status === "error" ? "failed" : job.enabled === false ? "disabled" : job.state || "ready")}<button type="button" data-run="${job.id}">${job.last_status === "error" ? "重试" : "运行"}</button><button type="button" data-toggle="${job.id}" data-enabled="${job.enabled !== false ? "1" : "0"}">${job.enabled === false ? "恢复" : "暂停"}</button><button type="button" data-delete="${job.id}" class="danger-icon">×</button></div></article>`).join("") : '<div class="bw-empty">还没有定时任务</div>'}</div>`;
     content.querySelector("[data-new]").addEventListener("click", async () => { const values = await openForm({ heading: "新建定时任务", fields: [{ name: "name", label: "名称", required: true }, { name: "schedule", label: "执行计划", placeholder: "例如 every day at 09:00 或 0 9 * * *", required: true }, { name: "prompt", label: "任务内容", type: "textarea", rows: 8, required: true }] }); if (!values) return; await bridge.request(agentApi("/jobs"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...values, deliver: "local" }) }); toast("任务已创建", "success"); renderJobs(); });
     content.querySelectorAll("[data-run]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.run)}/run`), { method: "POST" }); toast("任务已触发"); }));
     content.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", async () => { const action = button.dataset.enabled === "1" ? "pause" : "resume"; await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.toggle)}/${action}`), { method: "POST" }); renderJobs(); }));

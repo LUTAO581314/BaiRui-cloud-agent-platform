@@ -37,6 +37,7 @@ export class MemoryPlatformRepository {
   #obsidianNotes = [];
   #agentSkillPreferences = [];
   #agentChannelBindings = [];
+  #agentRuns = [];
   #agentHotspotBookmarks = [];
   #providerChannels = [];
   #modelPolicies = new Map();
@@ -845,6 +846,43 @@ export class MemoryPlatformRepository {
     if (index < 0) return false;
     this.#agentChannelBindings.splice(index, 1);
     return true;
+  }
+
+  async createAgentRun(input) {
+    if (this.#agentRuns.some((item) => item.id === input.id)) throw new Error("Agent run already exists");
+    const now = new Date().toISOString();
+    const value = {
+      id: input.id, organizationId: input.organizationId, userId: input.userId, agentId: input.agentId,
+      parentRunId: input.parentRunId ?? null, inputText: input.inputText, model: input.model ?? null,
+      status: input.status ?? "started", lastError: input.lastError ?? null,
+      createdAt: now, updatedAt: now, completedAt: input.completedAt ?? null
+    };
+    this.#agentRuns.push(value);
+    return value;
+  }
+
+  async getAgentRun(organizationId, userId, agentId, runId) {
+    return this.#agentRuns.find((item) => item.id === runId && item.organizationId === organizationId && item.userId === userId && item.agentId === agentId) ?? null;
+  }
+
+  async listAgentRuns(organizationId, userId, agentId, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+    return this.#agentRuns
+      .filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId)
+      .toSorted((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+      .slice(0, safeLimit);
+  }
+
+  async updateAgentRun(input) {
+    const current = await this.getAgentRun(input.organizationId, input.userId, input.agentId, input.id);
+    if (!current) return null;
+    Object.assign(current, {
+      status: input.status ?? current.status,
+      lastError: input.lastError === undefined ? current.lastError : input.lastError,
+      completedAt: input.completedAt === undefined ? current.completedAt : input.completedAt,
+      updatedAt: new Date().toISOString()
+    });
+    return current;
   }
 
   async setAgentHotspotBookmark(input) {

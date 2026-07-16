@@ -13,6 +13,7 @@ const mapUser = (row, includeHash = false) => row ? {
 } : null;
 const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, name: row.name, description: row.description, avatarUrl: row.avatar_url, soulMarkdown: row.soul_markdown, status: row.status, initializationStatus: row.initialization_status, desiredRuntimeState: row.desired_runtime_state, settings: row.settings, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, endpointRef: row.endpoint_ref, routeUpdatedAt: row.route_updated_at?.toISOString?.() ?? row.route_updated_at, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapAgentRun = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, parentRunId: row.parent_run_id, inputText: row.input_text, model: row.model, status: row.status, lastError: row.last_error, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at }) : null;
 const mapHeartbeat = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, sequence: Number(row.sequence), status: row.status, runtimeVersion: row.runtime_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, queueDepth: row.queue_depth, activeRuns: row.active_runs, failedRuns: row.failed_runs, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at }) : null;
 const mapAgentComponent = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, moduleId: row.module_id, status: row.status, version: row.version, upstreamRef: row.upstream_ref, capabilities: row.capabilities, metrics: row.metrics, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const nullableNumber = (value) => value === null || value === undefined ? null : Number(value);
@@ -1115,6 +1116,36 @@ export class PostgresPlatformRepository {
   async deleteAgentChannelBinding(organizationId, userId, agentId, channel) {
     const { rowCount } = await this.pool.query("DELETE FROM agent_channel_bindings WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND channel=$4", [organizationId, userId, agentId, channel]);
     return rowCount === 1;
+  }
+
+  async createAgentRun(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO agent_runs (id, organization_id, user_id, agent_id, parent_run_id, input_text, model, status, last_error, completed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [input.id, input.organizationId, input.userId, input.agentId, input.parentRunId ?? null, input.inputText, input.model ?? null, input.status ?? "started", input.lastError ?? null, input.completedAt ?? null]
+    );
+    return mapAgentRun(rows[0]);
+  }
+
+  async getAgentRun(organizationId, userId, agentId, runId) {
+    const { rows } = await this.pool.query("SELECT * FROM agent_runs WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4", [runId, organizationId, userId, agentId]);
+    return mapAgentRun(rows[0]);
+  }
+
+  async listAgentRuns(organizationId, userId, agentId, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const { rows } = await this.pool.query("SELECT * FROM agent_runs WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 ORDER BY created_at DESC LIMIT $4", [organizationId, userId, agentId, safeLimit]);
+    return rows.map(mapAgentRun);
+  }
+
+  async updateAgentRun(input) {
+    const { rows } = await this.pool.query(
+      `UPDATE agent_runs SET status=COALESCE($5,status), last_error=CASE WHEN $6::boolean THEN $7 ELSE last_error END,
+         completed_at=CASE WHEN $8::boolean THEN $9::timestamptz ELSE completed_at END, updated_at=now()
+       WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *`,
+      [input.id, input.organizationId, input.userId, input.agentId, input.status ?? null, input.lastError !== undefined, input.lastError ?? null, input.completedAt !== undefined, input.completedAt ?? null]
+    );
+    return mapAgentRun(rows[0]);
   }
 
   async setAgentHotspotBookmark(input) {
