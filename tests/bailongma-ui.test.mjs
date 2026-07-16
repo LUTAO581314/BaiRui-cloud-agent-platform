@@ -47,8 +47,10 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
 
 test("keeps the BaiRui toolbar above the interactive BaiLongma graph", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
-  assert.match(overlay, /\.bairui-platform-tools\s*\{[\s\S]*z-index:\s*2147483000\s*!important/);
-  assert.match(overlay, /\.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
+  const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
+  assert.match(overlay, /html\s*>\s*\.bairui-platform-tools\s*\{[\s\S]*z-index:\s*2147483000\s*!important/);
+  assert.match(overlay, /html\s*>\s*\.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
+  assert.match(adapter, /document\.documentElement\.appendChild\(tools\)/);
 });
 
 test("maps Obsidian notes to BaiLongma memory shapes", () => {

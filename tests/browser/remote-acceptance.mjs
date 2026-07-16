@@ -39,7 +39,15 @@ async function ordinaryDesktop(browser, baseUrl) {
   assert.equal((await page.request.get(`${baseUrl}/admin`)).status(), 404);
 
   const views = ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"];
-  await page.locator('.bairui-platform-tools [data-action="workspace"]').click();
+  const workspaceButton = page.locator('.bairui-platform-tools [data-action="workspace"]');
+  const hitTest = await workspaceButton.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const tools = button.closest(".bairui-platform-tools");
+    return { target: target?.tagName, targetId: target?.id, toolsParent: tools?.parentElement?.tagName, toolsZIndex: getComputedStyle(tools).zIndex };
+  });
+  process.stdout.write(`Desktop toolbar hit test: ${JSON.stringify(hitTest)}\n`);
+  await workspaceButton.click();
   await page.locator(".bairui-workspace").waitFor({ state: "visible" });
   for (const view of views) assert.equal(await page.locator(`.bw-nav [data-view="${view}"]`).count(), 1, `missing user workspace view: ${view}`);
   await page.locator('.bw-nav [data-view="memory"]').click();

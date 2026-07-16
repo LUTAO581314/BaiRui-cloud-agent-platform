@@ -4,7 +4,7 @@
   box-shadow: 0 0 20px rgba(44, 132, 240, 0.28) !important;
 }
 
-.bairui-platform-tools {
+html > .bairui-platform-tools {
   position: fixed;
   z-index: 2147483000 !important;
   top: 22px;
@@ -25,7 +25,7 @@
   pointer-events: auto !important;
 }
 
-.bairui-platform-tools > * {
+html > .bairui-platform-tools > * {
   position: relative;
   z-index: 1;
   pointer-events: auto;

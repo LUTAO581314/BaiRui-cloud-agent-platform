@@ -591,7 +591,7 @@
       location.href = "/login";
     });
     tools.appendChild(logout);
-    document.body.appendChild(tools);
+    document.documentElement.appendChild(tools);
     mountOperationalSurface(agent);
 
     document.querySelector("#send-btn")?.addEventListener("click", (event) => {
