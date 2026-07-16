@@ -45,6 +45,12 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
   assert.match(workspace, /Obsidian 主记忆库/);
 });
 
+test("keeps the BaiRui toolbar above the interactive BaiLongma graph", () => {
+  const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
+  assert.match(overlay, /\.bairui-platform-tools\s*\{[\s\S]*z-index:\s*2147483000\s*!important/);
+  assert.match(overlay, /\.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
+});
+
 test("maps Obsidian notes to BaiLongma memory shapes", () => {
   const memories = toBailongmaMemories([
     { id: "n1", agentId: "agent_a", title: "Decision", markdown: "# Decision", memoryKind: "project", importance: 5, wikilinks: ["Architecture"], frontmatter: { tags: ["architecture"] }, createdAt: "2026-01-01", updatedAt: "2026-01-02" },

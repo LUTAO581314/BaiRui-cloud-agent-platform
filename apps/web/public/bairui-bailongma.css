@@ -6,7 +6,7 @@
 
 .bairui-platform-tools {
   position: fixed;
-  z-index: 1200;
+  z-index: 2147483000 !important;
   top: 22px;
   left: 50%;
   display: flex;
@@ -21,6 +21,14 @@
   font: 500 12px/1 Inter, "Segoe UI", sans-serif;
   transform: translateX(-50%);
   backdrop-filter: blur(12px);
+  isolation: isolate;
+  pointer-events: auto !important;
+}
+
+.bairui-platform-tools > * {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
 }
 
 .bairui-platform-tools img {
