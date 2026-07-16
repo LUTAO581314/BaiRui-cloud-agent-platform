@@ -33,6 +33,8 @@ const required = [
   "packages/db/migrations/014_user_configuration_apply.sql",
   "packages/db/migrations/015_hermes_obsidian_memory.sql",
   "docs/18-hermes-obsidian-memory.md",
+  "docs/19-remote-browser-acceptance.md",
+  "docs/20-platform-agent-integration-guide.md",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/bailongma-ui/brain-app-transform.mjs",
@@ -49,6 +51,8 @@ const required = [
   "tests/resource-collector.test.mjs",
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
+  "tests/browser/fixture-server.mjs",
+  "tests/browser/remote-acceptance.mjs",
   "server-agent/index.mjs",
   "server-agent/control-client.mjs",
   "server-agent/daemon.mjs",
@@ -81,6 +85,16 @@ const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
 if (fs.existsSync(path.join(root, "docs/06-server-agent-p0.md"))) failures.push("Obsolete P0 server-agent document must be removed");
 if (fs.existsSync(path.join(root, "apps/web/public/user.js"))) failures.push("Legacy handcrafted user frontend must be removed");
+const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+if (packageDocument.scripts?.["test:browser:remote"] !== "node tests/browser/remote-acceptance.mjs") failures.push("Missing remote browser acceptance package script");
+const workflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+for (const evidence of ["browser-acceptance:", "playwright install --with-deps chromium", "npm run test:browser:remote", "actions/upload-artifact@v4"]) {
+  if (!workflow.includes(evidence)) failures.push(`Missing remote browser workflow evidence: ${evidence}`);
+}
+const integrationGuide = fs.readFileSync(path.join(root, "docs/20-platform-agent-integration-guide.md"), "utf8");
+for (const evidence of ["User data plane", "Memory contract", "Control plane and Server Agent", "Agent initialization sequence", "Administrator boundary", "memory_projection_conflict"]) {
+  if (!integrationGuide.includes(evidence)) failures.push(`Missing platform-Agent integration guidance: ${evidence}`);
+}
 const server = fs.existsSync(path.join(root, "apps/web/app.mjs")) ? fs.readFileSync(path.join(root, "apps/web/app.mjs"), "utf8") : "";
 for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBERS_MANAGE", "PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE", "invalid_agent_credential", "statusCode = 401"]) {
   if (!server.includes(evidence)) failures.push(`Missing server authorization evidence: ${evidence}`);

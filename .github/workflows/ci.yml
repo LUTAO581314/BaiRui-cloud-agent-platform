@@ -96,3 +96,29 @@ jobs:
         env:
           BAIRUI_POSTGRES_INTEGRATION: "1"
         run: node --test tests/postgres-control.test.mjs
+
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Exercise BaiLongma, Hermes, Obsidian and RBAC browser flows
+        run: npm run test:browser:remote
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-browser-acceptance-${{ github.sha }}
+          path: test-results/remote-browser-acceptance
+          if-no-files-found: warn
+          retention-days: 14
