@@ -144,7 +144,12 @@ async function ordinaryMobile(browser, baseUrl) {
   await page.locator("#graph").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator("#panel-l1-tab").click();
-  await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  await page.waitForFunction(() => {
+    const panel = document.querySelector("#panel-l1");
+    if (!panel || document.body.classList.contains("l1-collapsed") || !document.body.classList.contains("l2-collapsed")) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.left >= -1 && rect.right <= innerWidth + 1;
+  });
   const mobilePanel = await page.locator("#panel-l1").evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { left: rect.left, right: rect.right, viewport: innerWidth };
