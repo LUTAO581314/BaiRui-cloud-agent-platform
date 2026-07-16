@@ -14,6 +14,7 @@ Responsibilities:
 - report Hermes Runtime Core health;
 - report Bairui Runtime Boundary readiness where available;
 - report backup status;
+- create, verify, and approval-gate restore of encrypted Agent backups;
 - collect diagnostic bundles after customer action;
 - execute white-listed maintenance actions.
 

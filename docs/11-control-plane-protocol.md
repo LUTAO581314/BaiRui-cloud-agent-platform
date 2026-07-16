@@ -13,6 +13,7 @@ Allowed actions:
 - `config.apply`
 - `backup.create`
 - `backup.verify`
+- `backup.restore`
 - `release.stage`
 - `release.apply`
 - `release.rollback`

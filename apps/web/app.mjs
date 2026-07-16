@@ -34,9 +34,9 @@ const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
-const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
-const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
-const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
 
 function numericMetrics(value) {
@@ -180,6 +180,7 @@ function controlOperationArguments(action, body) {
   if (["config.stage", "config.apply"].includes(action)) return id(body.configRevisionId) ? { config_revision_id: body.configRevisionId } : null;
   if (action === "backup.create") return id(body.backupPolicyId) ? { backup_policy_id: body.backupPolicyId, backup_id: randomUUID() } : null;
   if (action === "backup.verify") return id(body.backupId) ? { backup_id: body.backupId } : null;
+  if (action === "backup.restore") return id(body.backupId) ? { backup_id: body.backupId, restore_id: randomUUID() } : null;
   if (["release.stage", "release.apply"].includes(action)) return id(body.releaseId) ? { release_id: body.releaseId } : null;
   if (action === "release.rollback") return id(body.releaseId) && id(body.rollbackReleaseId) ? { release_id: body.releaseId, rollback_release_id: body.rollbackReleaseId } : null;
   if (action === "service.restart") return ["hermes", "runtime-boundary"].includes(body.serviceId) ? { service_id: body.serviceId } : null;
@@ -300,7 +301,7 @@ export function createPlatformApp(options) {
     const monthlyCostUsd = rollups.filter((item) => Date.parse(item.bucketStart) >= monthStart).reduce((sum, item) => sum + item.estimatedCostUsd, 0);
     const quotaExhausted = (models.dailyTokenLimit !== null && dailyTokens >= models.dailyTokenLimit) || (models.monthlyBudgetUsd !== null && monthlyCostUsd >= models.monthlyBudgetUsd);
     const runtimeOffline = agent.desiredRuntimeState === "running" && ["ready", "degraded", "starting"].includes(runtime?.status) && (!runtime.lastHeartbeatAt || now - Date.parse(runtime.lastHeartbeatAt) > runtimeStaleAfterMs);
-    const activeChange = commands.find((item) => item.agentId === agent.id && ["config.apply", "release.stage", "release.apply", "release.rollback"].includes(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state)) ?? null;
+    const activeChange = commands.find((item) => item.agentId === agent.id && ["config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback"].includes(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state)) ?? null;
     let code = "ready";
     if (["deleted", "deleting"].includes(agent.status) || ["deleted", "deleting"].includes(runtime?.status)) code = runtime?.status ?? agent.status;
     else if (!runtime || runtime.status === "uninitialized" || agent.initializationStatus === "uninitialized") code = "uninitialized";
@@ -1029,7 +1030,7 @@ export function createPlatformApp(options) {
         if (approvalRequired && (typeof body.reason !== "string" || body.reason.trim().length < 10)) return json(response, 400, { error: "control_reason_required" });
         const suppliedIdempotencyKey = request.headers["idempotency-key"];
         const idempotencyToken = typeof suppliedIdempotencyKey === "string" && /^[A-Za-z0-9._:-]{8,128}$/.test(suppliedIdempotencyKey) ? suppliedIdempotencyKey : randomUUID();
-        const result = await repository.requestControlOperation({ organizationId: agent.organizationId, agentId: agent.id, action: body.action, arguments: operationArguments, requestedBy: principal.userId, idempotencyKey: `${agent.id}/${body.action}/${idempotencyToken}`, approvalRequired, riskLevel: ["release.apply", "release.rollback", "credential.revoke"].includes(body.action) ? "critical" : approvalRequired ? "high" : "medium", reason: typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : "" });
+        const result = await repository.requestControlOperation({ organizationId: agent.organizationId, agentId: agent.id, action: body.action, arguments: operationArguments, requestedBy: principal.userId, idempotencyKey: `${agent.id}/${body.action}/${idempotencyToken}`, approvalRequired, riskLevel: ["backup.restore", "release.apply", "release.rollback", "credential.revoke"].includes(body.action) ? "critical" : approvalRequired ? "high" : "medium", reason: typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : "" });
         await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: principal.userId, action: "control.command.request", targetType: "control_command", targetId: result.command.id, metadata: { agentId: agent.id, action: body.action, approvalRequired, arguments: operationArguments } });
         return json(response, 202, result);
       }
@@ -1129,7 +1130,8 @@ export function createPlatformApp(options) {
       if (method === "GET" && url.pathname === "/api/admin/backups") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
         const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
-        return json(response, 200, { backups: await repository.listBackupRecords(scope) });
+        const [backups, restores] = await Promise.all([repository.listBackupRecords(scope), repository.listBackupRestoreRuns(scope)]);
+        return json(response, 200, { backups, restores });
       }
       if (method === "GET" && url.pathname === "/api/admin/release-gates") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });

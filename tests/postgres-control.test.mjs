@@ -99,6 +99,22 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.equal(applyCommand.command_id, applyOperation.command.id);
     assert.deepEqual(applyCommand.config.secret_envelope.providerApiKey, { encrypted: true });
 
+    const backupId = `backup_${suffix}`;
+    const backupOperation = await repository.requestControlOperation({ organizationId, agentId, action: "backup.create", arguments: { backup_policy_id: "manual", backup_id: backupId }, requestedBy: userId });
+    const backupCommand = (await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).find((item) => item.command_id === backupOperation.command.id);
+    for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: backupCommand.command_id, serverId, attempt: backupCommand.attempt, state, resultSummary: state === "succeeded" ? { bytes: 2048 } : {}, evidenceRefs: state === "succeeded" ? [`sha256:${"d".repeat(64)}`] : [] });
+    const verifyOperation = await repository.requestControlOperation({ organizationId, agentId, action: "backup.verify", arguments: { backup_id: backupId }, requestedBy: userId });
+    const verifyCommand = (await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).find((item) => item.command_id === verifyOperation.command.id);
+    for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: verifyCommand.command_id, serverId, attempt: verifyCommand.attempt, state });
+    assert.equal((await repository.listBackupRecords(organizationId))[0].status, "verified");
+    const restoreId = `restore_${suffix}`;
+    const restoreOperation = await repository.requestControlOperation({ organizationId, agentId, action: "backup.restore", arguments: { backup_id: backupId, restore_id: restoreId }, requestedBy: userId, approvalRequired: true, riskLevel: "critical", reason: "PostgreSQL verified backup restore test" });
+    assert.ok(!(await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).some((item) => item.command_id === restoreOperation.command.id));
+    await repository.decideControlApproval({ approvalId: restoreOperation.approval.id, decision: "approved", reason: "Approved PostgreSQL restore transaction", decidedBy: userId });
+    const restoreCommand = (await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).find((item) => item.command_id === restoreOperation.command.id);
+    for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: restoreCommand.command_id, serverId, attempt: restoreCommand.attempt, state, evidenceRefs: state === "succeeded" ? [`restore:${restoreId}:succeeded`] : [] });
+    assert.equal((await repository.listBackupRestoreRuns(organizationId))[0].status, "succeeded");
+
     const manifest = await repository.createReleaseManifest({ id: `manifest_${suffix}`, version: `1.0.${suffix}`, agentCommit: "a".repeat(40), imageDigest: `ghcr.io/bairui/bundle@sha256:${"a".repeat(64)}`, sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64), compatibility: { hermes_image: `ghcr.io/bairui/hermes@sha256:${"b".repeat(64)}`, runtime_image: `ghcr.io/bairui/runtime@sha256:${"c".repeat(64)}` }, createdBy: userId });
     assert.equal((await repository.listReleaseManifests())[0].id, manifest.id);
 

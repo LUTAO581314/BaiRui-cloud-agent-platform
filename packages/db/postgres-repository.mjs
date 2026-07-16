@@ -420,6 +420,10 @@ export class PostgresPlatformRepository {
         const { rowCount } = await client.query("SELECT id FROM backup_records WHERE id=$1 AND deployment_id=$2", [input.arguments.backup_id, deployment.id]);
         if (rowCount !== 1) throw Object.assign(new Error("Backup does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
       }
+      if (input.action === "backup.restore") {
+        const { rowCount } = await client.query("SELECT id FROM backup_records WHERE id=$1 AND deployment_id=$2 AND status='verified'", [input.arguments.backup_id, deployment.id]);
+        if (rowCount !== 1) throw Object.assign(new Error("Verified backup is unavailable for this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+      }
       if (["release.stage", "release.apply"].includes(input.action)) {
         const { rowCount } = await client.query("SELECT id FROM release_manifests WHERE id=$1 AND status IN ('candidate','approved','released')", [input.arguments.release_id]);
         if (rowCount !== 1) throw Object.assign(new Error("Release manifest is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
@@ -438,7 +442,15 @@ export class PostgresPlatformRepository {
       }
       const idempotencyKey = input.idempotencyKey ?? `${deployment.id}/${input.action}/${randomUUID()}`;
       const { rows: existingRows } = await client.query("SELECT command.*, $2::text AS organization_id, $3::text AS agent_id FROM control_commands command WHERE command.deployment_id=$1 AND command.idempotency_key=$4", [deployment.id, input.organizationId, input.agentId, idempotencyKey]);
-      if (existingRows[0]) { await client.query("COMMIT"); return { command: mapControlCommand(existingRows[0]), approval: null }; }
+      if (existingRows[0]) {
+        let approval = null;
+        if (existingRows[0].approval_id) {
+          const { rows } = await client.query("SELECT approval.*, $2::text AS organization_id, $3::text AS action FROM control_approvals approval WHERE approval.id=$1", [existingRows[0].approval_id, input.organizationId, input.action]);
+          approval = mapControlApproval(rows[0]);
+        }
+        await client.query("COMMIT");
+        return { command: mapControlCommand(existingRows[0]), approval };
+      }
       const commandId = input.commandId ?? randomUUID();
       const approvalId = input.approvalRequired ? input.approvalId ?? randomUUID() : null;
       const expiresAt = new Date(Date.now() + Math.max(5 * 60_000, Math.min(input.expiresInMs ?? 30 * 60_000, 24 * 60 * 60_000))).toISOString();
@@ -458,6 +470,7 @@ export class PostgresPlatformRepository {
         await client.query("INSERT INTO test_runs (id, deployment_id, suite_id, test_type, status) VALUES ($1,$2,$3,$4,'queued') ON CONFLICT (id) DO NOTHING", [input.arguments.test_run_id, deployment.id, suiteId, testType]);
       }
       if (input.action === "backup.create" && input.arguments.backup_id) await client.query("INSERT INTO backup_records (id, deployment_id, policy_id, backup_type, status, encrypted) VALUES ($1,$2,$3,'runtime-files','creating',true) ON CONFLICT (id) DO NOTHING", [input.arguments.backup_id, deployment.id, input.arguments.backup_policy_id]);
+      if (input.action === "backup.restore") await client.query("INSERT INTO backup_restore_runs (id, backup_id, deployment_id, command_id, status, requested_by, reason) VALUES ($1,$2,$3,$4,'requested',$5,$6)", [input.arguments.restore_id, input.arguments.backup_id, deployment.id, commandId, input.requestedBy, input.reason]);
       await client.query("COMMIT");
       return { command: { id: commandId, organizationId: input.organizationId, deploymentId: deployment.id, agentId: input.agentId, idempotencyKey, action: input.action, arguments: input.arguments, approvalId, state: "queued", priority: input.priority ?? 100, requestedBy: input.requestedBy, expiresAt, createdAt: new Date().toISOString() }, approval };
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
@@ -491,6 +504,7 @@ export class PostgresPlatformRepository {
       if (current.decision !== "pending" || new Date(current.expires_at).getTime() <= Date.now()) throw Object.assign(new Error("Approval is no longer pending"), { code: "approval_not_pending", statusCode: 409 });
       const { rows: updated } = await client.query("UPDATE control_approvals SET decision=$2, decided_by=$3, reason=$4, decided_at=now() WHERE id=$1 RETURNING *", [input.approvalId, input.decision, input.decidedBy, input.reason]);
       if (input.decision === "rejected") await client.query("UPDATE control_commands SET state='cancelled', updated_at=now() WHERE id=$1 AND state='queued'", [current.command_id]);
+      if (input.decision === "rejected" && current.action === "backup.restore") await client.query("UPDATE backup_restore_runs SET status='cancelled', error_code='approval_rejected', error_summary='Backup restore approval was rejected', completed_at=now() WHERE command_id=$1 AND status='requested'", [current.command_id]);
       await client.query("COMMIT");
       return mapControlApproval({ ...updated[0], organization_id: current.organization_id, action: current.action });
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
@@ -543,6 +557,7 @@ export class PostgresPlatformRepository {
     try {
       await client.query("BEGIN");
       await client.query("UPDATE control_commands SET state='expired', updated_at=now() WHERE state IN ('queued','leased') AND expires_at <= now()");
+      await client.query("UPDATE backup_restore_runs restore SET status='cancelled', error_code='command_expired', error_summary='Backup restore command expired', completed_at=now() FROM control_commands command WHERE restore.command_id=command.id AND command.state='expired' AND restore.status='requested'");
       await client.query("UPDATE control_commands SET state='queued', lease_server_id=NULL, lease_expires_at=NULL, updated_at=now() WHERE state IN ('leased','accepted','running') AND lease_expires_at <= now() AND expires_at > now()");
       const { rows } = await client.query(
         `SELECT command.*, deployment.agent_id, deployment.server_id, deployment.organization_id,
@@ -683,6 +698,13 @@ export class PostgresPlatformRepository {
         }
         if (backupId && input.state === "succeeded" && command.action === "backup.verify") await client.query("UPDATE backup_records SET status='verified', verified_at=now() WHERE id=$1", [backupId]);
         if (backupId && input.state === "failed") await client.query("UPDATE backup_records SET status='failed' WHERE id=$1", [backupId]);
+      }
+      if (command.action === "backup.restore") {
+        const restoreId = command.arguments.restore_id;
+        if (input.state === "running") await client.query("UPDATE backup_restore_runs SET status='running', started_at=COALESCE(started_at,now()) WHERE id=$1 AND command_id=$2", [restoreId, command.id]);
+        if (input.state === "succeeded") await client.query("UPDATE backup_restore_runs SET status='succeeded', evidence_refs=$3, completed_at=now() WHERE id=$1 AND command_id=$2", [restoreId, command.id, input.evidenceRefs ?? []]);
+        if (input.state === "failed") await client.query("UPDATE backup_restore_runs SET status='failed', error_code=$3, error_summary=$4, completed_at=now() WHERE id=$1 AND command_id=$2", [restoreId, command.id, input.errorCode ?? "restore_failed", input.errorSummary ?? "Backup restore failed"]);
+        if (input.state === "cancelled") await client.query("UPDATE backup_restore_runs SET status='cancelled', error_code=$3, error_summary=$4, completed_at=now() WHERE id=$1 AND command_id=$2", [restoreId, command.id, input.errorCode ?? "restore_cancelled", input.errorSummary ?? "Backup restore was cancelled"]);
       }
       if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
         if (command.action === "release.stage" && input.state === "succeeded") await client.query("UPDATE release_manifests SET status='approved' WHERE id=$1 AND status='candidate'", [command.arguments.release_id]);
@@ -1070,9 +1092,15 @@ export class PostgresPlatformRepository {
   }
 
   async listBackupRecords(organizationId) {
-    const query = organizationId ? ["SELECT backup.* FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id WHERE deployment.organization_id=$1 ORDER BY backup.created_at DESC", [organizationId]] : ["SELECT backup.* FROM backup_records backup ORDER BY backup.created_at DESC", []];
+    const query = organizationId ? ["SELECT backup.*, deployment.agent_id FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id WHERE deployment.organization_id=$1 ORDER BY backup.created_at DESC", [organizationId]] : ["SELECT backup.*, deployment.agent_id FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id ORDER BY backup.created_at DESC", []];
     const { rows } = await this.pool.query(...query);
-    return rows.map((row) => ({ id: row.id, deploymentId: row.deployment_id, policyId: row.policy_id, backupType: row.backup_type, status: row.status, storageUri: row.storage_uri, sha256: row.sha256, encrypted: row.encrypted, sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes), verifiedAt: row.verified_at?.toISOString?.() ?? row.verified_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+    return rows.map((row) => ({ id: row.id, deploymentId: row.deployment_id, agentId: row.agent_id, policyId: row.policy_id, backupType: row.backup_type, status: row.status, storageUri: row.storage_uri, sha256: row.sha256, encrypted: row.encrypted, sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes), verifiedAt: row.verified_at?.toISOString?.() ?? row.verified_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+  }
+
+  async listBackupRestoreRuns(organizationId) {
+    const query = organizationId ? ["SELECT restore.*, deployment.agent_id FROM backup_restore_runs restore JOIN control_deployments deployment ON deployment.id=restore.deployment_id WHERE deployment.organization_id=$1 ORDER BY restore.created_at DESC", [organizationId]] : ["SELECT restore.*, deployment.agent_id FROM backup_restore_runs restore JOIN control_deployments deployment ON deployment.id=restore.deployment_id ORDER BY restore.created_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ id: row.id, backupId: row.backup_id, deploymentId: row.deployment_id, agentId: row.agent_id, commandId: row.command_id, status: row.status, requestedBy: row.requested_by, reason: row.reason, evidenceRefs: row.evidence_refs, errorCode: row.error_code, errorSummary: row.error_summary, startedAt: row.started_at?.toISOString?.() ?? row.started_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
   }
 
   async listReleaseGates(organizationId) {

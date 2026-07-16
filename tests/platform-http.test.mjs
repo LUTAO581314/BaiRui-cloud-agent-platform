@@ -525,6 +525,36 @@ test("administrators issue governed control commands through approval-gated work
   const leasedAfterApproval = await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 });
   assert.ok(leasedAfterApproval.some((item) => item.command_id === apply.command.id));
 
+  const backupResponse = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "backup.create", backupPolicyId: "manual" }) });
+  assert.equal(backupResponse.status, 202);
+  const backupLease = (await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 })).find((item) => item.action === "backup.create");
+  for (const state of ["accepted", "running"]) await context.repository.recordCommandReceipt({ commandId: backupLease.command_id, serverId: server.id, attempt: backupLease.attempt, state });
+  await context.repository.recordCommandReceipt({ commandId: backupLease.command_id, serverId: server.id, attempt: backupLease.attempt, state: "succeeded", resultSummary: { bytes: 1024 }, evidenceRefs: [`sha256:${"d".repeat(64)}`] });
+  const backupId = backupLease.arguments.backup_id;
+  const prematureRestore = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "backup.restore", backupId, reason: "Attempt restore before backup verification completes" }) });
+  assert.equal(prematureRestore.status, 400);
+  const verifyResponse = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ agentId: context.agent.id, action: "backup.verify", backupId }) });
+  assert.equal(verifyResponse.status, 202);
+  const verifyLease = (await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 })).find((item) => item.action === "backup.verify");
+  for (const state of ["accepted", "running", "succeeded"]) await context.repository.recordCommandReceipt({ commandId: verifyLease.command_id, serverId: server.id, attempt: verifyLease.attempt, state });
+  assert.equal((await context.repository.listBackupRecords("org_a"))[0].status, "verified");
+
+  const restoreBody = JSON.stringify({ agentId: context.agent.id, action: "backup.restore", backupId, reason: "Restore a verified backup after declared data loss" });
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: orgCookie, "content-type": "application/json" }, body: restoreBody })).status, 403);
+  const restoreResponse = await fetch(`${context.baseUrl}/api/admin/control-commands`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: restoreBody });
+  assert.equal(restoreResponse.status, 202);
+  const restore = await restoreResponse.json();
+  assert.equal(restore.approval.riskLevel, "critical");
+  assert.ok(!(await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 })).some((item) => item.command_id === restore.command.id));
+  const restoreDecision = await fetch(`${context.baseUrl}/api/admin/control-approvals/${restore.approval.id}`, { method: "PATCH", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ decision: "approved", reason: "Verified backup identity and rollback recovery plan" }) });
+  assert.equal(restoreDecision.status, 200);
+  const restoreLease = (await context.repository.leaseControlCommands({ serverId: server.id, limit: 10, leaseSeconds: 120 })).find((item) => item.command_id === restore.command.id);
+  assert.equal(restoreLease.action, "backup.restore");
+  assert.equal(restoreLease.arguments.backup_id, backupId);
+  const backupAdmin = await (await fetch(`${context.baseUrl}/api/admin/backups`, { headers: { cookie: rootCookie } })).json();
+  assert.equal(backupAdmin.restores[0].status, "requested");
+  assert.equal(backupAdmin.backups[0].agentId, context.agent.id);
+
   const digest = (letter) => `ghcr.io/bairui/image@sha256:${letter.repeat(64)}`;
   const manifestResponse = await fetch(`${context.baseUrl}/api/admin/release-manifests`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: JSON.stringify({ version: "1.0.0", agentCommit: "a".repeat(40), imageDigest: digest("a"), hermesImage: digest("b"), runtimeImage: digest("c"), sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64) }) });
   assert.equal(manifestResponse.status, 201);

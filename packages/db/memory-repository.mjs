@@ -31,6 +31,7 @@ export class MemoryPlatformRepository {
   #sensitiveGrants = [];
   #sensitiveAccessEvents = [];
   #backupRecords = [];
+  #backupRestoreRuns = [];
   #releaseGates = [];
   #upstreamCandidates = [];
   #agentComponents = new Map();
@@ -315,6 +316,7 @@ export class MemoryPlatformRepository {
     if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
     if (["config.stage", "config.apply"].includes(input.action) && !this.#configRevisions.some((item) => item.id === input.arguments.config_revision_id && item.organizationId === input.organizationId && item.agentId === input.agentId)) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
     if (input.action === "backup.verify" && !this.#backupRecords.some((item) => item.id === input.arguments.backup_id && item.deploymentId === deployment.id)) throw Object.assign(new Error("Backup does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+    if (input.action === "backup.restore" && !this.#backupRecords.some((item) => item.id === input.arguments.backup_id && item.deploymentId === deployment.id && item.status === "verified")) throw Object.assign(new Error("Verified backup is unavailable for this Agent"), { code: "invalid_control_reference", statusCode: 400 });
     if (["release.stage", "release.apply"].includes(input.action) && !this.#releaseManifests.some((item) => item.id === input.arguments.release_id && ["candidate", "approved", "released"].includes(item.status))) throw Object.assign(new Error("Release manifest is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
     if (input.action === "release.rollback" && ![input.arguments.release_id, input.arguments.rollback_release_id].every((id) => this.#releaseManifests.some((item) => item.id === id))) throw Object.assign(new Error("Rollback manifests are unavailable"), { code: "invalid_control_reference", statusCode: 400 });
     if (input.action === "upstream.check" && input.arguments.candidate_id && !this.#upstreamCandidates.some((item) => item.id === input.arguments.candidate_id && item.upstreamId === input.arguments.upstream_id)) throw Object.assign(new Error("Upstream candidate is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
@@ -333,6 +335,7 @@ export class MemoryPlatformRepository {
     }
     if (["probe.run", "contract.test", "smoke.test"].includes(input.action) && input.arguments.test_run_id) this.#testRuns.push({ id: input.arguments.test_run_id, deploymentId: deployment.id, suiteId: input.arguments.suite_id ?? input.arguments.probe_ids.join(","), testType: input.action === "probe.run" ? "probe" : input.action === "contract.test" ? "contract" : "smoke", status: "queued", createdAt: new Date().toISOString() });
     if (input.action === "backup.create" && input.arguments.backup_id) this.#backupRecords.push({ id: input.arguments.backup_id, deploymentId: deployment.id, policyId: input.arguments.backup_policy_id, backupType: "runtime-files", status: "creating", encrypted: true, createdAt: new Date().toISOString() });
+    if (input.action === "backup.restore") this.#backupRestoreRuns.push({ id: input.arguments.restore_id, backupId: input.arguments.backup_id, deploymentId: deployment.id, commandId: command.id, status: "requested", requestedBy: input.requestedBy, reason: input.reason, evidenceRefs: [], errorCode: null, errorSummary: null, startedAt: null, completedAt: null, createdAt: new Date().toISOString() });
     return { command, approval };
   }
 
@@ -352,6 +355,10 @@ export class MemoryPlatformRepository {
     if (input.decision === "rejected") {
       const command = this.#controlCommands.find((item) => item.id === approval.commandId);
       if (command?.state === "queued") command.state = "cancelled";
+      if (command?.action === "backup.restore") {
+        const restore = this.#backupRestoreRuns.find((item) => item.commandId === command.id);
+        if (restore) Object.assign(restore, { status: "cancelled", errorCode: "approval_rejected", errorSummary: "Backup restore approval was rejected", completedAt: new Date().toISOString() });
+      }
     }
     return approval;
   }
@@ -395,7 +402,14 @@ export class MemoryPlatformRepository {
     for (const command of this.#controlCommands.sort((left, right) => left.priority - right.priority || left.createdAt.localeCompare(right.createdAt))) {
       if (leased.length >= (input.limit ?? 10) || !deployments.has(command.deploymentId)) continue;
       if (["leased", "accepted", "running"].includes(command.state) && Date.parse(command.leaseExpiresAt) <= now) command.state = "queued";
-      if (command.state !== "queued" || Date.parse(command.expiresAt) <= now) continue;
+      if (command.state === "queued" && Date.parse(command.expiresAt) <= now) {
+        command.state = "expired";
+        if (command.action === "backup.restore") {
+          const restore = this.#backupRestoreRuns.find((item) => item.commandId === command.id && item.status === "requested");
+          if (restore) Object.assign(restore, { status: "cancelled", errorCode: "command_expired", errorSummary: "Backup restore command expired", completedAt: new Date().toISOString() });
+        }
+      }
+      if (command.state !== "queued") continue;
       if (command.approvalId) {
         const approval = this.#controlApprovals.find((item) => item.id === command.approvalId && item.commandId === command.id);
         if (!approval || approval.decision !== "approved" || Date.parse(approval.expiresAt) <= now) continue;
@@ -512,6 +526,13 @@ export class MemoryPlatformRepository {
       if (backup && input.state === "succeeded" && command.action === "backup.create") Object.assign(backup, { status: "created", storageUri: `bairui-backup://${input.serverId}/${backup.id}`, sha256: input.evidenceRefs?.find((item) => item.startsWith("sha256:"))?.slice(7) ?? null, sizeBytes: input.resultSummary?.bytes ?? null });
       if (backup && input.state === "succeeded" && command.action === "backup.verify") Object.assign(backup, { status: "verified", verifiedAt: new Date().toISOString() });
       if (backup && input.state === "failed") backup.status = "failed";
+    }
+    if (command.action === "backup.restore") {
+      const restore = this.#backupRestoreRuns.find((item) => item.id === command.arguments.restore_id && item.commandId === command.id);
+      if (restore && input.state === "running") Object.assign(restore, { status: "running", startedAt: restore.startedAt ?? new Date().toISOString() });
+      if (restore && input.state === "succeeded") Object.assign(restore, { status: "succeeded", evidenceRefs: input.evidenceRefs ?? [], completedAt: new Date().toISOString() });
+      if (restore && input.state === "failed") Object.assign(restore, { status: "failed", errorCode: input.errorCode ?? "restore_failed", errorSummary: input.errorSummary ?? "Backup restore failed", completedAt: new Date().toISOString() });
+      if (restore && input.state === "cancelled") Object.assign(restore, { status: "cancelled", errorCode: input.errorCode ?? "restore_cancelled", errorSummary: input.errorSummary ?? "Backup restore was cancelled", completedAt: new Date().toISOString() });
     }
     if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
       const current = this.#releaseManifests.find((item) => item.id === command.arguments.release_id);
@@ -828,7 +849,14 @@ export class MemoryPlatformRepository {
 
   async listBackupRecords(organizationId) {
     const deployments = new Set(this.#controlDeployments.filter((item) => !organizationId || item.organizationId === organizationId).map((item) => item.id));
-    return this.#backupRecords.filter((item) => deployments.has(item.deploymentId)).toReversed();
+    const agentByDeployment = new Map(this.#controlDeployments.map((item) => [item.id, item.agentId]));
+    return this.#backupRecords.filter((item) => deployments.has(item.deploymentId)).toReversed().map((item) => ({ ...item, agentId: agentByDeployment.get(item.deploymentId) }));
+  }
+
+  async listBackupRestoreRuns(organizationId) {
+    const deployments = new Set(this.#controlDeployments.filter((item) => !organizationId || item.organizationId === organizationId).map((item) => item.id));
+    const agentByDeployment = new Map(this.#controlDeployments.map((item) => [item.id, item.agentId]));
+    return this.#backupRestoreRuns.filter((item) => deployments.has(item.deploymentId)).toReversed().map((item) => ({ ...item, agentId: agentByDeployment.get(item.deploymentId) }));
   }
 
   async listReleaseGates(organizationId) {

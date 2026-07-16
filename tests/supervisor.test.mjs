@@ -90,22 +90,43 @@ test("Supervisor stages and applies a trusted configuration with rollback files"
   assert.equal(fs.existsSync(path.join(supervisor.instancePath("agent_a"), "config-history", "config_a", "hermes.env")), true);
 });
 
-test("Supervisor encrypts and verifies Agent backups without exposing plaintext", async (t) => {
+test("Supervisor encrypts, verifies, and restores Agent backups with rollback history", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-supervisor-"));
   const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-backups-"));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(backupRoot, { recursive: true, force: true }); });
+  let unsafeArchive = false;
   const execFile = async (file, args) => {
-    if (file === "tar") { fs.writeFileSync(args[args.indexOf("-czf") + 1], "archive-contains-provider-secret"); return { stdout: "", stderr: "" }; }
+    if (file === "tar" && args.includes("-czf")) { fs.writeFileSync(args[args.indexOf("-czf") + 1], "archive-contains-provider-secret"); return { stdout: "", stderr: "" }; }
+    if (file === "tar" && args.includes("-tzf")) return { stdout: unsafeArchive ? "../escape\n" : "hermes-data/\nhermes-data/MEMORY.md\ninstance.json\nhermes.env\nruntime.env\n", stderr: "" };
+    if (file === "tar" && args.includes("-xzf")) {
+      const destination = args[args.indexOf("-C") + 1];
+      fs.mkdirSync(path.join(destination, "hermes-data"), { recursive: true });
+      fs.writeFileSync(path.join(destination, "hermes-data", "MEMORY.md"), "memory-before-backup");
+      fs.writeFileSync(path.join(destination, "instance.json"), JSON.stringify({ agentId: "agent_a" }));
+      fs.writeFileSync(path.join(destination, "hermes.env"), "RESTORED_HERMES=1\n");
+      fs.writeFileSync(path.join(destination, "runtime.env"), "RESTORED_RUNTIME=1\n");
+      return { stdout: "", stderr: "" };
+    }
     if (args[1] === "inspect") throw new Error("missing");
     return { stdout: "", stderr: "" };
   };
   const supervisor = new AgentSupervisor({ instancesRoot: root, backupRoot, backupEncryptionKey: "backup-encryption-key-longer-than-thirty-two", platformUrl: "https://platform.example.test", execFile, portStart: 19100, portEnd: 19110 });
   await supervisor.execute(provisionCommand());
+  fs.writeFileSync(path.join(supervisor.instancePath("agent_a"), "hermes-data", "MEMORY.md"), "memory-before-backup");
   const created = await supervisor.execute({ command_id: "backup_a", action: "backup.create", arguments: { backup_policy_id: "daily", backup_id: "backup_a" }, placement: { agent_id: "agent_a" } });
   assert.equal(created.summary.encrypted, 1);
   assert.doesNotMatch(fs.readFileSync(path.join(backupRoot, "backup_a.brb")).toString("utf8"), /provider-secret/);
   const verified = await supervisor.execute({ action: "backup.verify", arguments: { backup_id: "backup_a" }, placement: { agent_id: "agent_a" } });
   assert.equal(verified.summary.verified, 1);
+  fs.writeFileSync(path.join(supervisor.instancePath("agent_a"), "hermes-data", "MEMORY.md"), "memory-after-backup");
+  const restore = { action: "backup.restore", approval_id: "approval_restore", arguments: { backup_id: "backup_a", restore_id: "restore_a" }, placement: { agent_id: "agent_a" } };
+  const restored = await supervisor.execute(restore);
+  assert.equal(restored.summary.restored, 1);
+  assert.equal(fs.readFileSync(path.join(supervisor.instancePath("agent_a"), "hermes-data", "MEMORY.md"), "utf8"), "memory-before-backup");
+  assert.equal(fs.readFileSync(path.join(supervisor.instancePath("agent_a"), "restore-history", "restore_a", "hermes-data", "MEMORY.md"), "utf8"), "memory-after-backup");
+  await assert.rejects(() => supervisor.execute({ ...restore, approval_id: undefined, arguments: { backup_id: "backup_a", restore_id: "restore_without_approval" } }), { code: "approval_required" });
+  unsafeArchive = true;
+  await assert.rejects(() => supervisor.execute({ ...restore, arguments: { backup_id: "backup_a", restore_id: "restore_unsafe" } }), { code: "unsafe_backup_content" });
 });
 
 test("Supervisor accepts release images only from trusted immutable manifests", async (t) => {
