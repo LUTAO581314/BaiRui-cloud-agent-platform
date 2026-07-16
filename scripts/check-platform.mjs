@@ -39,6 +39,7 @@ const required = [
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/bailongma-ui/brain-app-transform.mjs",
+  "packages/bailongma-ui/app-shell-transform.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
@@ -146,6 +147,14 @@ for (const table of ["agent_components", "heartbeats", "telemetry_events", "usag
 }
 for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
+}
+
+const characterCardGuide = fs.readFileSync(path.join(root, "docs/21-character-card-hermes-compatibility.md"), "utf8");
+for (const evidence of ["SOUL.md", "hermes_target=none", "context adapter", "patch queue"]) {
+  if (!characterCardGuide.includes(evidence)) failures.push(`Missing character-card compatibility boundary: ${evidence}`);
+}
+for (const evidence of ["parseTavernCharacterCard", "/character-card", "requestAgentIdentityConfiguration", "publicFleetAgent"]) {
+  if (!server.includes(evidence)) failures.push(`Missing character-card platform behavior: ${evidence}`);
 }
 const resourceMigrationPath = path.join(root, "packages/db/migrations/012_agent_resource_telemetry.sql");
 const resourceMigration = fs.existsSync(resourceMigrationPath) ? fs.readFileSync(resourceMigrationPath, "utf8") : "";

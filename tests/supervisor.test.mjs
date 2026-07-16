@@ -122,6 +122,34 @@ test("Supervisor applies only owner-scoped skill YAML and rolls back invalid inp
   assert.equal(fs.readFileSync(hermesConfig, "utf8"), "skills: [\n");
 });
 
+test("Supervisor atomically applies owner-scoped SOUL identity and restores it after restart failure", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-supervisor-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let failNextHermesStart = false;
+  const execFile = async (file, args) => {
+    if (args[1] === "inspect") throw new Error("missing");
+    const nameIndex = args.indexOf("--name");
+    if (failNextHermesStart && args[0] === "run" && nameIndex >= 0 && String(args[nameIndex + 1]).startsWith("bairui-hermes-")) {
+      failNextHermesStart = false;
+      throw new Error("simulated Hermes restart failure");
+    }
+    return { stdout: "", stderr: "" };
+  };
+  const supervisor = new AgentSupervisor({ instancesRoot: root, platformUrl: "https://platform.example.test", execFile, portStart: 19100, portEnd: 19110 });
+  await supervisor.execute(provisionCommand());
+  const soulPath = path.join(supervisor.instancePath("agent_a"), "hermes-data", "SOUL.md");
+  const identity = (revision, soul) => ({ action: "config.apply-user", command_id: `cmd_${revision}`, idempotency_key: `dep_a/config.apply-user/${revision}`, arguments: { config_revision_id: revision }, placement: { agent_id: "agent_a" }, config: { document: { owner_change: { scope: "identity", generation: 2 }, agent: { id: "agent_a", name: "Agent A", soul_markdown: soul } } } });
+  const applied = await supervisor.execute(identity("config_identity", "# Identity\n\nPrecise and calm."));
+  assert.equal(applied.summary.identity, 1);
+  assert.equal(fs.readFileSync(soulPath, "utf8"), "# Identity\n\nPrecise and calm.");
+  assert.ok(applied.evidenceRefs.some((item) => item.startsWith("soul-sha256:")));
+
+  failNextHermesStart = true;
+  await assert.rejects(() => supervisor.execute(identity("config_identity_failed", "# Identity\n\nMust roll back.")), /restart failure/);
+  assert.equal(fs.readFileSync(soulPath, "utf8"), "# Identity\n\nPrecise and calm.");
+  await assert.rejects(() => supervisor.execute({ ...identity("config_identity_bad", "valid"), config: { document: { owner_change: { scope: "identity", generation: 3 }, agent: { id: "other_agent", name: "Agent A", soul_markdown: "valid" } } } }), { code: "invalid_user_config_scope" });
+});
+
 test("Supervisor encrypts, verifies, and restores Agent backups with rollback history", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-supervisor-"));
   const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-backups-"));

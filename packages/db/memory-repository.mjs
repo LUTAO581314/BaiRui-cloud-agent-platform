@@ -355,6 +355,15 @@ export class MemoryPlatformRepository {
   }
 
   async requestAgentSkillConfiguration(input) {
+    return this.requestAgentOwnerConfiguration(input, "skills");
+  }
+
+  async requestAgentIdentityConfiguration(input) {
+    return this.requestAgentOwnerConfiguration(input, "identity");
+  }
+
+  async requestAgentOwnerConfiguration(input, scope) {
+    if (!["skills", "identity"].includes(scope)) throw new TypeError("Unsupported owner configuration scope");
     const agent = this.#agents.get(input.agentId);
     const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === input.agentId);
     if (!agent || !runtime || agent.organizationId !== input.organizationId || agent.ownerUserId !== input.userId) return null;
@@ -364,10 +373,10 @@ export class MemoryPlatformRepository {
     if (!current || !deployment) throw Object.assign(new Error("Agent configuration is unavailable"), { code: "agent_configuration_unavailable", statusCode: 409 });
     const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
     const disabled = this.#agentSkillPreferences.filter((item) => item.agentId === agent.id && item.enabled === false).map((item) => item.skillId).sort();
-    const configDocument = { ...current.configDocument, owner_change: { scope: "skills", generation: revision }, skills: { disabled } };
+    const configDocument = { ...current.configDocument, agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, owner_change: { scope, generation: revision }, skills: { disabled } };
     const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: current.secretEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
     this.#configRevisions.push(config);
-    for (const command of this.#controlCommands.filter((item) => item.agentId === agent.id && item.action === "config.apply-user" && item.state === "queued")) {
+    for (const command of this.#controlCommands.filter((item) => item.agentId === agent.id && item.action === "config.apply-user" && item.state === "queued" && this.#configRevisions.find((revisionItem) => revisionItem.id === item.arguments.config_revision_id)?.configDocument?.owner_change?.scope === scope)) {
       command.state = "cancelled";
       const previous = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
       if (previous) previous.status = "superseded";
@@ -608,7 +617,7 @@ export class MemoryPlatformRepository {
         const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
         runtime.configRevisionId = config.id;
       }
-      if (config && command.action === "config.apply-user" && ["succeeded", "failed"].includes(input.state)) {
+      if (config && command.action === "config.apply-user" && config.configDocument?.owner_change?.scope === "skills" && ["succeeded", "failed"].includes(input.state)) {
         const disabled = new Set(config.configDocument?.skills?.disabled ?? []);
         for (const preference of this.#agentSkillPreferences.filter((item) => item.agentId === config.agentId && item.enabled === !disabled.has(item.skillId))) {
           Object.assign(preference, { applyStatus: input.state === "succeeded" ? "applied" : "failed", lastErrorCode: input.state === "failed" ? input.errorCode ?? "config_apply_failed" : null, updatedAt: new Date().toISOString() });

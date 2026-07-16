@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 import { toBailongmaHotspots, toBailongmaMemories } from "../packages/bailongma-ui/compatibility.mjs";
 import { transformBailongmaBrainApp } from "../packages/bailongma-ui/brain-app-transform.mjs";
+import { transformBailongmaAppShell } from "../packages/bailongma-ui/app-shell-transform.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma");
 
@@ -20,6 +21,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
+  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
 
@@ -47,6 +49,13 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
   assert.match(workspace, /Obsidian 主记忆库/);
 });
 
+test("restores BaiLongma's native independent panel controls", () => {
+  const source = fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "app-shell.js"), "utf8");
+  const transformed = transformBailongmaAppShell(source);
+  assert.match(transformed, /createPanelTabs\(\)/);
+  assert.throws(() => transformBailongmaAppShell("export const unrelated = true;"), /anchor/);
+});
+
 test("keeps the BaiRui toolbar above the interactive BaiLongma graph", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
@@ -54,6 +63,20 @@ test("keeps the BaiRui toolbar above the interactive BaiLongma graph", () => {
   assert.match(overlay, /\.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
   assert.match(adapter, /document\.body\.appendChild\(tools\)/);
   assert.match(adapter, /zIndex:\s*"2147483000"/);
+});
+
+test("adapts BaiLongma panels into persistent desktop controls and mobile drawers", () => {
+  const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
+  const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
+  for (const evidence of [".panel-tab", ".bairui-panel-scrim", "body:not(.l1-collapsed)", "body:not(.l2-collapsed)"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const evidence of ["mountPanelControls", "bailongma-panel-l1-collapsed", "bailongma-panel-l2-collapsed", "aria-expanded"]) assert.match(adapter, new RegExp(evidence));
+});
+
+test("imports SillyTavern character cards through a confirmed BaiRui adapter flow", () => {
+  const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
+  const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
+  for (const evidence of ["previewOnly", "confirmUntrustedPrompts", "character-card", "import-character-card", "SillyTavern"]) assert.match(adapter, new RegExp(evidence));
+  assert.match(overlay, /\.bairui-card-dialog/);
 });
 
 test("adapts the BaiLongma console into a persistent Hermes chat column", () => {

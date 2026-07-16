@@ -95,6 +95,58 @@
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.025) !important;
 }
 
+.panel-tab {
+  z-index: 20 !important;
+  width: 30px !important;
+  height: 58px !important;
+  color: var(--ink2, #b7c8dc) !important;
+  font-size: 17px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.panel-tab:focus-visible {
+  outline: 2px solid var(--cool, #4a9fff);
+  outline-offset: 2px;
+}
+
+.bairui-panel-scrim { display: none; }
+
+.bairui-card-dialog {
+  width: min(580px, calc(100vw - 28px));
+  max-height: calc(100dvh - 32px);
+  border: 1px solid #3a5062;
+  border-radius: 8px;
+  background: #101923;
+  color: #eef5fb;
+  padding: 0;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.62);
+}
+
+.bairui-card-dialog::backdrop { background: rgba(3, 7, 12, 0.82); }
+.bairui-card-dialog form { display: grid; max-height: calc(100dvh - 32px); grid-template-rows: auto minmax(0, 1fr) auto; }
+.bairui-card-dialog header, .bairui-card-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #293b4a; }
+.bairui-card-dialog header div { display: grid; gap: 2px; min-width: 0; }
+.bairui-card-dialog header span { color: #8095a7; font-size: 11px; }
+.bairui-card-dialog header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
+.bairui-card-dialog header button { width: 34px; height: 34px; padding: 0; font-size: 20px; }
+.bairui-card-dialog footer { justify-content: flex-end; border-top: 1px solid #293b4a; border-bottom: 0; }
+.bairui-card-dialog footer .primary { border-color: #4a9fff; background: #267bd4; color: #fff; }
+.bairui-card-dialog footer button:disabled { opacity: 0.45; cursor: not-allowed; }
+.bairui-card-body { overflow: auto; padding: 18px; }
+.bairui-card-body dl { margin: 0; border-top: 1px solid #2b3e4d; }
+.bairui-card-body dl div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid #2b3e4d; }
+.bairui-card-body dt { color: #8296a8; }
+.bairui-card-body dd { margin: 0; overflow-wrap: anywhere; }
+.bairui-card-body section { margin-top: 18px; border-left: 3px solid #4a9fff; background: #111f2c; padding: 13px 15px; }
+.bairui-card-body section p { margin: 5px 0 0; color: #9aabba; line-height: 1.65; }
+.bairui-card-confirm { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 16px; color: #c8d4de; line-height: 1.55; }
+.bairui-card-confirm input { width: 18px; height: 18px; margin: 2px 0 0; }
+.bairui-card-error { min-height: 20px; margin: 10px 0 0; color: #ff8b80; }
+.bairui-card-notice { position: fixed; z-index: 2147483646; right: 18px; bottom: 18px; max-width: min(420px, calc(100vw - 36px)); border: 1px solid #3a5368; border-radius: 5px; background: #122333; color: #eef6fc; padding: 11px 14px; opacity: 0; transform: translateY(8px); transition: 0.18s ease; }
+.bairui-card-notice.visible { opacity: 1; transform: none; }
+.bairui-card-notice.tone-success { border-color: #3b8464; }
+.bairui-card-notice.tone-error { border-color: #a84e47; }
+
 .bairui-chat-header {
   flex: 0 0 auto;
   display: flex;
@@ -807,4 +859,46 @@ body.bairui-streaming #send-btn {
   .bw-metrics { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   .bw-hotspot-grid { grid-template-columns: 1fr; }
   .bw-run-log { min-height: 260px; }
+}
+
+@media (max-width: 780px) {
+  #panel-l1,
+  #panel-l2 {
+    display: flex !important;
+    top: 62px;
+    bottom: 10px;
+    width: min(86vw, 340px);
+    z-index: 1200;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg0, #0b121c) 97%, transparent);
+  }
+
+  #panel-l1 { left: 10px; }
+  #panel-l2 { right: 10px; }
+  body.l1-collapsed #panel-l1 { transform: translateX(calc(-100% - 12px)); }
+  body.l2-collapsed #panel-l2 { transform: translateX(calc(100% + 12px)); }
+
+  .panel-tab {
+    display: flex !important;
+    top: 132px;
+    z-index: 1202 !important;
+    width: 32px !important;
+    height: 48px !important;
+  }
+
+  body.l1-collapsed .panel-tab-left { left: 0; }
+  body:not(.l1-collapsed) .panel-tab-left { left: calc(min(86vw, 340px) + 10px); }
+  body.l2-collapsed .panel-tab-right { right: 0; }
+  body:not(.l2-collapsed) .panel-tab-right { right: calc(min(86vw, 340px) + 10px); }
+
+  .bairui-panel-scrim {
+    position: fixed;
+    z-index: 1190;
+    inset: 56px 0 0;
+    background: rgba(3, 8, 13, 0.64);
+    backdrop-filter: blur(2px);
+  }
+
+  body:not(.l1-collapsed) .bairui-panel-scrim,
+  body:not(.l2-collapsed) .bairui-panel-scrim { display: block; }
 }

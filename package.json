@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "pg": "^8.16.0",
+    "png-chunk-text": "^1.0.0",
+    "png-chunks-extract": "^1.0.0",
     "yaml": "^2.8.1"
   },
   "scripts": {
