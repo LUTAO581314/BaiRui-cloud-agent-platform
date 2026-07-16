@@ -25,12 +25,18 @@ Each Runtime reports an ordered heartbeat containing identifiers, versions,
 five-layer component health, numeric metrics, usage aggregates, and redacted
 operational events. The ingestion endpoint rebuilds the payload from an
 allowlist and never stores submitted prompt, message, memory, or secret fields.
+The server identity separately reports CPU, memory, Agent storage, host storage,
+OS/architecture, managed container roles, images/versions, and start time. The
+platform derives organization and owner from deployment records rather than
+trusting sender-supplied tenant fields.
 
 PostgreSQL authorities:
 
 - `agent_runtimes` for current Runtime placement and health;
 - `agent_components` for the latest five-layer component observation;
 - `heartbeats` for ordered liveness evidence;
+- `agent_resource_samples` for aggregate infrastructure history;
+- `agent_container_resource_samples` for Hermes/Boundary container details;
 - `telemetry_events` for redacted operational events;
 - `usage_rollups` for per-Agent model usage and cost;
 - `alerts` for actionable fleet incidents;

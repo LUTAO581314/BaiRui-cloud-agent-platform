@@ -1022,6 +1022,15 @@ body[data-view="admin"] {
 .control-dialog form { display: grid; gap: 16px; padding: 22px; }
 .control-dialog h2 { margin: 0; font-size: 16px; }
 .control-dialog label { display: grid; gap: 7px; color: #56646a; font-size: 11px; }
+.control-dialog.resource-dialog { width: min(1120px, calc(100% - 28px)); max-height: calc(100vh - 32px); overflow: auto; }
+.resource-dialog form { display: block; }
+.resource-dialog .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.resource-dialog .section-heading p { margin: 5px 0 0; color: #6b797f; font-size: 11px; }
+.resource-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 20px; border-block: 1px solid #d6dddf; }
+.resource-summary > div { min-width: 0; padding: 13px 12px; border-right: 1px solid #d6dddf; }
+.resource-summary > div:last-child { border-right: 0; }
+.resource-summary span { display: block; margin-bottom: 6px; color: #6b797f; font-size: 10px; }
+.resource-summary strong { display: block; overflow-wrap: anywhere; font-size: 13px; font-weight: 650; }
 
 @media (max-width: 1040px) {
   .control-shell { grid-template-columns: 196px minmax(0, 1fr); }
@@ -1046,4 +1055,6 @@ body[data-view="admin"] {
   .metric-band > div { border-bottom: 1px solid var(--line); }
   .control-form, .policy-form { grid-template-columns: 1fr; padding: 14px; }
   .section-toolbar { align-items: flex-start; padding: 12px 0; }
+  .resource-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .resource-summary > div { border-bottom: 1px solid #d6dddf; }
 }

@@ -282,6 +282,29 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.equal(heartbeatResponse.status, 202);
   assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "ready");
 
+  const resource = { agentId: context.agent.id, runtimeId: context.runtime.id, deploymentId: command.deployment_id, sequence: 10, status: "running", cpuPercent: 5.3, memoryUsedBytes: 201326592, memoryLimitBytes: 2147483648, agentStorageUsedBytes: 10485760, hostStorageUsedBytes: 53687091200, hostStorageLimitBytes: 107374182400, osType: "linux", architecture: "amd64", operatingSystem: "Test Linux", dockerVersion: "27.1.0", cpuCount: 8, startedAt: "2026-07-16T06:00:00.000Z", uptimeSeconds: 3600, observedAt: "2026-07-16T07:00:00.000Z", prompt: "must-not-be-stored", containers: [{ role: "hermes", status: "running", containerId: "a".repeat(64), containerName: "bairui-hermes-a", imageRef: "hermes:test", version: "1.2.3", cpuPercent: 3.1, memoryUsedBytes: 134217728, memoryLimitBytes: 2147483648, writableBytes: 1024, startedAt: "2026-07-16T06:00:00.000Z", secret: "must-not-be-stored" }, { role: "runtime-boundary", status: "running", containerId: "b".repeat(64), containerName: "bairui-runtime-a", imageRef: "runtime:test", version: "0.4.0", cpuPercent: 2.2, memoryUsedBytes: 67108864, memoryLimitBytes: 2147483648, writableBytes: 2048, startedAt: "2026-07-16T06:01:00.000Z" }] };
+  const resourceResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [resource] } });
+  assert.equal(resourceResponse.status, 202);
+  const fleet = await (await fetch(`${context.baseUrl}/api/admin/agents`, { headers: { cookie: rootCookie } })).json();
+  const fleetAgent = fleet.agents.find((item) => item.id === context.agent.id);
+  assert.equal(fleetAgent.resource.cpuPercent, 5.3);
+  assert.equal(fleetAgent.resource.containers[0].role, "hermes");
+  assert.doesNotMatch(JSON.stringify(fleetAgent.resource), /must-not-be-stored/);
+  const resourceDetail = await fetch(`${context.baseUrl}/api/admin/agents/${context.agent.id}/resources`, { headers: { cookie: rootCookie } });
+  assert.equal(resourceDetail.status, 200);
+  assert.equal((await resourceDetail.json()).samples[0].architecture, "amd64");
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/agents/${context.agent.id}/resources`, { headers: { cookie: userCookie } })).status, 403);
+  const mismatchedResource = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [{ ...resource, deploymentId: "deployment_not_owned", sequence: 11 }] } });
+  assert.equal(mismatchedResource.status, 404);
+  const malformedResource = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [{ ...resource, sequence: 12, containers: [resource.containers[0], { ...resource.containers[0], containerName: "duplicate-role" }] }] } });
+  assert.equal(malformedResource.status, 400);
+  const highResource = { ...resource, sequence: 13, cpuPercent: 760, memoryUsedBytes: 2040109465, hostStorageUsedBytes: 102005473280, observedAt: new Date().toISOString() };
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [highResource] } })).status, 202);
+  const highAlerts = (await (await fetch(`${context.baseUrl}/api/admin/alerts`, { headers: { cookie: rootCookie } })).json()).alerts.filter((item) => item.code.startsWith("resource."));
+  assert.deepEqual(new Set(highAlerts.map((item) => item.code)), new Set(["resource.cpu.high", "resource.memory.high", "resource.storage.high"]));
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [{ ...resource, sequence: 14, observedAt: new Date().toISOString() }] } })).status, 202);
+  assert.ok((await context.repository.listAlerts("org_a")).filter((item) => item.code.startsWith("resource.")).every((item) => item.status === "resolved"));
+
   const pause = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "pause" }) });
   assert.equal(pause.status, 202);
   assert.equal((await pause.json()).action, "deployment.suspend");

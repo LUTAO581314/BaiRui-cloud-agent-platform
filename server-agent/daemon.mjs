@@ -1,7 +1,7 @@
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { executeControlCycle } from "./control-client.mjs";
+import { executeControlCycle, sendResourceSamples } from "./control-client.mjs";
 import { AgentSupervisor } from "./supervisor.mjs";
 
 const delay = (milliseconds, signal) => new Promise((resolve) => {
@@ -28,6 +28,7 @@ export async function runControlDaemon(options = {}) {
   const env = options.env ?? process.env;
   const signal = options.signal;
   const intervalMs = Math.max(1_000, Number(env.BAIRUI_CONTROL_POLL_INTERVAL_MS ?? 5_000));
+  const resourceIntervalMs = Math.max(10_000, Number(env.BAIRUI_RESOURCE_INTERVAL_MS) || 30_000);
   const client = {
     platformUrl: env.BAIRUI_PLATFORM_URL,
     serverId: env.BAIRUI_SERVER_ID,
@@ -38,12 +39,22 @@ export async function runControlDaemon(options = {}) {
     leaseSeconds: Number(env.BAIRUI_CONTROL_LEASE_SECONDS ?? 120)
   };
   if (!client.platformUrl || !client.serverId || !client.token) throw new Error("BAIRUI_PLATFORM_URL, BAIRUI_SERVER_ID, and BAIRUI_SERVER_AGENT_TOKEN are required");
+  let nextResourceAt = 0;
   while (!signal?.aborted) {
     try {
       const results = await executeControlCycle(client);
       if (results.length) options.logger?.info?.("Control cycle completed", { commands: results.length });
     } catch (error) {
       options.logger?.error?.("Control cycle failed", { code: error.code ?? "control_cycle_failed", message: error.message });
+    }
+    if (Date.now() >= nextResourceAt && typeof client.executor.collectResourceSamples === "function") {
+      nextResourceAt = Date.now() + resourceIntervalMs;
+      try {
+        const samples = await client.executor.collectResourceSamples();
+        if (samples.length) await sendResourceSamples({ ...client, samples });
+      } catch (error) {
+        options.logger?.error?.("Resource telemetry cycle failed", { code: error.code ?? "resource_cycle_failed", message: error.message });
+      }
     }
     if (options.once) break;
     await delay(intervalMs, signal);

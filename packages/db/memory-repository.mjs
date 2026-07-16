@@ -50,6 +50,7 @@ export class MemoryPlatformRepository {
   #upstreamCandidates = [];
   #agentComponents = new Map();
   #heartbeats = [];
+  #resourceSamples = [];
   #telemetryEvents = [];
   #usageRollups = [];
   #alerts = [];
@@ -228,6 +229,60 @@ export class MemoryPlatformRepository {
 
   async listAgentComponents(organizationId, agentId) {
     return [...this.#agentComponents.values()].filter((item) => (!organizationId || item.organizationId === organizationId) && (!agentId || item.agentId === agentId));
+  }
+
+  async saveAgentResourceSamples(input) {
+    const saved = [];
+    for (const sample of input.samples ?? []) {
+      const deployment = this.#controlDeployments.find((item) => item.id === sample.deploymentId && item.serverId === input.serverId && item.agentId === sample.agentId);
+      const runtime = this.#agentRuntimes.get(sample.runtimeId);
+      const agent = this.#agents.get(sample.agentId);
+      const server = this.#servers.find((item) => item.id === input.serverId && item.organizationId === agent?.organizationId);
+      if (!deployment || !runtime || !agent || !server || runtime.agentId !== agent.id || runtime.deploymentId !== deployment.id) throw Object.assign(new Error("Resource sample does not belong to this server deployment"), { code: "resource_identity_mismatch", statusCode: 404 });
+      const receivedAt = new Date().toISOString();
+      const resource = { id: randomUUID(), organizationId: agent.organizationId, userId: agent.ownerUserId, serverId: input.serverId, environment: deployment.environment, ...sample, receivedAt };
+      const existing = this.#resourceSamples.findIndex((item) => item.runtimeId === sample.runtimeId && item.sequence === sample.sequence);
+      if (existing >= 0) {
+        resource.id = this.#resourceSamples[existing].id;
+        this.#resourceSamples[existing] = resource;
+      } else this.#resourceSamples.push(resource);
+      this.#evaluateResourceAlerts(resource);
+      saved.push(resource);
+    }
+    return saved;
+  }
+
+  #evaluateResourceAlerts(resource) {
+    const checks = [
+      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU 使用率过高"],
+      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent 内存使用率过高"],
+      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent 主机存储使用率过高"]
+    ];
+    for (const [code, value, threshold, severity, title] of checks) {
+      const active = this.#alerts.find((item) => item.agentId === resource.agentId && item.code === code && ["open", "acknowledged"].includes(item.status));
+      if (Number.isFinite(value) && value >= threshold) {
+        const alert = active ?? { id: randomUUID(), organizationId: resource.organizationId, agentId: resource.agentId, runtimeId: resource.runtimeId, code, status: "open", firstSeenAt: resource.observedAt, createdAt: resource.receivedAt };
+        Object.assign(alert, { severity, title, summary: `当前使用率 ${value.toFixed(1)}%，阈值 ${threshold}%`, lastSeenAt: resource.observedAt });
+        if (!active) this.#alerts.push(alert);
+      } else if (active) Object.assign(active, { status: "resolved", resolvedAt: resource.receivedAt });
+    }
+  }
+
+  async latestAgentResourceSamples(organizationId, agentId) {
+    const latest = new Map();
+    for (const sample of this.#resourceSamples) {
+      if ((organizationId && sample.organizationId !== organizationId) || (agentId && sample.agentId !== agentId)) continue;
+      const current = latest.get(sample.runtimeId);
+      if (!current || current.observedAt < sample.observedAt) latest.set(sample.runtimeId, sample);
+    }
+    return [...latest.values()].sort((left, right) => right.observedAt.localeCompare(left.observedAt));
+  }
+
+  async listAgentResourceSamples(organizationId, agentId, limit = 288) {
+    return this.#resourceSamples
+      .filter((item) => (!organizationId || item.organizationId === organizationId) && (!agentId || item.agentId === agentId))
+      .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))
+      .slice(0, Math.max(1, Math.min(Number(limit) || 288, 2000)));
   }
 
   async listAlerts(organizationId) {
@@ -863,6 +918,7 @@ export class MemoryPlatformRepository {
         run.deletedCounts[field] = before - kept.length;
       };
       purge("heartbeats", this.#heartbeats, (item) => item.organizationId === id && !recent(item.receivedAt, cutoffs.telemetry));
+      purge("resourceSamples", this.#resourceSamples, (item) => item.organizationId === id && !recent(item.receivedAt, cutoffs.telemetry));
       purge("telemetryEvents", this.#telemetryEvents, (item) => item.organizationId === id && !recent(item.occurredAt ?? item.receivedAt, cutoffs.telemetry));
       purge("usageRollups", this.#usageRollups, (item) => item.organizationId === id && !recent(item.bucketStart, cutoffs.usage));
       purge("sensitiveAccessEvents", this.#sensitiveAccessEvents, (item) => item.organizationId === id && !recent(item.createdAt, cutoffs.sensitiveAccess));

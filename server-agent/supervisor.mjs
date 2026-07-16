@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { collectAgentResourceSamples } from "./resource-collector.mjs";
 
 const execFile = promisify(execFileCallback);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -225,6 +226,14 @@ export class AgentSupervisor {
     const metadata = this.readMetadata(agentId);
     const states = await Promise.all([metadata.names.hermes, metadata.names.runtime].map((name) => this.exists("container", name)));
     return { summary: { containers: states.filter(Boolean).length, expected_containers: 2 }, evidenceRefs: [states[0] ? `docker:${metadata.names.hermes}` : `missing:${metadata.names.hermes}`, states[1] ? `docker:${metadata.names.runtime}` : `missing:${metadata.names.runtime}`] };
+  }
+
+  async collectResourceSamples(options = {}) {
+    return collectAgentResourceSamples({
+      instancesRoot: this.instancesRoot,
+      execFile: this.execFile,
+      ...options
+    });
   }
 
   async runControlCheck(command, type) {

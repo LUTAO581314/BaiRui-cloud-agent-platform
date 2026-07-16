@@ -28,6 +28,7 @@ const required = [
   "packages/db/migrations/009_control_plane_admin_domains.sql",
   "packages/db/migrations/010_backup_restore.sql",
   "packages/db/migrations/011_retention_enforcement.sql",
+  "packages/db/migrations/012_agent_resource_telemetry.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -40,12 +41,14 @@ const required = [
   "tests/authorization.test.mjs",
   "tests/session.test.mjs",
   "tests/platform-http.test.mjs",
+  "tests/resource-collector.test.mjs",
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "server-agent/index.mjs",
   "server-agent/control-client.mjs",
   "server-agent/daemon.mjs",
   "server-agent/supervisor.mjs",
+  "server-agent/resource-collector.mjs",
   "infra/systemd/bairui-server-agent.service",
   "infra/server-agent.env.example",
   "server-agent/bin/acceptance-check.mjs",
@@ -66,7 +69,8 @@ const required = [
   "docs/13-control-plane-operations.md",
   "docs/14-multi-tenant-agent-runtime.md",
   "docs/15-agent-fleet-control.md",
-  "docs/16-control-command-delivery.md"
+  "docs/16-control-command-delivery.md",
+  "docs/17-agent-resource-telemetry.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -123,6 +127,14 @@ for (const table of ["agent_components", "heartbeats", "telemetry_events", "usag
 for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
 }
+const resourceMigrationPath = path.join(root, "packages/db/migrations/012_agent_resource_telemetry.sql");
+const resourceMigration = fs.existsSync(resourceMigrationPath) ? fs.readFileSync(resourceMigrationPath, "utf8") : "";
+for (const table of ["agent_resource_samples", "agent_container_resource_samples"]) {
+  if (!resourceMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent resource table: ${table}`);
+}
+for (const evidence of ["/api/internal/control-plane/resources", "latestAgentResourceSamples", "/resources"]) {
+  if (!server.includes(evidence)) failures.push(`Missing Agent resource telemetry server evidence: ${evidence}`);
+}
 const deliveryMigrationPath = path.join(root, "packages/db/migrations/007_control_command_delivery.sql");
 const deliveryMigration = fs.existsSync(deliveryMigrationPath) ? fs.readFileSync(deliveryMigrationPath, "utf8") : "";
 for (const table of ["server_credentials", "agent_runtime_credentials", "machine_request_nonces", "command_receipts"]) {
@@ -162,6 +174,10 @@ const supervisorPath = path.join(root, "server-agent/supervisor.mjs");
 const supervisor = fs.existsSync(supervisorPath) ? fs.readFileSync(supervisorPath, "utf8") : "";
 if (!supervisor.includes('this.execFile("docker", args')) failures.push("Supervisor must use fixed docker execFile arguments");
 for (const forbidden of ["exec(", "shell: true", "rm -rf", "child_process.exec("]) if (supervisor.includes(forbidden)) failures.push(`Forbidden Supervisor execution pattern: ${forbidden}`);
+const resourceCollectorPath = path.join(root, "server-agent/resource-collector.mjs");
+const resourceCollector = fs.existsSync(resourceCollectorPath) ? fs.readFileSync(resourceCollectorPath, "utf8") : "";
+if (!resourceCollector.includes('exec("docker", args')) failures.push("Resource collector must use fixed Docker execFile arguments");
+for (const forbidden of ["shell: true", "child_process.exec("]) if (resourceCollector.includes(forbidden)) failures.push(`Forbidden resource collector execution pattern: ${forbidden}`);
 if (failures.length) {
   console.error("Platform check failed:");
   for (const failure of failures) console.error(`- ${failure}`);

@@ -42,6 +42,8 @@ to the stored policy. Audit hash-chain nodes remain after their event payloads
 expire. Backup files are removed only through an internal `backup.expire`
 command resolved against the Server Agent's fixed backup root; retention never
 sends a host path.
+Agent resource samples use the same telemetry retention cutoff and delete
+container details by cascade.
 Incidents link alerts, SLO impact, observations, actions, evidence, and audit.
 Closure requires a healthy post-remediation observation.
 
