@@ -288,6 +288,57 @@ export class PostgresPlatformRepository {
     } finally { client.release(); }
   }
 
+  async requestAgentLifecycle(input) {
+    const actionByRequest = { pause: "deployment.suspend", resume: "deployment.resume", delete: "deployment.delete" };
+    const action = actionByRequest[input.request];
+    if (!action) throw new TypeError("Unsupported Agent lifecycle request");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: agentRows } = await client.query("SELECT * FROM agents WHERE id=$1 FOR UPDATE", [input.agentId]);
+      const agent = mapAgent(agentRows[0]);
+      if (!agent) { await client.query("ROLLBACK"); return null; }
+      const { rows: runtimeRows } = await client.query("SELECT * FROM agent_runtimes WHERE agent_id=$1 FOR UPDATE", [agent.id]);
+      const runtime = mapAgentRuntime(runtimeRows[0]);
+      if (!runtime) { await client.query("ROLLBACK"); return null; }
+      if (!runtime.deploymentId) {
+        if (input.request !== "delete") throw Object.assign(new Error("Agent has not been initialized"), { code: "agent_not_initialized", statusCode: 409 });
+        await client.query("DELETE FROM agents WHERE id=$1", [agent.id]);
+        await client.query("COMMIT");
+        return { agentId: agent.id, action, state: "succeeded", deleted: true, command: null };
+      }
+      const { rows: deploymentRows } = await client.query("SELECT * FROM control_deployments WHERE id=$1 FOR UPDATE", [runtime.deploymentId]);
+      const deployment = deploymentRows[0];
+      if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
+      if (input.request === "pause" && runtime.status === "suspended") { await client.query("COMMIT"); return { agentId: agent.id, action, state: "succeeded", deleted: false, command: null }; }
+      if (input.request === "resume" && runtime.status !== "suspended") throw Object.assign(new Error("Agent is not suspended"), { code: "invalid_agent_lifecycle_state", statusCode: 409 });
+      const { rows: existingRows } = await client.query("SELECT * FROM control_commands WHERE deployment_id=$1 AND action IN ('deployment.start','deployment.stop','deployment.suspend','deployment.resume','deployment.delete') AND state IN ('queued','leased','accepted','running') ORDER BY created_at DESC LIMIT 1", [deployment.id]);
+      if (existingRows[0]) {
+        if (existingRows[0].action !== action) throw Object.assign(new Error("Another Agent lifecycle command is in progress"), { code: "agent_lifecycle_in_progress", statusCode: 409 });
+        await client.query("COMMIT");
+        return { agentId: agent.id, action, state: existingRows[0].state, deleted: false, command: { id: existingRows[0].id, action, state: existingRows[0].state } };
+      }
+      const commandId = randomUUID();
+      const approvalId = input.request === "delete" ? randomUUID() : null;
+      const version = Number(deployment.desired_state_version) + 1;
+      const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+      await client.query(
+        `INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, approval_id, expected_observation_version, state, expires_at, requested_by)
+         VALUES ($1,$2,$3,$4,'bairui.supervisor',$5,$6,$7,$8,'queued',$9,$10)`,
+        [commandId, deployment.id, `${deployment.id}/${action}/${version}`, action, agent.id, { agent_id: agent.id }, approvalId, Number(deployment.observed_state_version), expiresAt, input.requestedBy]
+      );
+      if (approvalId) {
+        await client.query("INSERT INTO control_approvals (id, command_id, risk_level, requested_by, decided_by, decision, reason, expires_at, decided_at) VALUES ($1,$2,'high',$3,$3,'approved',$4,$5,now())", [approvalId, commandId, input.requestedBy, input.reason ?? "Agent owner confirmed deletion", expiresAt]);
+      }
+      await client.query("UPDATE control_deployments SET desired_state_version=$2, updated_at=now() WHERE id=$1", [deployment.id, version]);
+      const desiredState = input.request === "pause" ? "suspended" : input.request === "resume" ? "running" : "deleted";
+      await client.query("UPDATE agents SET desired_runtime_state=$2, initialization_status=CASE WHEN $2='deleted' THEN 'deleting' ELSE initialization_status END, updated_at=now() WHERE id=$1", [agent.id, desiredState]);
+      if (input.request === "delete") await client.query("UPDATE agent_runtimes SET status='deleting', updated_at=now() WHERE id=$1", [runtime.id]);
+      await client.query("COMMIT");
+      return { agentId: agent.id, action, state: "queued", deleted: false, command: { id: commandId, action, state: "queued", approvalId } };
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
   async createServerCredential(input) {
     const client = await this.pool.connect();
     try {
@@ -384,9 +435,31 @@ export class PostgresPlatformRepository {
         await client.query("UPDATE agent_runtimes runtime SET endpoint_ref=$2, route_updated_at=now(), status='starting', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, input.runtimeEndpointRef]);
         await client.query("UPDATE control_deployments SET status='active', updated_at=now() WHERE id=$1", [command.deployment_id]);
       }
-      if (input.state === "failed") {
+      if (input.state === "succeeded" && ["deployment.start", "deployment.resume"].includes(command.action)) {
+        await client.query("UPDATE agent_runtimes runtime SET status='starting', last_error_code=NULL, last_error_detail=NULL, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id]);
+        await client.query("UPDATE agents agent SET status='starting', desired_runtime_state='running', last_error_code=NULL, last_error_detail=NULL, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id]);
+      }
+      if (input.state === "succeeded" && command.action === "deployment.suspend") {
+        await client.query("UPDATE agent_runtimes runtime SET status='suspended', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id]);
+        await client.query("UPDATE agents agent SET status='suspended', desired_runtime_state='suspended', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id]);
+      }
+      if (input.state === "succeeded" && command.action === "deployment.stop") {
+        await client.query("UPDATE agent_runtimes runtime SET status='stopped', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id]);
+        await client.query("UPDATE agents agent SET status='stopped', desired_runtime_state='stopped', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id]);
+      }
+      if (input.state === "succeeded" && command.action === "deployment.delete") {
+        await client.query("UPDATE agent_runtimes runtime SET status='deleted', endpoint_ref=NULL, route_updated_at=now(), updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id]);
+        await client.query("UPDATE agents agent SET status='deleted', desired_runtime_state='deleted', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id]);
+        await client.query("UPDATE control_deployments SET status='revoked', updated_at=now() WHERE id=$1", [command.deployment_id]);
+      }
+      if (input.state === "failed" && command.action === "deployment.provision") {
         await client.query("UPDATE agent_runtimes runtime SET status='failed', last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed"]);
         await client.query("UPDATE agents agent SET status='failed', initialization_status='failed', last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed"]);
+        await client.query("UPDATE control_deployments SET status='degraded', updated_at=now() WHERE id=$1", [command.deployment_id]);
+      }
+      if (input.state === "failed" && command.action !== "deployment.provision") {
+        await client.query("UPDATE agent_runtimes runtime SET status=CASE WHEN $4='deployment.delete' THEN 'degraded' ELSE runtime.status END, last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed", command.action]);
+        await client.query("UPDATE agents agent SET status='degraded', initialization_status=CASE WHEN $4='deployment.delete' THEN 'failed' ELSE agent.initialization_status END, last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed", command.action]);
         await client.query("UPDATE control_deployments SET status='degraded', updated_at=now() WHERE id=$1", [command.deployment_id]);
       }
       let receipt = inserted[0];

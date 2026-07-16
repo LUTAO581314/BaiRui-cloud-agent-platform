@@ -37,6 +37,7 @@ function transformEntryHtml(source) {
       `<link rel="icon" type="image/png" href="/assets/bairui-agent-icon.png">
 <link rel="stylesheet" href="/assets/bairui-bailongma.css">
 <script src="/assets/bairui-bailongma.js" defer></script>
+<script src="/assets/bairui-workspace.js" defer></script>
 <script type="module" src="${PREFIX}src/ui/brain-ui/app.js"></script>`
     );
 }

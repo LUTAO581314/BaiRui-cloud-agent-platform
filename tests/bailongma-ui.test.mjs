@@ -14,6 +14,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /bairui-agent · Cognitive Surface/);
   assert.match(html, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
+  assert.match(html, /\/assets\/bairui-workspace\.js/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
@@ -24,6 +25,14 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
   assert.match(adapter, /assistant\.delta/);
   assert.match(adapter, /assistant\.completed/);
   assert.doesNotMatch(adapter, /createBailongmaEventHub/);
+  assert.match(adapter, /AbortController/);
+  assert.match(adapter, /attachments/);
+});
+
+test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {
+  const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
+  for (const view of ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
+  for (const route of ["/memory-notes", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
 });
 
 test("maps Obsidian notes to BaiLongma memory shapes", () => {

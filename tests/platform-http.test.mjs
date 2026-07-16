@@ -30,7 +30,7 @@ async function setup(options = {}) {
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", ownerUserId: user.id, name: "Agent" });
   const runtime = await repository.createAgentRuntime({ id: "runtime_a", organizationId: "org_a", ownerUserId: user.id, agentId: agent.id, workspaceRef: "hermes:org_a:user_a:agent_a" });
   const { privateKey } = generateKeyPairSync("ed25519");
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope(providerEncryptionKey), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope(providerEncryptionKey), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bairuiWorkspaceScript: "workspace-overlay", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -72,8 +72,10 @@ test("anonymous and ordinary users cannot access administrator data", async (t) 
   const workspaceHtml = await workspacePage.text();
   assert.match(workspaceHtml, /bairui-agent · Cognitive Surface/);
   assert.match(workspaceHtml, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
+  assert.match(workspaceHtml, /\/assets\/bairui-workspace\.js/);
   assert.doesNotMatch(workspaceHtml, /\/assets\/user\.js/);
   assert.equal((await fetch(`${context.baseUrl}/assets/user.js`, { headers: { cookie } })).status, 404);
+  assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace.js`, { headers: { cookie } })).text(), "workspace-overlay");
   assert.equal((await fetch(`${context.baseUrl}/bailongma-ui/src/ui/brain-ui/app.js`)).status, 401);
   assert.equal((await fetch(`${context.baseUrl}/bailongma-ui/src/ui/brain-ui/app.js`, { headers: { cookie } })).status, 200);
   assert.equal((await fetch(`${context.baseUrl}/admin`, { headers: { cookie } })).status, 404);
@@ -248,6 +250,29 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const heartbeatResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: "/api/internal/control-plane/heartbeats", payload: heartbeat });
   assert.equal(heartbeatResponse.status, 202);
   assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "ready");
+
+  const pause = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "pause" }) });
+  assert.equal(pause.status, 202);
+  assert.equal((await pause.json()).action, "deployment.suspend");
+  const lifecycleLease = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
+  const lifecycleCommand = (await lifecycleLease.json()).commands[0];
+  assert.equal(lifecycleCommand.action, "deployment.suspend");
+  const lifecycleReceipt = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: lifecycleCommand.command_id, attempt: lifecycleCommand.attempt };
+  await sendCommandReceipt({ ...lifecycleReceipt, state: "accepted" });
+  await sendCommandReceipt({ ...lifecycleReceipt, state: "running" });
+  await sendCommandReceipt({ ...lifecycleReceipt, state: "succeeded" });
+  assert.equal((await context.repository.getAgentRuntimeByAgent(context.agent.id)).status, "suspended");
+  const resume = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "resume" }) });
+  assert.equal(resume.status, 202);
+  const resumeLease = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
+  const resumeCommand = (await resumeLease.json()).commands[0];
+  assert.equal(resumeCommand.action, "deployment.resume");
+  const resumeReceipt = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: resumeCommand.command_id, attempt: resumeCommand.attempt };
+  await sendCommandReceipt({ ...resumeReceipt, state: "accepted" });
+  await sendCommandReceipt({ ...resumeReceipt, state: "running" });
+  await sendCommandReceipt({ ...resumeReceipt, state: "succeeded" });
+  assert.equal((await context.repository.getAgentRuntimeByAgent(context.agent.id)).status, "starting");
+  assert.equal((await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "delete", confirmName: "wrong" }) })).status, 400);
 });
 
 test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE", async (t) => {
@@ -279,9 +304,26 @@ test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE
   assert.equal(await stream.text(), 'data: {"event":"message.delta","text":"hello"}\n\n');
   assert.equal(operations[1].operation, "sessions.chat.stream");
 
+  const multimodal = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/sessions/session_a/chat`, {
+    method: "POST",
+    headers: { cookie: ownerCookie, "content-type": "application/json" },
+    body: JSON.stringify({ message: "Describe this", attachments: [{ data_url: "data:image/png;base64,aGVsbG8=" }] })
+  });
+  assert.equal(multimodal.status, 200);
+  assert.deepEqual(operations[2].input.body.message, [
+    { type: "text", text: "Describe this" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "auto" } }
+  ]);
+  const invalidAttachment = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/sessions/session_a/chat`, {
+    method: "POST",
+    headers: { cookie: ownerCookie, "content-type": "application/json" },
+    body: JSON.stringify({ message: "Inspect", attachments: [{ data_url: "data:image/svg+xml;base64,PHN2Zz4=" }] })
+  });
+  assert.equal(invalidAttachment.status, 400);
+
   const denied = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/sessions`, { headers: { cookie: sameOrgCookie } });
   assert.equal(denied.status, 404);
-  assert.equal(operations.length, 2);
+  assert.equal(operations.length, 3);
 });
 
 test("provider credentials are platform-admin only and responses are masked", async (t) => {

@@ -69,6 +69,7 @@ const server = createPlatformServer({
   bailongmaUi: createBailongmaUi({ root: path.join(repoRoot, "upstreams", "bailongma") }),
   bailongmaOverlayCss: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.css"), "utf8"),
   bailongmaOverlayScript: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.js"), "utf8"),
+  bairuiWorkspaceScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace.js"), "utf8"),
   bailongmaSceneBootstrap: fs.readFileSync(path.join(appDir, "public", "bairui-scene-bootstrap.js"), "utf8")
 });
 

@@ -165,7 +165,16 @@ export class MemoryPlatformRepository {
       this.#agentComponents.set(key, { id: this.#agentComponents.get(key)?.id ?? randomUUID(), organizationId: input.organizationId, agentId: agent.id, runtimeId: runtime.id, ...component, updatedAt: receivedAt });
     }
     for (const event of input.events ?? []) this.#telemetryEvents.push({ id: randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: agent.id, runtimeId: runtime.id, ...event, receivedAt });
-    if (input.usage) this.#usageRollups.push({ organizationId: input.organizationId, userId: input.userId, agentId: agent.id, runtimeId: runtime.id, ...input.usage });
+    if (input.usage) this.#usageRollups.push({
+      organizationId: input.organizationId, userId: input.userId, agentId: agent.id, runtimeId: runtime.id,
+      ...input.usage,
+      inputTokens: Number(input.usage.inputTokens) || 0,
+      outputTokens: Number(input.usage.outputTokens) || 0,
+      estimatedCostUsd: Number(input.usage.estimatedCostUsd) || 0,
+      runCount: Number(input.usage.runCount) || 0,
+      failedRunCount: Number(input.usage.failedRunCount) || 0,
+      latencySumMs: Number(input.usage.latencySumMs) || 0
+    });
     return heartbeat;
   }
 
@@ -218,6 +227,34 @@ export class MemoryPlatformRepository {
     return { agent, runtime, deployment, command };
   }
 
+  async requestAgentLifecycle(input) {
+    const actionByRequest = { pause: "deployment.suspend", resume: "deployment.resume", delete: "deployment.delete" };
+    const action = actionByRequest[input.request];
+    if (!action) throw new TypeError("Unsupported Agent lifecycle request");
+    const agent = this.#agents.get(input.agentId);
+    const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === input.agentId);
+    if (!agent || !runtime) return null;
+    if (!runtime.deploymentId) {
+      if (input.request !== "delete") throw Object.assign(new Error("Agent has not been initialized"), { code: "agent_not_initialized", statusCode: 409 });
+      this.#agents.delete(agent.id);
+      this.#agentRuntimes.delete(runtime.id);
+      return { agentId: agent.id, action, state: "succeeded", deleted: true, command: null };
+    }
+    if (input.request === "pause" && runtime.status === "suspended") return { agentId: agent.id, action, state: "succeeded", deleted: false, command: null };
+    if (input.request === "resume" && runtime.status !== "suspended") throw Object.assign(new Error("Agent is not suspended"), { code: "invalid_agent_lifecycle_state", statusCode: 409 });
+    const lifecycleActions = new Set(["deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete"]);
+    const existing = this.#controlCommands.findLast((item) => item.deploymentId === runtime.deploymentId && lifecycleActions.has(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state));
+    if (existing && existing.action !== action) throw Object.assign(new Error("Another Agent lifecycle command is in progress"), { code: "agent_lifecycle_in_progress", statusCode: 409 });
+    if (existing) return { agentId: agent.id, action, state: existing.state, deleted: false, command: { id: existing.id, action, state: existing.state } };
+    const approvalId = input.request === "delete" ? randomUUID() : null;
+    const command = { id: randomUUID(), deploymentId: runtime.deploymentId, agentId: agent.id, action, target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { agent_id: agent.id }, approvalId, expectedObservationVersion: 0, state: "queued", priority: 100, attempt: 0, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: new Date().toISOString() };
+    this.#controlCommands.push(command);
+    agent.desiredRuntimeState = input.request === "pause" ? "suspended" : input.request === "resume" ? "running" : "deleted";
+    if (input.request === "delete") { agent.initializationStatus = "deleting"; runtime.status = "deleting"; }
+    agent.updatedAt = new Date().toISOString();
+    return { agentId: agent.id, action, state: "queued", deleted: false, command: { id: command.id, action, state: "queued", approvalId } };
+  }
+
   async createServerCredential(input) {
     for (const credential of this.#serverCredentials) if (credential.serverId === input.serverId && credential.status === "active") credential.status = "revoked";
     const credential = { id: input.id ?? randomUUID(), serverId: input.serverId, keyHash: input.keyHash, keyHint: input.keyHint, status: "active", createdBy: input.createdBy ?? null, createdAt: new Date().toISOString() };
@@ -258,6 +295,7 @@ export class MemoryPlatformRepository {
       leased.push({
         schema_version: "1.0", command_id: command.id, idempotency_key: `${command.deploymentId}/${command.action}/${command.arguments.config_revision_id ?? command.id}`,
         deployment_id: command.deploymentId, action: command.action, target: command.target, arguments: command.arguments,
+        ...(command.approvalId ? { approval_id: command.approvalId } : {}),
         expected_observation_version: command.expectedObservationVersion, created_at: command.createdAt, expires_at: command.expiresAt,
         attempt: command.attempt, lease_expires_at: command.leaseExpiresAt,
         placement: { server_id: deployment.serverId, agent_id: deployment.agentId, runtime_id: runtime.id, organization_id: deployment.organizationId, user_id: runtime.ownerUserId, workspace_ref: runtime.workspaceRef },
@@ -282,12 +320,42 @@ export class MemoryPlatformRepository {
       Object.assign(runtime, { endpointRef: input.runtimeEndpointRef, status: "starting", updatedAt: new Date().toISOString() });
       deployment.status = "active";
     }
-    if (input.state === "failed") {
+    if (input.state === "succeeded" && ["deployment.start", "deployment.resume"].includes(command.action)) {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const agent = this.#agents.get(deployment.agentId);
+      Object.assign(runtime, { status: "starting", lastErrorCode: null, lastErrorDetail: null, updatedAt: new Date().toISOString() });
+      Object.assign(agent, { status: "starting", desiredRuntimeState: "running", lastErrorCode: null, lastErrorDetail: null, updatedAt: new Date().toISOString() });
+    }
+    if (input.state === "succeeded" && command.action === "deployment.suspend") {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const agent = this.#agents.get(deployment.agentId);
+      Object.assign(runtime, { status: "suspended", updatedAt: new Date().toISOString() });
+      Object.assign(agent, { status: "suspended", desiredRuntimeState: "suspended", updatedAt: new Date().toISOString() });
+    }
+    if (input.state === "succeeded" && command.action === "deployment.delete") {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const agent = this.#agents.get(deployment.agentId);
+      Object.assign(runtime, { status: "deleted", endpointRef: null, updatedAt: new Date().toISOString() });
+      Object.assign(agent, { status: "deleted", desiredRuntimeState: "deleted", updatedAt: new Date().toISOString() });
+      deployment.status = "revoked";
+    }
+    if (input.state === "failed" && command.action === "deployment.provision") {
       const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
       const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
       const agent = this.#agents.get(deployment.agentId);
       Object.assign(runtime, { status: "failed", lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary });
       Object.assign(agent, { status: "failed", initializationStatus: "failed", lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary });
+      deployment.status = "degraded";
+    }
+    if (input.state === "failed" && command.action !== "deployment.provision") {
+      const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
+      const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
+      const agent = this.#agents.get(deployment.agentId);
+      Object.assign(runtime, { ...(command.action === "deployment.delete" ? { status: "degraded" } : {}), lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary, updatedAt: new Date().toISOString() });
+      Object.assign(agent, { status: "degraded", ...(command.action === "deployment.delete" ? { initializationStatus: "failed" } : {}), lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary, updatedAt: new Date().toISOString() });
       deployment.status = "degraded";
     }
     return receipt;

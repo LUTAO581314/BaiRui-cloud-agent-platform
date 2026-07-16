@@ -34,6 +34,16 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.equal(route.runtime.endpointRef, "http://127.0.0.1:19123");
     assert.equal(route.runtime.status, "starting");
 
+    const lifecycle = await repository.requestAgentLifecycle({ agentId, request: "pause", requestedBy: userId });
+    assert.equal(lifecycle.action, "deployment.suspend");
+    const [lifecycleCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
+    assert.equal(lifecycleCommand.action, "deployment.suspend");
+    const lifecycleReceipt = { commandId: lifecycleCommand.command_id, serverId, attempt: lifecycleCommand.attempt };
+    await repository.recordCommandReceipt({ ...lifecycleReceipt, state: "accepted" });
+    await repository.recordCommandReceipt({ ...lifecycleReceipt, state: "running" });
+    await repository.recordCommandReceipt({ ...lifecycleReceipt, state: "succeeded" });
+    assert.equal((await repository.getAgentRuntimeByAgent(agentId)).status, "suspended");
+
     const note = await repository.createObsidianNote({ id: `note_${suffix}`, organizationId, userId, agentId, title: "PostgreSQL note", slug: "postgresql-note", markdown: "# PostgreSQL note", frontmatter: { tags: [] }, wikilinks: [] });
     assert.equal(note.agentId, agentId);
     assert.equal((await repository.listObsidianNotes(organizationId, userId, agentId, "PostgreSQL")).length, 1);
@@ -57,6 +67,11 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     const usage = await repository.listUsageRollups(organizationId, userId, agentId);
     assert.equal(usage[0].inputTokens, 3);
     assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
+    const deletion = await repository.requestAgentLifecycle({ agentId, request: "delete", requestedBy: userId, reason: "PostgreSQL integration test" });
+    assert.ok(deletion.command.approvalId);
+    const [deleteCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
+    assert.equal(deleteCommand.action, "deployment.delete");
+    assert.equal(deleteCommand.approval_id, deletion.command.approvalId);
   } finally {
     await repository.pool.query("DELETE FROM organizations WHERE id=$1", [organizationId]).catch(() => {});
     await repository.close();

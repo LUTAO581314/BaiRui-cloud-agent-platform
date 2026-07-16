@@ -1,7 +1,15 @@
 (function () {
   const nativeFetch = window.fetch.bind(window);
   const NativeEventSource = window.EventSource;
-  const state = { agents: [], activeAgent: null, activeSessionId: null, agentPromise: null };
+  const state = {
+    agents: [],
+    activeAgent: null,
+    activeSessionId: null,
+    agentPromise: null,
+    activeAbortController: null,
+    lastMessage: null,
+    user: null
+  };
   const compatibilityStreams = new Set();
 
   async function platformRequest(url, options) {
@@ -13,6 +21,18 @@
     return response;
   }
 
+  async function requestJson(url, options) {
+    const response = await platformRequest(url, options);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(body.error || body.message || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.body = body;
+      throw error;
+    }
+    return body;
+  }
+
   function jsonResponse(value, status = 200) {
     return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", "x-bairui-ui-adapter": "1" } });
   }
@@ -22,11 +42,52 @@
     return new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   async function initializeAgent(agent) {
-    const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/initialize`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "agent_initialization_failed");
-    return result;
+    return requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/initialize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+  }
+
+  async function getAgent(agentId) {
+    return (await requestJson(`/api/user/agents/${encodeURIComponent(agentId)}`)).agent;
+  }
+
+  async function waitForAgentReady(agentId, onUpdate, maxWaitMs = 5 * 60_000, signal) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < maxWaitMs) {
+      if (signal?.aborted) throw new DOMException("Initialization polling stopped", "AbortError");
+      const agent = await getAgent(agentId);
+      onUpdate?.(agent);
+      if (agent.initializationStatus === "ready" && agent.runtime?.status === "ready") return agent;
+      if (agent.initializationStatus === "failed" || agent.runtime?.status === "failed") {
+        const error = new Error(agent.lastErrorCode || agent.runtime?.lastErrorCode || "agent_initialization_failed");
+        error.agent = agent;
+        throw error;
+      }
+      await sleep(2000);
+    }
+    throw new Error("agent_initialization_timeout");
+  }
+
+  function initializationLabel(agent) {
+    const status = agent?.runtime?.status || agent?.initializationStatus || "uninitialized";
+    const labels = {
+      uninitialized: "等待初始化",
+      provisioning: "正在创建运行环境",
+      starting: "正在启动 Hermes",
+      ready: "Agent 已就绪",
+      degraded: "运行环境降级",
+      failed: "初始化失败",
+      suspended: "Agent 已暂停",
+      deleting: "正在删除"
+    };
+    return labels[status] || status;
   }
 
   async function createAgentDialog() {
@@ -39,14 +100,23 @@
         <img src="/assets/bairui-agent-logo.png" alt="">
         <h1>创建你的 Agent</h1>
         <label>名称<input name="name" maxlength="64" value="bairui-agent" required></label>
-        <label>描述<textarea name="description" maxlength="500" rows="3"></textarea></label>
-        <label>身份与原则<textarea name="soulMarkdown" maxlength="50000" rows="7" placeholder="# Identity"></textarea></label>
+        <label>描述<textarea name="description" maxlength="500" rows="3" placeholder="这个 Agent 主要帮你做什么"></textarea></label>
+        <label>身份与原则<textarea name="soulMarkdown" maxlength="50000" rows="7" placeholder="# Identity\n\n说明 Agent 的身份、语气和工作原则"></textarea></label>
+        <div class="bairui-onboarding-progress" hidden><span></span><strong></strong></div>
         <p class="bairui-onboarding-error" role="alert"></p>
-        <button type="submit">创建 Agent</button>
+        <div class="bairui-onboarding-actions"><button type="button" data-later hidden>稍后查看</button><button type="submit">创建并初始化</button></div>
       </form>`;
       document.body.appendChild(overlay);
       const form = overlay.querySelector("form");
       const error = overlay.querySelector(".bairui-onboarding-error");
+      const progress = overlay.querySelector(".bairui-onboarding-progress");
+      const later = overlay.querySelector("[data-later]");
+      const polling = new AbortController();
+      later.addEventListener("click", () => {
+        polling.abort();
+        overlay.remove();
+        resolve(createdAgent);
+      });
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = form.querySelector("button");
@@ -55,24 +125,33 @@
         const data = new FormData(form);
         try {
           if (!createdAgent) {
-            const response = await platformRequest("/api/user/agents", {
+            const result = await requestJson("/api/user/agents", {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ name: data.get("name"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown") })
             });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error || "agent_create_failed");
             createdAgent = result.agent;
             for (const field of form.elements) if (field.name) field.disabled = true;
-            submit.disabled = false;
-            submit.textContent = "初始化 Agent";
           }
-          const initialized = await initializeAgent(createdAgent);
+          progress.hidden = false;
+          progress.querySelector("strong").textContent = "提交初始化请求";
+          await initializeAgent(createdAgent);
+          later.hidden = false;
+          const ready = await waitForAgentReady(createdAgent.id, (agent) => {
+            progress.querySelector("strong").textContent = initializationLabel(agent);
+          }, 5 * 60_000, polling.signal);
           overlay.remove();
-          resolve({ ...initialized.agent, runtime: initialized.runtime });
+          resolve(ready);
         } catch (cause) {
-          error.textContent = cause.message === "model_provider_not_configured" ? "管理员尚未配置模型供应商" : cause.message === "no_agent_capacity" ? "暂无可用运行服务器，请稍后重试" : createdAgent ? "初始化失败，请稍后重试" : "创建失败，请稍后重试";
+          const labels = {
+            model_provider_not_configured: "管理员尚未配置模型供应商",
+            no_agent_capacity: "暂无可用运行服务器，请稍后重试",
+            agent_initialization_timeout: "初始化仍在后台进行，请稍后从 Agent 页面查看"
+          };
+          if (cause.name === "AbortError") return;
+          error.textContent = labels[cause.message] || `初始化失败：${cause.message}`;
           submit.disabled = false;
+          submit.textContent = createdAgent ? "重试初始化" : "创建并初始化";
           if (cause.message === "authentication_required") reject(cause);
         }
       });
@@ -83,13 +162,9 @@
     if (!force && state.activeAgent) return state.activeAgent;
     if (!force && state.agentPromise) return state.agentPromise;
     state.agentPromise = (async () => {
-      const response = await platformRequest("/api/user/agents");
-      if (!response.ok) throw new Error("agents_unavailable");
-      state.agents = (await response.json()).agents || [];
-      if (!state.agents.length) {
-        const created = await createAgentDialog();
-        state.agents = [created];
-      }
+      const result = await requestJson("/api/user/agents");
+      state.agents = result.agents || [];
+      if (!state.agents.length) state.agents = [await createAgentDialog()];
       const saved = localStorage.getItem("bairui.activeAgentId");
       state.activeAgent = state.agents.find((agent) => agent.id === saved) || state.agents[0];
       localStorage.setItem("bairui.activeAgentId", state.activeAgent.id);
@@ -99,27 +174,42 @@
     try { return await state.agentPromise; } finally { state.agentPromise = null; }
   }
 
-  async function listSessions(agent) {
-    const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions?limit=100&include_children=true`);
-    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "sessions_unavailable");
-    return (await response.json()).data || [];
+  async function listSessions(agent = await loadActiveAgent()) {
+    const result = await requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions?limit=100&include_children=true`);
+    return result.data || [];
   }
 
-  async function ensureSession(agent) {
-    const sessions = await listSessions(agent);
-    let session = sessions.find((item) => item.id === state.activeSessionId) || sessions[0];
-    if (!session) {
-      const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: "新会话" })
-      });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "session_create_failed");
-      session = (await response.json()).session;
-    }
+  async function createSession(title = "新会话", agent = await loadActiveAgent()) {
+    const result = await requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title })
+    });
+    const session = result.session;
     state.activeSessionId = session.id;
     localStorage.setItem(`bairui.activeSessionId.${agent.id}`, session.id);
     return session;
+  }
+
+  async function ensureSession(agent = await loadActiveAgent()) {
+    const sessions = await listSessions(agent);
+    let session = sessions.find((item) => item.id === state.activeSessionId) || sessions[0];
+    if (!session) session = await createSession("新会话", agent);
+    state.activeSessionId = session.id;
+    localStorage.setItem(`bairui.activeSessionId.${agent.id}`, session.id);
+    return session;
+  }
+
+  function activateSession(sessionId) {
+    if (!state.activeAgent) return;
+    state.activeSessionId = sessionId;
+    localStorage.setItem(`bairui.activeSessionId.${state.activeAgent.id}`, sessionId);
+    location.reload();
+  }
+
+  function activateAgent(agentId) {
+    localStorage.setItem("bairui.activeAgentId", agentId);
+    location.reload();
   }
 
   function emitCompatibility(type, data = {}) {
@@ -127,8 +217,24 @@
     for (const stream of compatibilityStreams) stream.emit(payload);
   }
 
+  function contentText(content) {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content.map((part) => part?.type === "text" ? part.text || "" : part?.type === "image_url" ? `![图片](${part.image_url?.url || ""})` : "").filter(Boolean).join("\n\n");
+  }
+
+  function setStreaming(active) {
+    document.body.classList.toggle("bairui-streaming", active);
+    const send = document.querySelector("#send-btn");
+    if (send) {
+      send.textContent = active ? "停止" : "发送";
+      send.title = active ? "停止生成" : "发送消息";
+    }
+    window.dispatchEvent(new CustomEvent("bairui:stream-state", { detail: { active } }));
+  }
+
   function mapHermesEvent(name, data) {
-    if (name === "run.started") emitCompatibility("message_received", { input: data.user_message?.content || "" });
+    if (name === "run.started") emitCompatibility("message_received", { input: contentText(data.user_message?.content) });
     else if (name === "message.started") emitCompatibility("stream_start", { mode: "text", plainReply: true });
     else if (name === "assistant.delta") emitCompatibility("stream_chunk", { mode: "text", text: data.delta || "" });
     else if (name === "tool.progress") emitCompatibility("stream_chunk", { mode: "reasoning", text: data.delta || "" });
@@ -165,22 +271,41 @@
     }
   }
 
+  async function stopActiveStream() {
+    if (!state.activeAbortController) return false;
+    state.activeAbortController.abort();
+    state.activeAbortController = null;
+    emitCompatibility("stream_end", { mode: "text", interrupted: true });
+    setStreaming(false);
+    return true;
+  }
+
   async function sendMessage(options) {
     const body = JSON.parse(options?.body || "{}");
     const content = typeof body.content === "string" ? body.content.trim() : "";
-    if (!content) return jsonResponse({ error: "invalid_message" }, 400);
+    const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+    if (!content && !attachments.length) return jsonResponse({ error: "invalid_message" }, 400);
+    if (state.activeAbortController) return jsonResponse({ error: "run_in_progress" }, 409);
     const agent = await loadActiveAgent();
     const session = await ensureSession(agent);
+    state.lastMessage = { content, attachments };
+    const controller = new AbortController();
+    state.activeAbortController = controller;
+    setStreaming(true);
     void (async () => {
       try {
         const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions/${encodeURIComponent(session.id)}/chat/stream`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ message: content })
+          body: JSON.stringify({ message: content, attachments }),
+          signal: controller.signal
         });
         await consumeHermesSse(response);
       } catch (error) {
-        emitCompatibility("error", { error: error.message || "Hermes Runtime 请求失败" });
+        if (error.name !== "AbortError") emitCompatibility("error", { error: error.message || "Hermes Runtime 请求失败" });
+      } finally {
+        if (state.activeAbortController === controller) state.activeAbortController = null;
+        setStreaming(false);
       }
     })();
     return jsonResponse({ accepted: true, sessionId: session.id }, 202);
@@ -190,12 +315,11 @@
     try {
       const agent = await loadActiveAgent();
       const session = await ensureSession(agent);
-      const response = await platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions/${encodeURIComponent(session.id)}/messages`);
-      if (!response.ok) return [];
-      return ((await response.json()).data || []).filter((message) => ["user", "assistant"].includes(message.role)).map((message) => ({
+      const result = await requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions/${encodeURIComponent(session.id)}/messages`);
+      return (result.data || []).filter((message) => ["user", "assistant"].includes(message.role)).map((message) => ({
         id: message.id,
         role: message.role === "assistant" ? "jarvis" : "user",
-        content: message.content || "",
+        content: contentText(message.content),
         channel: "API",
         from_id: message.role === "assistant" ? agent.id : "current-user",
         created_at: message.timestamp
@@ -223,7 +347,7 @@
           const event = new Event("open");
           this.dispatchEvent(event);
           this.onopen?.(event);
-        } catch (error) {
+        } catch {
           const event = new Event("error");
           this.dispatchEvent(event);
           this.onerror?.(event);
@@ -267,16 +391,23 @@
     return button;
   }
 
+  function prefillChat(text) {
+    const input = document.querySelector("#msg-input");
+    if (!input) return;
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  }
+
   async function mountPlatformTools() {
-    const [meResponse, agent] = await Promise.all([platformRequest("/api/me"), loadActiveAgent()]);
-    if (!meResponse.ok) return;
-    const { user } = await meResponse.json();
+    const [me, agent] = await Promise.all([requestJson("/api/me"), loadActiveAgent()]);
+    state.user = me.user;
     const originalSettings = document.querySelector("#settings-btn");
     if (originalSettings) originalSettings.hidden = true;
 
     const tools = document.createElement("nav");
     tools.className = "bairui-platform-tools";
-    tools.setAttribute("aria-label", "百瑞平台");
+    tools.setAttribute("aria-label", "百瑞工作区");
     const logo = document.createElement("img");
     logo.src = "/assets/bairui-agent-icon.png";
     logo.alt = "";
@@ -284,36 +415,42 @@
     selector.title = "切换 Agent";
     selector.setAttribute("aria-label", "切换 Agent");
     for (const item of state.agents) selector.add(new Option(item.name, item.id, false, item.id === agent.id));
-    selector.addEventListener("change", () => {
-      localStorage.setItem("bairui.activeAgentId", selector.value);
-      location.reload();
-    });
-    const status = agent.initializationStatus === "uninitialized" || agent.initializationStatus === "failed" ? document.createElement("button") : document.createElement("span");
+    selector.addEventListener("change", () => activateAgent(selector.value));
+    const status = ["uninitialized", "failed"].includes(agent.initializationStatus) ? document.createElement("button") : document.createElement("span");
     status.className = `bairui-runtime-status status-${agent.runtime?.status || "uninitialized"}`;
-    status.textContent = agent.runtime?.status || "未初始化";
+    status.textContent = initializationLabel(agent);
     if (status instanceof HTMLButtonElement) {
       status.type = "button";
       status.title = "初始化 Agent";
       status.addEventListener("click", async () => {
         status.disabled = true;
-        status.textContent = "初始化中";
-        try { await initializeAgent(agent); location.reload(); }
-        catch (error) { status.disabled = false; status.textContent = error.message === "model_provider_not_configured" ? "等待模型配置" : error.message === "no_agent_capacity" ? "等待服务器" : "重试初始化"; }
+        status.textContent = "提交初始化请求";
+        try {
+          await initializeAgent(agent);
+          await waitForAgentReady(agent.id, (current) => { status.textContent = initializationLabel(current); });
+          location.reload();
+        } catch (error) {
+          status.disabled = false;
+          status.textContent = error.message === "model_provider_not_configured" ? "等待模型配置" : error.message === "no_agent_capacity" ? "等待服务器" : "重试初始化";
+        }
       });
     }
     const account = document.createElement("span");
     account.className = "bairui-account-label";
-    account.textContent = user.displayName || user.email;
+    account.textContent = state.user.displayName || state.user.email;
     tools.append(logo, selector, status, account);
 
+    const workspace = iconButton("打开工作区", "☰");
+    workspace.dataset.action = "workspace";
+    workspace.addEventListener("click", () => window.dispatchEvent(new CustomEvent("bairui:workspace-open")));
+    tools.appendChild(workspace);
     const addAgent = iconButton("创建 Agent", "+");
     addAgent.addEventListener("click", async () => {
       const created = await createAgentDialog();
-      localStorage.setItem("bairui.activeAgentId", created.id);
-      location.reload();
+      activateAgent(created.id);
     });
     tools.appendChild(addAgent);
-    if (["org_admin", "platform_admin"].includes(user.role)) {
+    if (["org_admin", "platform_admin"].includes(state.user.role)) {
       const admin = document.createElement("a");
       admin.href = "/admin";
       admin.title = "总控后台";
@@ -328,7 +465,30 @@
     });
     tools.appendChild(logout);
     document.body.appendChild(tools);
+
+    document.querySelector("#send-btn")?.addEventListener("click", (event) => {
+      if (!state.activeAbortController) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      stopActiveStream();
+    }, true);
   }
 
-  window.addEventListener("DOMContentLoaded", () => mountPlatformTools().catch(() => {}), { once: true });
+  window.bairuiPlatform = Object.freeze({
+    state,
+    request: requestJson,
+    loadActiveAgent,
+    listSessions,
+    createSession,
+    activateSession,
+    activateAgent,
+    initializeAgent,
+    waitForAgentReady,
+    createAgentDialog,
+    stopActiveStream,
+    prefillChat,
+    initializationLabel
+  });
+
+  window.addEventListener("DOMContentLoaded", () => mountPlatformTools().catch((error) => console.warn("[bairui]", error.message)), { once: true });
 })();
