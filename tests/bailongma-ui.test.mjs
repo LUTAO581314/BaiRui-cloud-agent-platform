@@ -47,6 +47,7 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
   assert.match(workspace, /Hermes MEMORY\.md/);
   assert.match(workspace, /Hermes USER\.md/);
   assert.match(workspace, /Obsidian 主记忆库/);
+  for (const capability of ["Runtime Capabilities", "Hermes Toolsets", "health.detailed", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) assert.match(workspace, new RegExp(capability.replace(".", "\\.")));
 });
 
 test("restores BaiLongma's native independent panel controls", () => {

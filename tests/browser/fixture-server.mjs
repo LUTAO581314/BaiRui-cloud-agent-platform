@@ -34,15 +34,16 @@ function createRuntimeFixture() {
   const messages = new Map([["session_remote", [
     { id: "message_welcome", role: "assistant", content: "Hermes Runtime is ready.", timestamp: now }
   ]]]);
+  const jobs = [{ id: "job_remote", name: "Daily research", schedule: "0 9 * * *", prompt: "Summarize project updates", deliver: "local", enabled: true, repeat: null, skills: ["browser/use"], next_run_at: now }];
   let projection = { memory: [], user: [] };
   let digest = sha256(JSON.stringify(projection));
 
   const operation = async ({ operation: name, input = {} }) => {
-    if (name === "health.detailed") return { status: "healthy", runtime: "hermes", version: "fixture-hermes-1.0.0" };
+    if (name === "health.detailed") return { status: "healthy", runtime: "hermes", version: "fixture-hermes-1.0.0", gateway_state: "running", active_agents: 1 };
     if (name === "discovery.models") return { object: "list", data: [{ id: "fixture/hermes", name: "Hermes Fixture" }] };
-    if (name === "discovery.capabilities") return { object: "list", data: [{ id: "sessions" }, { id: "memory" }, { id: "jobs" }] };
-    if (name === "discovery.skills") return { object: "list", data: [{ id: "browser/use", name: "Browser" }, { id: "memory/search", name: "Memory search" }] };
-    if (name === "discovery.toolsets") return { object: "list", data: [{ id: "web", name: "Web tools" }] };
+    if (name === "discovery.capabilities") return { object: "hermes.api_server.capabilities", features: { session_resources: true, run_events_sse: true, approval_events: true, skills_api: true, audio_api: false } };
+    if (name === "discovery.skills") return { object: "list", data: [{ id: "browser/use", name: "Browser", description: "Use the browser", category: "tools", version: "1.0.0" }, { id: "memory/search", name: "Memory search", description: "Search memory", category: "memory", version: "1.0.0" }] };
+    if (name === "discovery.toolsets") return { object: "list", platform: "api_server", data: [{ name: "web", label: "Web tools", description: "Browser and search", enabled: true, configured: true, tools: ["browser", "web_search"] }] };
     if (name === "sessions.list") return { object: "list", data: sessions };
     if (name === "sessions.messages") return { object: "list", data: messages.get(input.session_id) ?? [] };
     if (name === "sessions.create") {
@@ -69,7 +70,29 @@ function createRuntimeFixture() {
       messages.delete(input.session_id);
       return { deleted: true };
     }
-    if (name === "jobs.list" || name === "runs.list") return { object: "list", data: [] };
+    if (name === "jobs.list") return { jobs };
+    if (name === "jobs.get") return { job: jobs.find((item) => item.id === input.job_id) ?? null };
+    if (name === "jobs.update") {
+      const job = jobs.find((item) => item.id === input.job_id);
+      if (job) Object.assign(job, input.body);
+      return { job };
+    }
+    if (name === "jobs.create") {
+      const job = { id: `job_${jobs.length + 1}`, enabled: true, ...input.body };
+      jobs.push(job);
+      return { job };
+    }
+    if (name === "jobs.pause" || name === "jobs.resume") {
+      const job = jobs.find((item) => item.id === input.job_id);
+      if (job) job.enabled = name === "jobs.resume";
+      return { job };
+    }
+    if (name === "jobs.delete") {
+      const index = jobs.findIndex((item) => item.id === input.job_id);
+      if (index >= 0) jobs.splice(index, 1);
+      return { ok: true };
+    }
+    if (name === "jobs.run") return { status: "started" };
     if (name === "memory.snapshot") {
       return {
         schema_version: "1.0",

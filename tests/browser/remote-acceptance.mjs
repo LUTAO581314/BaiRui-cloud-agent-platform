@@ -25,6 +25,15 @@ async function assertNoHorizontalOverflow(page) {
   assert.ok(metrics.documentWidth <= metrics.viewportWidth + 1, `horizontal overflow: ${metrics.documentWidth}px > ${metrics.viewportWidth}px`);
 }
 
+async function waitForWorkspaceText(page, value) {
+  await Promise.race([
+    page.getByText(value, { exact: true }).waitFor(),
+    page.locator(".bw-error").waitFor().then(async () => {
+      throw new Error(`workspace render failed: ${await page.locator(".bw-error").innerText()}`);
+    })
+  ]);
+}
+
 async function ordinaryDesktop(browser, baseUrl) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -77,6 +86,24 @@ async function ordinaryDesktop(browser, baseUrl) {
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-memory.png"), fullPage: true });
 
+  await page.locator('.bw-nav [data-view="skills"]').click();
+  await waitForWorkspaceText(page, "Runtime Capabilities");
+  await page.getByText("Web tools", { exact: true }).waitFor();
+  await page.getByText("fixture-hermes-1.0.0", { exact: true }).waitFor();
+  await page.getByText("approval events", { exact: true }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-runtime-capabilities.png"), fullPage: true });
+
+  await page.locator('.bw-nav [data-view="jobs"]').click();
+  await page.getByText("Daily research", { exact: true }).waitFor();
+  await page.locator('[data-edit-job="job_remote"]').click();
+  const jobDialog = page.locator("dialog.bw-dialog");
+  await jobDialog.locator('input[name="name"]').fill("Daily verified research");
+  await jobDialog.locator('textarea[name="prompt"]').fill("Summarize verified project updates");
+  await jobDialog.locator('button[type="submit"]').click();
+  await page.getByText("Daily verified research", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-jobs.png"), fullPage: true });
+
   await page.locator('.bw-nav [data-view="settings"]').click();
   await page.getByText("第三方授权", { exact: true }).waitFor();
   await page.locator("[data-auth-new]").click();
@@ -117,7 +144,12 @@ async function ordinaryMobile(browser, baseUrl) {
   await page.locator("#graph").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator("#panel-l1-tab").click();
-  await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  await page.waitForFunction(() => {
+    const panel = document.querySelector("#panel-l1");
+    if (!panel || document.body.classList.contains("l1-collapsed") || !document.body.classList.contains("l2-collapsed")) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.left >= -1 && rect.right <= innerWidth + 1;
+  });
   const mobilePanel = await page.locator("#panel-l1").evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { left: rect.left, right: rect.right, viewport: innerWidth };
@@ -136,6 +168,11 @@ async function ordinaryMobile(browser, baseUrl) {
   assert.ok(mobileChrome.headerTop >= mobileChrome.toolbarBottom - 1, `mobile toolbar overlaps workspace header: ${JSON.stringify(mobileChrome)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });
+  await page.locator('.bw-nav [data-view="skills"]').click();
+  await waitForWorkspaceText(page, "Runtime Capabilities");
+  await page.getByText("Web tools", { exact: true }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(artifacts, "user-mobile-runtime-capabilities.png"), fullPage: true });
   await context.close();
 }
 
