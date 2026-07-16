@@ -36,6 +36,12 @@ platform-administrator approval, validates the encrypted backup and Agent
 identity, stops the fixed Runtime containers, preserves rollback history, and
 restarts the same deployment. Host paths and archive locations never enter the
 control command.
+Retention enforcement runs automatically for every organization. It removes
+expired heartbeat, telemetry, usage, sensitive-access, and audit rows according
+to the stored policy. Audit hash-chain nodes remain after their event payloads
+expire. Backup files are removed only through an internal `backup.expire`
+command resolved against the Server Agent's fixed backup root; retention never
+sends a host path.
 Incidents link alerts, SLO impact, observations, actions, evidence, and audit.
 Closure requires a healthy post-remediation observation.
 

@@ -271,10 +271,11 @@ async function loadBackups() {
 }
 
 async function loadRetention() {
-  const { policy } = await request(scoped("/api/admin/data-retention", role === "platform_admin"));
+  const { policy, runs } = await request(scoped("/api/admin/data-retention", role === "platform_admin"));
   const form = document.querySelector("#retention-form");
   const defaults = { telemetryDays: 30, usageDays: 400, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30 };
   for (const key of Object.keys(defaults)) form.elements[key].value = policy?.[key] ?? defaults[key];
+  rows("retention-run-rows", runs, [item => formatTime(item.startedAt), item => statusNode(item.status), item => Object.values(item.deletedCounts || {}).reduce((sum, value) => sum + Number(value || 0), 0), item => item.backupExpirationCommands, item => formatTime(item.completedAt), item => item.errorCode || "-"]);
 }
 
 async function revokeGrant(grant) {
@@ -330,6 +331,7 @@ document.querySelector("#new-provider-channel")?.addEventListener("click", () =>
 document.querySelector("#new-sensitive-grant")?.addEventListener("click", () => { document.querySelector("#sensitive-grant-form").hidden = false; });
 document.querySelector("#new-release-manifest")?.addEventListener("click", () => { document.querySelector("#release-manifest-form").hidden = false; });
 document.querySelector("#create-agent-backup")?.addEventListener("click", () => issueControl("backup.create", { backupPolicyId: "manual" }));
+document.querySelector("#run-retention")?.addEventListener("click", async () => { const reason = await operationReason("确认执行数据保留政策"); if (!reason) return; await request(scoped("/api/admin/data-retention/run", role === "platform_admin"), { method: "POST", body: JSON.stringify({ reason }) }); await loadRetention(); });
 document.querySelectorAll("[data-close-form]").forEach(button => button.addEventListener("click", () => { document.querySelector(`#${button.dataset.closeForm}`).hidden = true; }));
 
 document.querySelector("#provider-channel-form")?.addEventListener("submit", async event => {

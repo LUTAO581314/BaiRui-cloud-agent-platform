@@ -470,6 +470,12 @@ test("control-plane administration is scoped, masked and audited", async (t) => 
     body: JSON.stringify({ telemetryDays: 30, usageDays: 400, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30 })
   });
   assert.equal(retentionResponse.status, 200);
+  const shortUsageRetention = await fetch(`${context.baseUrl}/api/admin/data-retention`, { method: "PATCH", headers: { cookie: orgCookie, "content-type": "application/json" }, body: JSON.stringify({ telemetryDays: 30, usageDays: 30, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30 }) });
+  assert.equal(shortUsageRetention.status, 400);
+  const retentionRunResponse = await fetch(`${context.baseUrl}/api/admin/data-retention/run`, { method: "POST", headers: { cookie: orgCookie, "content-type": "application/json" }, body: JSON.stringify({ reason: "Apply the approved organization retention policy" }) });
+  assert.equal(retentionRunResponse.status, 200);
+  assert.equal((await retentionRunResponse.json()).runs[0].status, "succeeded");
+  assert.equal((await (await fetch(`${context.baseUrl}/api/admin/data-retention`, { headers: { cookie: orgCookie } })).json()).runs[0].status, "succeeded");
   assert.equal((await fetch(`${context.baseUrl}/api/admin/data-retention?organization_id=org_b`, { headers: { cookie: orgCookie } })).status, 403);
   assert.equal((await fetch(`${context.baseUrl}/api/admin/sensitive-access`, { headers: { cookie: orgCookie } })).status, 403);
 
@@ -493,6 +499,9 @@ test("control-plane administration is scoped, masked and audited", async (t) => 
   const audit = await (await fetch(`${context.baseUrl}/api/admin/audit`, { headers: { cookie: rootCookie } })).json();
   assert.ok(audit.events.some((item) => item.action === "sensitive_access.grant"));
   assert.ok(audit.events.some((item) => item.action === "alert.acknowledged"));
+  const futureRuns = await context.repository.enforceRetentionPolicies({ organizationId: "org_a", now: Date.now() + 500 * 24 * 60 * 60_000 });
+  assert.ok(futureRuns[0].deletedCounts.auditEvents > 0);
+  assert.ok((await context.repository.listAudit("org_a")).some((item) => item.action === "retention.enforced"));
 });
 
 test("administrators issue governed control commands through approval-gated workflows", async (t) => {

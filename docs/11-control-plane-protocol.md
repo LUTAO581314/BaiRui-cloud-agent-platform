@@ -14,6 +14,7 @@ Allowed actions:
 - `backup.create`
 - `backup.verify`
 - `backup.restore`
+- `backup.expire`
 - `release.stage`
 - `release.apply`
 - `release.rollback`

@@ -469,7 +469,7 @@ export class PostgresPlatformRepository {
         const suiteId = input.action === "probe.run" ? input.arguments.probe_ids.join(",") : input.arguments.suite_id;
         await client.query("INSERT INTO test_runs (id, deployment_id, suite_id, test_type, status) VALUES ($1,$2,$3,$4,'queued') ON CONFLICT (id) DO NOTHING", [input.arguments.test_run_id, deployment.id, suiteId, testType]);
       }
-      if (input.action === "backup.create" && input.arguments.backup_id) await client.query("INSERT INTO backup_records (id, deployment_id, policy_id, backup_type, status, encrypted) VALUES ($1,$2,$3,'runtime-files','creating',true) ON CONFLICT (id) DO NOTHING", [input.arguments.backup_id, deployment.id, input.arguments.backup_policy_id]);
+      if (input.action === "backup.create" && input.arguments.backup_id) await client.query("INSERT INTO backup_records (id, deployment_id, policy_id, backup_type, status, encrypted, expires_at) VALUES ($1,$2,$3,'runtime-files','creating',true,now()+make_interval(days => COALESCE((SELECT backup_days FROM data_retention_policies WHERE organization_id=$4),30))) ON CONFLICT (id) DO NOTHING", [input.arguments.backup_id, deployment.id, input.arguments.backup_policy_id, input.organizationId]);
       if (input.action === "backup.restore") await client.query("INSERT INTO backup_restore_runs (id, backup_id, deployment_id, command_id, status, requested_by, reason) VALUES ($1,$2,$3,$4,'requested',$5,$6)", [input.arguments.restore_id, input.arguments.backup_id, deployment.id, commandId, input.requestedBy, input.reason]);
       await client.query("COMMIT");
       return { command: { id: commandId, organizationId: input.organizationId, deploymentId: deployment.id, agentId: input.agentId, idempotencyKey, action: input.action, arguments: input.arguments, approvalId, state: "queued", priority: input.priority ?? 100, requestedBy: input.requestedBy, expiresAt, createdAt: new Date().toISOString() }, approval };
@@ -558,6 +558,7 @@ export class PostgresPlatformRepository {
       await client.query("BEGIN");
       await client.query("UPDATE control_commands SET state='expired', updated_at=now() WHERE state IN ('queued','leased') AND expires_at <= now()");
       await client.query("UPDATE backup_restore_runs restore SET status='cancelled', error_code='command_expired', error_summary='Backup restore command expired', completed_at=now() FROM control_commands command WHERE restore.command_id=command.id AND command.state='expired' AND restore.status='requested'");
+      await client.query("UPDATE backup_records backup SET status='failed' FROM control_commands command WHERE command.action='backup.expire' AND command.state='expired' AND backup.id=command.arguments->>'backup_id' AND backup.status='expiring'");
       await client.query("UPDATE control_commands SET state='queued', lease_server_id=NULL, lease_expires_at=NULL, updated_at=now() WHERE state IN ('leased','accepted','running') AND lease_expires_at <= now() AND expires_at > now()");
       const { rows } = await client.query(
         `SELECT command.*, deployment.agent_id, deployment.server_id, deployment.organization_id,
@@ -706,6 +707,11 @@ export class PostgresPlatformRepository {
         if (input.state === "failed") await client.query("UPDATE backup_restore_runs SET status='failed', error_code=$3, error_summary=$4, completed_at=now() WHERE id=$1 AND command_id=$2", [restoreId, command.id, input.errorCode ?? "restore_failed", input.errorSummary ?? "Backup restore failed"]);
         if (input.state === "cancelled") await client.query("UPDATE backup_restore_runs SET status='cancelled', error_code=$3, error_summary=$4, completed_at=now() WHERE id=$1 AND command_id=$2", [restoreId, command.id, input.errorCode ?? "restore_cancelled", input.errorSummary ?? "Backup restore was cancelled"]);
       }
+      if (command.action === "backup.expire") {
+        const backupId = command.arguments.backup_id;
+        if (input.state === "succeeded") await client.query("UPDATE backup_records SET status='expired', storage_uri=NULL, expired_at=now() WHERE id=$1", [backupId]);
+        if (input.state === "failed") await client.query("UPDATE backup_records SET status='failed' WHERE id=$1", [backupId]);
+      }
       if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
         if (command.action === "release.stage" && input.state === "succeeded") await client.query("UPDATE release_manifests SET status='approved' WHERE id=$1 AND status='candidate'", [command.arguments.release_id]);
         if (command.action === "release.apply" && input.state === "running") await client.query("UPDATE release_manifests SET status='rolling_out' WHERE id=$1", [command.arguments.release_id]);
@@ -779,9 +785,28 @@ export class PostgresPlatformRepository {
     return rows.map(mapSnapshot);
   }
 
-  async recordAudit(input) {
-    const { rows } = await this.pool.query("INSERT INTO audit_events (id, organization_id, actor_user_id, action, target_type, target_id, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *", [input.id ?? randomUUID(), input.organizationId, input.actorUserId ?? null, input.action, input.targetType, input.targetId ?? null, input.metadata ?? {}]);
+  async appendAudit(client, input) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`bairui-audit:${input.organizationId}`]);
+    const id = input.id ?? randomUUID();
+    const createdAt = new Date().toISOString();
+    const metadata = input.metadata ?? {};
+    const { rows } = await client.query("INSERT INTO audit_events (id, organization_id, actor_user_id, action, target_type, target_id, metadata, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", [id, input.organizationId, input.actorUserId ?? null, input.action, input.targetType, input.targetId ?? null, metadata, createdAt]);
+    const { rows: chainRows } = await client.query("SELECT sequence, event_hash FROM audit_hash_chain WHERE organization_id=$1 ORDER BY sequence DESC LIMIT 1", [input.organizationId]);
+    const sequence = Number(chainRows[0]?.sequence ?? 0) + 1;
+    const previousHash = chainRows[0]?.event_hash ?? null;
+    const eventHash = createHash("sha256").update(JSON.stringify({ id, organizationId: input.organizationId, actorUserId: input.actorUserId ?? null, action: input.action, targetType: input.targetType, targetId: input.targetId ?? null, metadata, createdAt, previousHash })).digest("hex");
+    await client.query("INSERT INTO audit_hash_chain (id, organization_id, audit_event_id, sequence, previous_hash, event_hash, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)", [randomUUID(), input.organizationId, id, sequence, previousHash, eventHash, createdAt]);
     return mapAudit(rows[0]);
+  }
+
+  async recordAudit(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const event = await this.appendAudit(client, input);
+      await client.query("COMMIT");
+      return event;
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
   async listAudit(organizationId) {
@@ -1061,6 +1086,100 @@ export class PostgresPlatformRepository {
     return mapRetentionPolicy(rows[0]);
   }
 
+  async enforceRetentionPolicies({ organizationId, now = Date.now(), actorUserId = null, reason = "Scheduled retention enforcement" } = {}) {
+    const nowMs = new Date(now).getTime();
+    if (!Number.isFinite(nowMs)) throw new TypeError("Retention time is invalid");
+    const client = await this.pool.connect();
+    const lockName = organizationId ? `bairui-retention:${organizationId}` : "bairui-retention:all";
+    const runs = [];
+    try {
+      const { rows: lockRows } = await client.query("SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired", [lockName]);
+      if (!lockRows[0]?.acquired) return [];
+      const { rows: policies } = await client.query(
+        `SELECT organization.id AS organization_id,
+                COALESCE(policy.telemetry_days,30) AS telemetry_days,
+                COALESCE(policy.usage_days,400) AS usage_days,
+                COALESCE(policy.audit_days,365) AS audit_days,
+                COALESCE(policy.sensitive_access_event_days,365) AS sensitive_access_event_days,
+                COALESCE(policy.backup_days,30) AS backup_days,
+                policy.updated_by
+         FROM organizations organization
+         LEFT JOIN data_retention_policies policy ON policy.organization_id=organization.id
+         WHERE ($1::text IS NULL OR organization.id=$1)
+         ORDER BY organization.id`,
+        [organizationId ?? null]
+      );
+      for (const policy of policies) {
+        const runId = randomUUID();
+        const day = 24 * 60 * 60_000;
+        const cutoffs = {
+          telemetry: new Date(nowMs - Number(policy.telemetry_days) * day).toISOString(),
+          usage: new Date(nowMs - Number(policy.usage_days) * day).toISOString(),
+          audit: new Date(nowMs - Number(policy.audit_days) * day).toISOString(),
+          sensitiveAccess: new Date(nowMs - Number(policy.sensitive_access_event_days) * day).toISOString(),
+          backup: new Date(nowMs - Number(policy.backup_days) * day).toISOString()
+        };
+        try {
+          await client.query("BEGIN");
+          await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`bairui-retention-org:${policy.organization_id}`]);
+          await client.query("INSERT INTO retention_runs (id, organization_id, status, cutoffs) VALUES ($1,$2,'running',$3)", [runId, policy.organization_id, cutoffs]);
+          const deletedCounts = {};
+          deletedCounts.heartbeats = (await client.query("DELETE FROM heartbeats WHERE organization_id=$1 AND received_at<$2", [policy.organization_id, cutoffs.telemetry])).rowCount;
+          deletedCounts.telemetryEvents = (await client.query("DELETE FROM telemetry_events WHERE organization_id=$1 AND occurred_at<$2", [policy.organization_id, cutoffs.telemetry])).rowCount;
+          deletedCounts.usageRollups = (await client.query("DELETE FROM usage_rollups WHERE organization_id=$1 AND bucket_start<$2", [policy.organization_id, cutoffs.usage])).rowCount;
+          deletedCounts.sensitiveAccessEvents = (await client.query("DELETE FROM sensitive_access_events WHERE organization_id=$1 AND created_at<$2", [policy.organization_id, cutoffs.sensitiveAccess])).rowCount;
+          deletedCounts.auditEvents = (await client.query("DELETE FROM audit_events WHERE organization_id=$1 AND created_at<$2", [policy.organization_id, cutoffs.audit])).rowCount;
+          const { rows: backups } = await client.query(
+            `SELECT backup.id, backup.deployment_id, deployment.agent_id, deployment.observed_state_version
+             FROM backup_records backup
+             JOIN control_deployments deployment ON deployment.id=backup.deployment_id
+             WHERE deployment.organization_id=$1 AND backup.created_at<$2
+               AND backup.status IN ('created','verified','failed')
+               AND NOT EXISTS (SELECT 1 FROM backup_restore_runs restore WHERE restore.backup_id=backup.id AND restore.status IN ('requested','running'))
+             FOR UPDATE OF backup SKIP LOCKED`,
+            [policy.organization_id, cutoffs.backup]
+          );
+          let backupExpirationCommands = 0;
+          for (const backup of backups) {
+            const commandId = randomUUID();
+            const idempotencyKey = `${backup.deployment_id}/backup.expire/${backup.id}/${runId}`;
+            const expiresAt = new Date(nowMs + 24 * 60 * 60_000).toISOString();
+            const { rowCount } = await client.query(
+              `INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, expected_observation_version, state, priority, expires_at, requested_by)
+               VALUES ($1,$2,$3,'backup.expire','bairui.supervisor',$4,$5,$6,'queued',200,$7,$8)
+               ON CONFLICT (deployment_id,idempotency_key) DO NOTHING`,
+              [commandId, backup.deployment_id, idempotencyKey, backup.agent_id, { backup_id: backup.id }, Number(backup.observed_state_version), expiresAt, policy.updated_by]
+            );
+            if (rowCount === 1) {
+              await client.query("UPDATE backup_records SET status='expiring' WHERE id=$1", [backup.id]);
+              backupExpirationCommands += 1;
+            }
+          }
+          await this.appendAudit(client, { organizationId: policy.organization_id, actorUserId, action: "retention.enforced", targetType: "retention_run", targetId: runId, metadata: { reason, deletedCounts, backupExpirationCommands, cutoffs } });
+          await client.query("UPDATE retention_runs SET status='succeeded', deleted_counts=$2, backup_expiration_commands=$3, completed_at=now() WHERE id=$1", [runId, deletedCounts, backupExpirationCommands]);
+          await client.query("COMMIT");
+          runs.push({ id: runId, organizationId: policy.organization_id, status: "succeeded", cutoffs, deletedCounts, backupExpirationCommands });
+        } catch (error) {
+          await client.query("ROLLBACK");
+          const errorCode = String(error.code ?? "retention_failed").replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 200) || "retention_failed";
+          await client.query("INSERT INTO retention_runs (id, organization_id, status, cutoffs, error_code, completed_at) VALUES ($1,$2,'failed',$3,$4,now()) ON CONFLICT (id) DO UPDATE SET status='failed', error_code=EXCLUDED.error_code, completed_at=now()", [runId, policy.organization_id, cutoffs, errorCode]);
+          runs.push({ id: runId, organizationId: policy.organization_id, status: "failed", cutoffs, deletedCounts: {}, backupExpirationCommands: 0, errorCode });
+        }
+      }
+      return runs;
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lockName]).catch(() => {});
+      client.release();
+    }
+  }
+
+  async listRetentionRuns(organizationId, limit = 100) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+    const query = organizationId ? ["SELECT * FROM retention_runs WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2", [organizationId, safeLimit]] : ["SELECT * FROM retention_runs ORDER BY created_at DESC LIMIT $1", [safeLimit]];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ id: row.id, organizationId: row.organization_id, status: row.status, cutoffs: row.cutoffs, deletedCounts: row.deleted_counts, backupExpirationCommands: row.backup_expiration_commands, errorCode: row.error_code, startedAt: row.started_at?.toISOString?.() ?? row.started_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+  }
+
   async listSensitiveAccessGrants(organizationId) {
     const { rows } = await this.pool.query("SELECT * FROM sensitive_access_grants WHERE organization_id=$1 ORDER BY created_at DESC", [organizationId]);
     return rows.map(mapSensitiveGrant);
@@ -1094,7 +1213,7 @@ export class PostgresPlatformRepository {
   async listBackupRecords(organizationId) {
     const query = organizationId ? ["SELECT backup.*, deployment.agent_id FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id WHERE deployment.organization_id=$1 ORDER BY backup.created_at DESC", [organizationId]] : ["SELECT backup.*, deployment.agent_id FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id ORDER BY backup.created_at DESC", []];
     const { rows } = await this.pool.query(...query);
-    return rows.map((row) => ({ id: row.id, deploymentId: row.deployment_id, agentId: row.agent_id, policyId: row.policy_id, backupType: row.backup_type, status: row.status, storageUri: row.storage_uri, sha256: row.sha256, encrypted: row.encrypted, sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes), verifiedAt: row.verified_at?.toISOString?.() ?? row.verified_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+    return rows.map((row) => ({ id: row.id, deploymentId: row.deployment_id, agentId: row.agent_id, policyId: row.policy_id, backupType: row.backup_type, status: row.status, storageUri: row.storage_uri, sha256: row.sha256, encrypted: row.encrypted, sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes), verifiedAt: row.verified_at?.toISOString?.() ?? row.verified_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, expiredAt: row.expired_at?.toISOString?.() ?? row.expired_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
   }
 
   async listBackupRestoreRuns(organizationId) {

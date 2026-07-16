@@ -1116,12 +1116,19 @@ export function createPlatformApp(options) {
         await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "model.policy.update", targetType: "model_policy", targetId: organizationId, metadata: { allowedModelCount: allowedModels.length, defaultModel } });
         return json(response, 200, { policy });
       }
+      if (method === "POST" && url.pathname === "/api/admin/data-retention/run") {
+        requirePermission(requireLogin(principal), PERMISSIONS.DATA_GOVERNANCE_MANAGE, { organizationId: principal.organizationId });
+        const organizationId = managedOrganizationId(principal, url);
+        const body = await readJson(request);
+        if (typeof body.reason !== "string" || body.reason.trim().length < 10) return json(response, 400, { error: "retention_reason_required" });
+        return json(response, 200, { runs: await repository.enforceRetentionPolicies({ organizationId, actorUserId: principal.userId, reason: body.reason.trim().slice(0, 1000) }) });
+      }
       if (["GET", "PATCH"].includes(method) && url.pathname === "/api/admin/data-retention") {
         requirePermission(requireLogin(principal), PERMISSIONS.DATA_GOVERNANCE_MANAGE, { organizationId: principal.organizationId });
         const organizationId = managedOrganizationId(principal, url);
-        if (method === "GET") return json(response, 200, { policy: await repository.getRetentionPolicy(organizationId) });
+        if (method === "GET") return json(response, 200, { policy: await repository.getRetentionPolicy(organizationId), runs: await repository.listRetentionRuns(organizationId) });
         const body = await readJson(request);
-        const values = ["telemetryDays", "usageDays", "auditDays", "sensitiveAccessEventDays", "backupDays"].map((key) => boundedInteger(body[key], { minimum: 1, maximum: 3650 }));
+        const values = [boundedInteger(body.telemetryDays, { minimum: 1, maximum: 3650 }), boundedInteger(body.usageDays, { minimum: 35, maximum: 3650 }), boundedInteger(body.auditDays, { minimum: 1, maximum: 3650 }), boundedInteger(body.sensitiveAccessEventDays, { minimum: 1, maximum: 3650 }), boundedInteger(body.backupDays, { minimum: 1, maximum: 3650 })];
         if (values.some((item) => item === null)) return json(response, 400, { error: "invalid_retention_policy" });
         const policy = await repository.upsertRetentionPolicy({ organizationId, telemetryDays: values[0], usageDays: values[1], auditDays: values[2], sensitiveAccessEventDays: values[3], backupDays: values[4], updatedBy: principal.userId });
         await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "retention.policy.update", targetType: "data_retention_policy", targetId: organizationId, metadata: { ...body, updatedBy: undefined } });

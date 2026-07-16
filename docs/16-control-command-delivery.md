@@ -46,3 +46,8 @@ directory for the separate backup and retention workflow.
 owned by the target deployment. The Supervisor resolves the encrypted file from
 its fixed backup root, rejects unsafe archive paths and links, retains a local
 rollback copy, and reports restore evidence without returning backup content.
+
+`backup.expire` is generated only by the platform retention scheduler. It
+contains a backup identifier, is idempotent when the local file is already
+absent, validates Agent ownership when the encrypted file exists, and never
+accepts a path from an administrator or remote command.
