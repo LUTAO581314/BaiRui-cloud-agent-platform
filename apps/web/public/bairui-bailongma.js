@@ -374,7 +374,6 @@
           signal: controller.signal
         });
         await consumeHermesSse(response);
-        setTimeout(() => platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/memory-sync`, { method: "POST" }).catch(() => {}), 1200);
       } catch (error) {
         if (error.name !== "AbortError") emitCompatibility("error", { error: error.message || "Hermes Runtime 请求失败" });
       } finally {

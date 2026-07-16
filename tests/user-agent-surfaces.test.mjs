@@ -109,7 +109,12 @@ test("Agent workspaces isolate memory, skills, channels, hotspots and usage", as
   const graph = await (await fetch(`${context.baseUrl}/memories?agent_id=${context.agent.id}`, { headers: { cookie: ownerCookie } })).json();
   assert.equal(graph[0].event_type, "self");
   assert.equal(graph.find((item) => item.id === note.id).parent_id, `agent:${context.agent.id}`);
-  assert.equal((await fetch(`${base}/memory-sync`, { method: "POST", headers: { cookie: ownerCookie } })).status, 200);
+  const memoryOverview = await (await fetch(`${context.baseUrl}/api/admin/overview`, { headers: { cookie: rootCookie } })).json();
+  assert.equal(memoryOverview.memoryProjections.queued, 1);
+  assert.doesNotMatch(JSON.stringify(memoryOverview.memoryProjections), /Project decision|PostgreSQL/);
+  const manualSync = await fetch(`${base}/memory-sync`, { method: "POST", headers: { cookie: ownerCookie } });
+  assert.equal(manualSync.status, 202);
+  assert.equal((await manualSync.json()).sync.status, "pending");
   const update = await fetch(`${base}/memory-notes/${note.id}`, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ title: "Project decision", body: "Use PostgreSQL 17", tags: ["database"] }) });
   assert.equal(update.status, 200);
   assert.match((await update.json()).note.markdown, /PostgreSQL 17/);

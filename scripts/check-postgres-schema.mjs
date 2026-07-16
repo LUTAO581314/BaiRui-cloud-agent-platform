@@ -12,7 +12,7 @@ const requiredTables = [
   "test_runs", "backup_records", "upstream_candidates", "server_credentials",
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
-  "agent_runs", "agent_authorizations",
+  "agent_runs", "agent_authorizations", "memory_projection_outbox",
   "provider_channels", "model_policies", "data_retention_policies",
   "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs",
   "agent_resource_samples", "agent_container_resource_samples"
@@ -20,6 +20,7 @@ const requiredTables = [
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
 const requiredObsidianColumns = ["agent_id", "memory_kind", "importance", "hermes_target", "source_ref", "revision", "hermes_sync_status", "hermes_synced_revision", "hermes_synced_at"];
+const requiredMemoryOutboxColumns = ["organization_id", "user_id", "agent_id", "reason", "state", "attempts", "available_at", "lease_token", "lease_expires_at", "last_error_code", "result_summary"];
 const requiredBackupColumns = ["expired_at"];
 const client = new pg.Client({ connectionString });
 await client.connect();
@@ -36,6 +37,9 @@ try {
   const { rows: obsidianColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='obsidian_notes'");
   const obsidianColumns = new Set(obsidianColumnRows.map((row) => row.column_name));
   for (const column of requiredObsidianColumns) if (!obsidianColumns.has(column)) throw new Error(`Missing obsidian_notes column: ${column}`);
+  const { rows: memoryOutboxColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='memory_projection_outbox'");
+  const memoryOutboxColumns = new Set(memoryOutboxColumnRows.map((row) => row.column_name));
+  for (const column of requiredMemoryOutboxColumns) if (!memoryOutboxColumns.has(column)) throw new Error(`Missing memory_projection_outbox column: ${column}`);
   const { rows: backupColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='backup_records'");
   const backupColumns = new Set(backupColumnRows.map((row) => row.column_name));
   for (const column of requiredBackupColumns) if (!backupColumns.has(column)) throw new Error(`Missing backup_records column: ${column}`);

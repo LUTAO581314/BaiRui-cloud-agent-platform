@@ -43,6 +43,40 @@ const mapSkillPreference = (row) => row ? ({ agentId: row.agent_id, organization
 const mapChannelBinding = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, channel: row.channel, displayName: row.display_name, status: row.status, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, lastErrorCode: row.last_error_code, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentAuthorization = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, service: row.service, label: row.label, authType: row.auth_type, endpointUrl: row.endpoint_url, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, status: row.status, lastErrorCode: row.last_error_code, lastUsedAt: row.last_used_at?.toISOString?.() ?? row.last_used_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapUsageRollup = (row) => ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, bucketStart: row.bucket_start?.toISOString?.() ?? row.bucket_start, bucketSeconds: row.bucket_seconds, model: row.model, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), runCount: Number(row.run_count), failedRunCount: Number(row.failed_run_count), latencySumMs: Number(row.latency_sum_ms) });
+const mapMemoryProjectionJob = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, reason: row.reason, state: row.state, attempts: row.attempts, availableAt: row.available_at?.toISOString?.() ?? row.available_at, leaseToken: row.lease_token, leaseExpiresAt: row.lease_expires_at?.toISOString?.() ?? row.lease_expires_at, lastErrorCode: row.last_error_code, resultSummary: row.result_summary ?? {}, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at }) : null;
+
+async function transaction(pool, callback) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function projectionReason(value) {
+  const reason = String(value ?? "note-write");
+  if (!/^[a-z][a-z0-9._-]{0,63}$/.test(reason)) throw new TypeError("Invalid memory projection reason");
+  return reason;
+}
+
+async function enqueueMemoryProjectionWithClient(client, input) {
+  const { rows } = await client.query(
+    `INSERT INTO memory_projection_outbox (id, organization_id, user_id, agent_id, reason)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (agent_id) WHERE state IN ('pending','retry')
+     DO UPDATE SET reason=EXCLUDED.reason, state='pending', attempts=0, available_at=now(), last_error_code=NULL, result_summary='{}'::jsonb, updated_at=now()
+     RETURNING *`,
+    [randomUUID(), input.organizationId, input.userId, input.agentId, projectionReason(input.reason)]
+  );
+  return mapMemoryProjectionJob(rows[0]);
+}
 
 export class PostgresPlatformRepository {
   constructor(options = {}) {
@@ -1134,15 +1168,18 @@ export class PostgresPlatformRepository {
 
   async createObsidianNote(input) {
     const id = input.id ?? randomUUID();
-    const { rows } = await this.pool.query(
-      `INSERT INTO obsidian_notes (id, organization_id, user_id, agent_id, title, slug, markdown, frontmatter, wikilinks, memory_kind, importance, hermes_target, source_ref)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       ON CONFLICT (organization_id, user_id, agent_id, slug) WHERE agent_id IS NOT NULL
-       DO UPDATE SET title=EXCLUDED.title, markdown=EXCLUDED.markdown, frontmatter=EXCLUDED.frontmatter, wikilinks=EXCLUDED.wikilinks, memory_kind=EXCLUDED.memory_kind, importance=EXCLUDED.importance, hermes_target=EXCLUDED.hermes_target, source_ref=EXCLUDED.source_ref, revision=obsidian_notes.revision+1, hermes_sync_status='pending', updated_at=now()
-       RETURNING *`,
-      [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? "knowledge", input.importance ?? 3, input.hermesTarget ?? "auto", input.sourceRef ?? "bairui-user"]
-    );
-    return mapObsidianNote(rows[0]);
+    return transaction(this.pool, async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO obsidian_notes (id, organization_id, user_id, agent_id, title, slug, markdown, frontmatter, wikilinks, memory_kind, importance, hermes_target, source_ref)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (organization_id, user_id, agent_id, slug) WHERE agent_id IS NOT NULL
+         DO UPDATE SET title=EXCLUDED.title, markdown=EXCLUDED.markdown, frontmatter=EXCLUDED.frontmatter, wikilinks=EXCLUDED.wikilinks, memory_kind=EXCLUDED.memory_kind, importance=EXCLUDED.importance, hermes_target=EXCLUDED.hermes_target, source_ref=EXCLUDED.source_ref, revision=obsidian_notes.revision+1, hermes_sync_status='pending', updated_at=now()
+         RETURNING *`,
+        [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? "knowledge", input.importance ?? 3, input.hermesTarget ?? "auto", input.sourceRef ?? "bairui-user"]
+      );
+      if (input.queueProjection !== false) await enqueueMemoryProjectionWithClient(client, { ...input, reason: input.projectionReason ?? "note-write" });
+      return mapObsidianNote(rows[0]);
+    });
   }
 
   async listObsidianNotes(organizationId, userId, agentId, query = "") {
@@ -1162,17 +1199,23 @@ export class PostgresPlatformRepository {
   }
 
   async updateObsidianNote(input) {
-    const { rows } = await this.pool.query(
-      `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, memory_kind=COALESCE($10,memory_kind), importance=COALESCE($11,importance), hermes_target=COALESCE($12,hermes_target), source_ref=COALESCE($13,source_ref), revision=revision+1, hermes_sync_status='pending', updated_at=now()
-       WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *`,
-      [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? null, input.importance ?? null, input.hermesTarget ?? null, input.sourceRef ?? null]
-    );
-    return mapObsidianNote(rows[0]);
+    return transaction(this.pool, async (client) => {
+      const { rows } = await client.query(
+        `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, memory_kind=COALESCE($10,memory_kind), importance=COALESCE($11,importance), hermes_target=COALESCE($12,hermes_target), source_ref=COALESCE($13,source_ref), revision=revision+1, hermes_sync_status='pending', updated_at=now()
+         WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *`,
+        [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? null, input.importance ?? null, input.hermesTarget ?? null, input.sourceRef ?? null]
+      );
+      if (rows[0] && input.queueProjection !== false) await enqueueMemoryProjectionWithClient(client, { ...input, reason: input.projectionReason ?? "note-write" });
+      return mapObsidianNote(rows[0]);
+    });
   }
 
   async deleteObsidianNote(organizationId, userId, agentId, noteId) {
-    const { rowCount } = await this.pool.query("DELETE FROM obsidian_notes WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4", [noteId, organizationId, userId, agentId]);
-    return rowCount === 1;
+    return transaction(this.pool, async (client) => {
+      const { rowCount } = await client.query("DELETE FROM obsidian_notes WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4", [noteId, organizationId, userId, agentId]);
+      if (rowCount === 1) await enqueueMemoryProjectionWithClient(client, { organizationId, userId, agentId, reason: "note-delete" });
+      return rowCount === 1;
+    });
   }
 
   async markObsidianProjection(input) {
@@ -1181,9 +1224,130 @@ export class PostgresPlatformRepository {
          hermes_sync_status = CASE WHEN id=ANY($4::text[]) THEN 'conflict' WHEN id=ANY($5::text[]) THEN 'materialized' ELSE 'excluded' END,
          hermes_synced_revision = CASE WHEN id=ANY($5::text[]) THEN revision ELSE hermes_synced_revision END,
          hermes_synced_at = CASE WHEN id=ANY($5::text[]) THEN now() ELSE hermes_synced_at END
-       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3`,
-      [input.organizationId, input.userId, input.agentId, input.conflictNoteIds ?? [], input.includedNoteIds ?? []]
+       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3
+         AND revision = COALESCE(($6::jsonb ->> id)::integer, -1)`,
+      [input.organizationId, input.userId, input.agentId, input.conflictNoteIds ?? [], input.includedNoteIds ?? [], JSON.stringify(input.noteRevisions ?? {})]
     );
+  }
+
+  async markObsidianProjectionFailed(input) {
+    await this.pool.query(
+      `UPDATE obsidian_notes notes SET hermes_sync_status='failed'
+       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND hermes_sync_status='pending'
+         AND NOT EXISTS (SELECT 1 FROM memory_projection_outbox active WHERE active.agent_id=notes.agent_id AND active.state IN ('pending','processing','retry'))`,
+      [input.organizationId, input.userId, input.agentId]
+    );
+  }
+
+  async enqueueMemoryProjection(input) {
+    return transaction(this.pool, (client) => enqueueMemoryProjectionWithClient(client, input));
+  }
+
+  async getMemoryProjectionStatus(organizationId, userId, agentId) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM memory_projection_outbox
+       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3
+       ORDER BY (state IN ('pending','processing','retry')) DESC, created_at DESC LIMIT 1`,
+      [organizationId, userId, agentId]
+    );
+    return mapMemoryProjectionJob(rows[0]);
+  }
+
+  async listMemoryProjectionJobs(organizationId, limit = 1000) {
+    const values = [];
+    const clauses = [];
+    if (organizationId) { values.push(organizationId); clauses.push(`organization_id=$${values.length}`); }
+    values.push(Math.max(1, Math.min(5000, Number(limit) || 1000)));
+    const { rows } = await this.pool.query(`SELECT * FROM memory_projection_outbox${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT $${values.length}`, values);
+    return rows.map(mapMemoryProjectionJob);
+  }
+
+  async leaseMemoryProjectionJobs(input = {}) {
+    const limit = Math.max(1, Math.min(20, Number(input.limit) || 1));
+    const leaseSeconds = Math.max(15, Math.min(600, Number(input.leaseSeconds) || 60));
+    const leased = [];
+    for (let index = 0; index < limit; index += 1) {
+      let job;
+      try {
+        job = await transaction(this.pool, async (client) => {
+          await client.query(
+            `UPDATE memory_projection_outbox expired SET state='completed', lease_token=NULL, lease_expires_at=NULL,
+               result_summary='{"status":"superseded"}'::jsonb, completed_at=now(), updated_at=now()
+             WHERE expired.state='processing' AND expired.lease_expires_at <= now()
+               AND EXISTS (SELECT 1 FROM memory_projection_outbox newer WHERE newer.agent_id=expired.agent_id AND newer.state IN ('pending','retry'))`
+          );
+          await client.query(
+            `UPDATE memory_projection_outbox SET state='retry', lease_token=NULL, lease_expires_at=NULL, available_at=now(), updated_at=now()
+             WHERE state='processing' AND lease_expires_at <= now()`
+          );
+          const { rows } = await client.query(
+            `SELECT * FROM memory_projection_outbox candidate
+             WHERE candidate.state IN ('pending','retry') AND candidate.available_at <= now()
+               AND NOT EXISTS (SELECT 1 FROM memory_projection_outbox active WHERE active.agent_id=candidate.agent_id AND active.state='processing')
+             ORDER BY candidate.available_at, candidate.created_at
+             FOR UPDATE SKIP LOCKED LIMIT 1`
+          );
+          if (!rows[0]) return null;
+          const leaseToken = randomUUID();
+          const updated = await client.query(
+            `UPDATE memory_projection_outbox SET state='processing', attempts=attempts+1, lease_token=$2,
+               lease_expires_at=now()+($3::integer * interval '1 second'), updated_at=now()
+             WHERE id=$1 RETURNING *`,
+            [rows[0].id, leaseToken, leaseSeconds]
+          );
+          return mapMemoryProjectionJob(updated.rows[0]);
+        });
+      } catch (error) {
+        if (error.code !== "23505") throw error;
+        job = null;
+      }
+      if (!job) break;
+      leased.push(job);
+    }
+    return leased;
+  }
+
+  async completeMemoryProjectionJob(input) {
+    const { rows } = await this.pool.query(
+      `UPDATE memory_projection_outbox SET state='completed', lease_token=NULL, lease_expires_at=NULL,
+         result_summary=$3, last_error_code=NULL, completed_at=now(), updated_at=now()
+       WHERE id=$1 AND state='processing' AND lease_token=$2 RETURNING *`,
+      [input.id, input.leaseToken, input.resultSummary ?? {}]
+    );
+    return mapMemoryProjectionJob(rows[0]);
+  }
+
+  async retryMemoryProjectionJob(input) {
+    try {
+      return await transaction(this.pool, async (client) => {
+        const { rows } = await client.query("SELECT * FROM memory_projection_outbox WHERE id=$1 AND state='processing' AND lease_token=$2 FOR UPDATE", [input.id, input.leaseToken]);
+        const current = rows[0];
+        if (!current) return null;
+        const newer = await client.query("SELECT 1 FROM memory_projection_outbox WHERE agent_id=$1 AND id<>$2 AND state IN ('pending','retry') LIMIT 1", [current.agent_id, current.id]);
+        const dead = Number(current.attempts) >= Math.max(1, Number(input.maxAttempts) || 8);
+        const state = newer.rowCount ? "completed" : dead ? "dead" : "retry";
+        const summary = newer.rowCount ? { status: "superseded" } : {};
+        const { rows: updated } = await client.query(
+          `UPDATE memory_projection_outbox SET state=$3, lease_token=NULL, lease_expires_at=NULL, last_error_code=$4,
+             result_summary=$5, available_at=CASE WHEN $3='retry' THEN now()+($6::integer * interval '1 millisecond') ELSE available_at END,
+             completed_at=CASE WHEN $3 IN ('completed','dead') THEN now() ELSE NULL END, updated_at=now()
+           WHERE id=$1 AND lease_token=$2 RETURNING *`,
+          [input.id, input.leaseToken, state, input.errorCode, summary, Math.max(0, Number(input.delayMs) || 0)]
+        );
+        return mapMemoryProjectionJob(updated[0]);
+      });
+    } catch (error) {
+      if (error.code !== "23505") throw error;
+      const { rows } = await this.pool.query(
+        `UPDATE memory_projection_outbox current SET state='completed', lease_token=NULL, lease_expires_at=NULL,
+           last_error_code=$3, result_summary='{"status":"superseded"}'::jsonb, completed_at=now(), updated_at=now()
+         WHERE current.id=$1 AND current.state='processing' AND current.lease_token=$2
+           AND EXISTS (SELECT 1 FROM memory_projection_outbox newer WHERE newer.agent_id=current.agent_id AND newer.id<>current.id AND newer.state IN ('pending','retry'))
+         RETURNING current.*`,
+        [input.id, input.leaseToken, input.errorCode]
+      );
+      return mapMemoryProjectionJob(rows[0]);
+    }
   }
 
   async listAgentSkillPreferences(organizationId, userId, agentId) {

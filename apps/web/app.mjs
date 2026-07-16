@@ -285,6 +285,11 @@ function publicAgentAuthorization(authorization) {
   return { ...safe, configured: Boolean(credentialEnvelope), credentialMasked: authorization.credentialHint ? `****${authorization.credentialHint}` : null };
 }
 
+function publicMemoryProjectionStatus(job) {
+  if (!job) return { status: "idle" };
+  return { jobId: job.id, status: job.state, attempts: job.attempts, availableAt: job.availableAt, lastErrorCode: job.lastErrorCode, result: job.resultSummary, updatedAt: job.updatedAt, completedAt: job.completedAt };
+}
+
 function authorizationMetadata(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([key, item]) => AUTHORIZATION_METADATA_KEYS.has(key) && typeof item === "string" && item.trim()).map(([key, item]) => [key, item.trim().slice(0, 200)]));
@@ -475,60 +480,6 @@ export function createPlatformApp(options) {
       sourceRef: current?.sourceRef ?? "bairui-user",
       createdAt: current?.createdAt
     });
-  }
-
-  async function synchronizeAgentMemory(principal, agent) {
-    if (!runtimeClient) throw Object.assign(new Error("Runtime is unavailable"), { code: "runtime_unavailable", statusCode: 503 });
-    const snapshot = await runtimeClient.operation({ principal, agent, operation: "memory.snapshot" });
-    const manifest = snapshot.projection && typeof snapshot.projection === "object" ? snapshot.projection : { memory: [], user: [] };
-    const conflicts = new Set();
-    for (const target of ["memory", "user"]) {
-      const currentHashes = new Set((snapshot[target]?.entries ?? []).map((entry) => entry.sha256));
-      for (const entry of manifest[target] ?? []) if (!currentHashes.has(entry.sha256)) conflicts.add(entry.note_id);
-    }
-
-    let notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id);
-    const nativeSources = new Set(notes.map((note) => note.sourceRef));
-    const projectedHashes = new Set([...(manifest.memory ?? []), ...(manifest.user ?? [])].map((entry) => entry.sha256));
-    let imported = 0;
-    for (const target of ["memory", "user"]) {
-      for (const entry of snapshot[target]?.entries ?? []) {
-        if (projectedHashes.has(entry.sha256)) continue;
-        const sourceRef = `hermes-native:${target}:${entry.sha256}`;
-        if (nativeSources.has(sourceRef)) continue;
-        const note = createObsidianNote({
-          title: `Hermes ${target === "user" ? "用户" : "运行"}记忆 ${entry.sha256.slice(0, 8)}`,
-          body: entry.content,
-          memoryKind: target === "user" ? "preference" : "knowledge",
-          importance: 4,
-          hermesTarget: target,
-          sourceRef
-        });
-        const importedNote = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.hermes.import", targetType: "obsidian_note", targetId: importedNote.id, metadata: { agentId: agent.id, target, sourceHash: entry.sha256 } });
-        nativeSources.add(sourceRef);
-        imported += 1;
-      }
-    }
-
-    notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id);
-    const projection = buildHermesMemoryProjection(notes, { excludeNoteIds: [...conflicts] });
-    const applied = await runtimeClient.operation({ principal, agent, operation: "memory.apply", input: { expected_digest: snapshot.digest, projection } });
-    await repository.markObsidianProjection({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, includedNoteIds: projection.included_note_ids, conflictNoteIds: [...conflicts] });
-    return {
-      status: conflicts.size ? "conflict" : "materialized",
-      projectionId: projection.projection_id,
-      imported,
-      conflicts: [...conflicts],
-      memory: { charCount: applied.memory?.char_count ?? projection.memory.char_count, limit: projection.memory.limit, notes: projection.memory.entries.length },
-      user: { charCount: applied.user?.char_count ?? projection.user.char_count, limit: projection.user.limit, notes: projection.user.entries.length },
-      excluded: projection.excluded_note_ids.length
-    };
-  }
-
-  async function bestEffortMemorySync(principal, agent) {
-    try { return await synchronizeAgentMemory(principal, agent); }
-    catch (error) { return { status: error.code === "memory_projection_conflict" ? "conflict" : "pending", error: error.code ?? "runtime_unavailable" }; }
   }
 
   async function startAgentRun(principal, agent, inputText, model, parentRunId = null) {
@@ -841,7 +792,7 @@ export function createPlatformApp(options) {
         }
         const application = configurationApplication(await repository.requestAgentIdentityConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId }));
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.character-card.import", targetType: "agent", targetId: agent.id, metadata: { digest: imported.digest, spec: imported.card.spec, loreNotes: imported.loreNotes.length, application } });
-        return json(response, 202, { agent: updated, card: cardView, notes: { stored: notes.length, hermesActive: 0 }, application });
+        return json(response, 202, { agent: updated, card: cardView, notes: { stored: notes.length, hermesActive: 0 }, memorySync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)), application });
       }
       const initializeAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/initialize$/);
       if (initializeAgentMatch && method === "POST") {
@@ -1042,23 +993,28 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await ownedAgent(principal, memoryNotesMatch[1]);
         if (method === "GET") {
-          const notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id, url.searchParams.get("query") ?? "");
+          const [notes, syncJob] = await Promise.all([
+            repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id, url.searchParams.get("query") ?? ""),
+            repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)
+          ]);
           const projection = buildHermesMemoryProjection(notes);
-          return json(response, 200, { notes, format: "obsidian-markdown", memoryKinds: MEMORY_KINDS, hermesTargets: HERMES_MEMORY_TARGETS, projection: { memory: { charCount: projection.memory.char_count, limit: projection.memory.limit, notes: projection.memory.entries.length }, user: { charCount: projection.user.char_count, limit: projection.user.limit, notes: projection.user.entries.length }, excluded: projection.excluded_note_ids.length } });
+          return json(response, 200, { notes, format: "obsidian-markdown", memoryKinds: MEMORY_KINDS, hermesTargets: HERMES_MEMORY_TARGETS, sync: publicMemoryProjectionStatus(syncJob), projection: { memory: { charCount: projection.memory.char_count, limit: projection.memory.limit, notes: projection.memory.entries.length }, user: { charCount: projection.user.char_count, limit: projection.user.limit, notes: projection.user.entries.length }, excluded: projection.excluded_note_ids.length } });
         }
         const body = await readJson(request);
         if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
         const note = memoryNoteDocument(body);
         const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id, metadata: { agentId: agent.id } });
-        return json(response, 201, { note: saved, sync: await bestEffortMemorySync(principal, agent) });
+        return json(response, 201, { note: saved, sync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)) });
       }
 
       const memorySyncMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-sync$/);
       if (memorySyncMatch && method === "POST") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await ownedAgent(principal, memorySyncMatch[1]);
-        return json(response, 200, await synchronizeAgentMemory(principal, agent));
+        const job = await repository.enqueueMemoryProjection({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, reason: "manual" });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.projection.request", targetType: "agent", targetId: agent.id, metadata: { jobId: job.id } });
+        return json(response, 202, { sync: publicMemoryProjectionStatus(job) });
       }
 
       const memoryNoteMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes\/([^/]+)$/);
@@ -1072,7 +1028,7 @@ export function createPlatformApp(options) {
         if (method === "DELETE") {
           await repository.deleteObsidianNote(principal.organizationId, principal.userId, agent.id, noteId);
           await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.delete", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
-          return json(response, 200, { deleted: true, sync: await bestEffortMemorySync(principal, agent) });
+          return json(response, 200, { deleted: true, sync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)) });
         }
         const body = await readJson(request);
         if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
@@ -1081,7 +1037,7 @@ export function createPlatformApp(options) {
         try { saved = await repository.updateObsidianNote({ ...note, id: noteId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id }); }
         catch (error) { if (error.code === "23505") return json(response, 409, { error: "memory_note_slug_conflict" }); throw error; }
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.update", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
-        return json(response, 200, { note: saved, sync: await bestEffortMemorySync(principal, agent) });
+        return json(response, 200, { note: saved, sync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)) });
       }
 
       const skillsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/skills(?:\/([^/]+))?$/);
@@ -1280,8 +1236,9 @@ export function createPlatformApp(options) {
         const permitted = can(principal, PERMISSIONS.PLATFORM_OVERVIEW_READ) || can(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         if (!permitted) throw new AuthorizationError();
         const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
-        const [users, agents, runtimes, heartbeats, alerts, snapshots, audit, licenses, servers, releases] = await Promise.all([repository.listUsers(scope), repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAlerts(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([])]);
-        return json(response, 200, { scope: scope ?? "platform", users: users.length, agents: agents.length, runtimes: runtimes.length, healthyRuntimes: runtimes.filter((runtime) => runtime.status === "ready").length, openAlerts: alerts.filter((alert) => alert.status === "open").length, heartbeats, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
+        const [users, agents, runtimes, heartbeats, alerts, snapshots, audit, licenses, servers, releases, memoryJobs] = await Promise.all([repository.listUsers(scope), repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAlerts(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([]), repository.listMemoryProjectionJobs(scope)]);
+        const memoryProjections = { queued: memoryJobs.filter((job) => ["pending", "processing", "retry"].includes(job.state)).length, dead: memoryJobs.filter((job) => job.state === "dead").length };
+        return json(response, 200, { scope: scope ?? "platform", users: users.length, agents: agents.length, runtimes: runtimes.length, healthyRuntimes: runtimes.filter((runtime) => runtime.status === "ready").length, openAlerts: alerts.filter((alert) => alert.status === "open").length, memoryProjections, heartbeats, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
       }
       if (method === "GET" && url.pathname === "/api/admin/users") {
         requireLogin(principal);
