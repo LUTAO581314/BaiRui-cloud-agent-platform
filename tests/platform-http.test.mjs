@@ -343,6 +343,63 @@ test("provider credentials are platform-admin only and responses are masked", as
   assert.doesNotMatch(JSON.stringify(stored.apiKeyEnvelope), /provider-secret-1234/);
 });
 
+test("control-plane administration is scoped, masked and audited", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const userCookie = await login(context.baseUrl, "user@example.test");
+  const orgCookie = await login(context.baseUrl, "org-admin@example.test");
+  const rootCookie = await login(context.baseUrl, "root@example.test");
+
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/provider-channels`, { headers: { cookie: orgCookie } })).status, 403);
+  const channelResponse = await fetch(`${context.baseUrl}/api/admin/provider-channels`, {
+    method: "POST",
+    headers: { cookie: rootCookie, "content-type": "application/json" },
+    body: JSON.stringify({ name: "primary", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKey: "pool-secret-9876", priority: 10, weight: 2, maxConcurrency: 20, monthlyBudgetUsd: 100 })
+  });
+  assert.equal(channelResponse.status, 201);
+  const providerChannel = (await channelResponse.json()).channel;
+  assert.equal(providerChannel.keyMasked, "****9876");
+  assert.equal(providerChannel.apiKey, undefined);
+  assert.equal(providerChannel.apiKeyEnvelope, undefined);
+
+  const policyResponse = await fetch(`${context.baseUrl}/api/admin/model-policy`, {
+    method: "PATCH",
+    headers: { cookie: rootCookie, "content-type": "application/json" },
+    body: JSON.stringify({ allowedModels: ["example/model"], defaultModel: "example/model", userCustomKeysAllowed: false, dailyTokenLimit: 100000, monthlyBudgetUsd: 500 })
+  });
+  assert.equal(policyResponse.status, 200);
+
+  const retentionResponse = await fetch(`${context.baseUrl}/api/admin/data-retention`, {
+    method: "PATCH",
+    headers: { cookie: orgCookie, "content-type": "application/json" },
+    body: JSON.stringify({ telemetryDays: 30, usageDays: 400, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30 })
+  });
+  assert.equal(retentionResponse.status, 200);
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/data-retention?organization_id=org_b`, { headers: { cookie: orgCookie } })).status, 403);
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/sensitive-access`, { headers: { cookie: orgCookie } })).status, 403);
+
+  const grantResponse = await fetch(`${context.baseUrl}/api/admin/sensitive-access/grants`, {
+    method: "POST",
+    headers: { cookie: rootCookie, "content-type": "application/json" },
+    body: JSON.stringify({ granteeUserId: context.users.orgAdmin.id, scope: "agent", targetId: context.agent.id, reason: "Investigate a declared production incident", expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() })
+  });
+  assert.equal(grantResponse.status, 201);
+  const grant = (await grantResponse.json()).grant;
+  assert.equal((await fetch(`${context.baseUrl}/api/admin/sensitive-access`, { headers: { cookie: userCookie } })).status, 403);
+  const revoke = await fetch(`${context.baseUrl}/api/admin/sensitive-access/grants/${grant.id}/revoke`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(revoke.status, 200);
+
+  await context.repository.saveAgentHeartbeat({ organizationId: "org_a", userId: context.users.user.id, agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "unhealthy", observedAt: new Date().toISOString(), components: [] });
+  const alert = (await (await fetch(`${context.baseUrl}/api/admin/alerts`, { headers: { cookie: orgCookie } })).json()).alerts.find((item) => item.code === "runtime.health");
+  const acknowledge = await fetch(`${context.baseUrl}/api/admin/alerts/${alert.id}/status`, { method: "PATCH", headers: { cookie: orgCookie, "content-type": "application/json" }, body: JSON.stringify({ status: "acknowledged" }) });
+  assert.equal(acknowledge.status, 200);
+  assert.equal((await acknowledge.json()).alert.status, "acknowledged");
+
+  const audit = await (await fetch(`${context.baseUrl}/api/admin/audit`, { headers: { cookie: rootCookie } })).json();
+  assert.ok(audit.events.some((item) => item.action === "sensitive_access.grant"));
+  assert.ok(audit.events.some((item) => item.action === "alert.acknowledged"));
+});
+
 test("users own Obsidian notes and can read normalized hotspot data", async (t) => {
   const runtimeClient = { invokeIntegration: async () => ({ status: "completed", completed_at: "2026-07-15T00:00:01.000Z", output: { sources: [{ source_id: "baidu", status: "ready", count: 1 }], items: [{ external_id: "one", source_id: "baidu", source_name: "百度热搜", rank: 1, title: "测试热点", url: "https://www.baidu.com/", mobile_url: "", heat: "", category: "", fetched_at: "2026-07-15T00:00:00.000Z" }] } }) };
   const context = await setup({ runtimeClient });

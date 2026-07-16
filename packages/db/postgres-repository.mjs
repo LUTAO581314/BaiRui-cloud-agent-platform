@@ -15,7 +15,7 @@ const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_
 const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, endpointRef: row.endpoint_ref, routeUpdatedAt: row.route_updated_at?.toISOString?.() ?? row.route_updated_at, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapHeartbeat = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, sequence: Number(row.sequence), status: row.status, runtimeVersion: row.runtime_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, queueDepth: row.queue_depth, activeRuns: row.active_runs, failedRuns: row.failed_runs, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at }) : null;
 const mapAgentComponent = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, moduleId: row.module_id, status: row.status, version: row.version, upstreamRef: row.upstream_ref, capabilities: row.capabilities, metrics: row.metrics, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
-const mapAlert = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, code: row.code, severity: row.severity, status: row.status, title: row.title, summary: row.summary, firstSeenAt: row.first_seen_at?.toISOString?.() ?? row.first_seen_at, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, resolvedAt: row.resolved_at?.toISOString?.() ?? row.resolved_at });
+const mapAlert = (row) => row ? ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, code: row.code, severity: row.severity, status: row.status, title: row.title, summary: row.summary, acknowledgedBy: row.acknowledged_by, firstSeenAt: row.first_seen_at?.toISOString?.() ?? row.first_seen_at, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, resolvedAt: row.resolved_at?.toISOString?.() ?? row.resolved_at }) : null;
 const mapConversation = (row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const mapMessage = (row) => ({ id: row.id, conversationId: row.conversation_id, organizationId: row.organization_id, userId: row.user_id, role: row.role, content: row.content, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapSnapshot = (row) => ({ id: row.id, organizationId: row.organization_id, serverId: row.server_id, status: row.status, payload: row.payload, receivedAt: row.received_at?.toISOString?.() ?? row.received_at });
@@ -24,6 +24,11 @@ const mapLicense = (row) => ({ id: row.id, organizationId: row.organization_id, 
 const mapServer = (row) => ({ id: row.id, organizationId: row.organization_id, name: row.name, status: row.status, runtimeVersion: row.runtime_version, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapRelease = (row) => ({ id: row.id, version: row.version, agentCommit: row.agent_commit, status: row.status, notes: row.notes, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapProviderConfiguration = (row) => row ? ({ organizationId: row.organization_id, provider: row.provider, baseUrl: row.base_url, model: row.model, apiKeyEnvelope: row.api_key_envelope, keyHint: row.key_hint, applyStatus: row.apply_status, updatedBy: row.updated_by, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapProviderChannel = (row) => row ? ({ id: row.id, organizationId: row.organization_id, name: row.name, provider: row.provider, baseUrl: row.base_url, model: row.model, apiKeyEnvelope: row.api_key_envelope, keyHint: row.key_hint, status: row.status, priority: row.priority, weight: row.weight, maxConcurrency: row.max_concurrency, monthlyBudgetUsd: row.monthly_budget_usd === null ? null : Number(row.monthly_budget_usd), enabled: row.enabled, lastErrorCode: row.last_error_code, updatedBy: row.updated_by, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapModelPolicy = (row) => row ? ({ organizationId: row.organization_id, allowedModels: row.allowed_models, defaultModel: row.default_model, userCustomKeysAllowed: row.user_custom_keys_allowed, dailyTokenLimit: row.daily_token_limit === null ? null : Number(row.daily_token_limit), monthlyBudgetUsd: row.monthly_budget_usd === null ? null : Number(row.monthly_budget_usd), updatedBy: row.updated_by, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapRetentionPolicy = (row) => row ? ({ organizationId: row.organization_id, telemetryDays: row.telemetry_days, usageDays: row.usage_days, auditDays: row.audit_days, sensitiveAccessEventDays: row.sensitive_access_event_days, backupDays: row.backup_days, updatedBy: row.updated_by, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapConfigRevision = (row) => row ? ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, revision: Number(row.revision), configDocument: row.config_document, status: row.status, contentHash: row.content_hash, createdBy: row.created_by, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
+const mapSensitiveGrant = (row) => row ? ({ id: row.id, organizationId: row.organization_id, granteeUserId: row.grantee_user_id, permission: row.permission, scope: row.scope, targetId: row.target_id, reason: row.reason, grantedBy: row.granted_by, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, revokedAt: row.revoked_at?.toISOString?.() ?? row.revoked_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
 const mapIntegrationRun = (row) => ({ id: row.id, organizationId: row.organization_id, integrationId: row.integration_id, capability: row.capability, status: row.status, summary: row.summary, startedAt: row.started_at?.toISOString?.() ?? row.started_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapHotspot = (row) => ({ id: row.id, runId: row.run_id, externalId: row.external_id, sourceId: row.source_id, sourceName: row.source_name, rank: row.rank, title: row.title, url: row.url, mobileUrl: row.mobile_url, heat: row.heat, category: row.category, fetchedAt: row.fetched_at?.toISOString?.() ?? row.fetched_at });
 const mapObsidianNote = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, slug: row.slug, markdown: row.markdown, frontmatter: row.frontmatter, wikilinks: row.wikilinks, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
@@ -49,6 +54,11 @@ export class PostgresPlatformRepository {
     const { rows } = await this.pool.query("SELECT * FROM organizations WHERE id = $1", [id]);
     const row = rows[0];
     return row ? { id: row.id, name: row.name, createdAt: row.created_at.toISOString() } : null;
+  }
+
+  async listOrganizations() {
+    const { rows } = await this.pool.query("SELECT * FROM organizations ORDER BY created_at");
+    return rows.map((row) => ({ id: row.id, name: row.name, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
   }
 
   async createUser(input) {
@@ -173,6 +183,16 @@ export class PostgresPlatformRepository {
       const initializationStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
       await client.query("UPDATE agent_runtimes SET status=$2, hermes_version=COALESCE($3,hermes_version), boundary_version=COALESCE($4,boundary_version), config_revision_id=COALESCE($5,config_revision_id), last_heartbeat_at=$6, updated_at=now() WHERE id=$1 AND agent_id=$7", [input.runtimeId, runtimeStatus, input.runtimeVersion ?? null, input.boundaryVersion ?? null, input.configRevisionId ?? null, input.observedAt, input.agentId]);
       await client.query("UPDATE agents SET status=$2, initialization_status=$3, updated_at=now() WHERE id=$1", [input.agentId, input.status === "healthy" ? "active" : initializationStatus, initializationStatus]);
+      if (["degraded", "unhealthy"].includes(input.status)) {
+        await client.query(
+          `INSERT INTO alerts (id, organization_id, agent_id, runtime_id, code, severity, status, title, summary, first_seen_at, last_seen_at)
+           VALUES ($1,$2,$3,$4,'runtime.health',$5,'open',$6,$7,$8,$8)
+           ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged') DO UPDATE SET severity=EXCLUDED.severity, title=EXCLUDED.title, summary=EXCLUDED.summary, last_seen_at=EXCLUDED.last_seen_at`,
+          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, input.status === "unhealthy" ? "critical" : "medium", input.status === "unhealthy" ? "Agent Runtime 不健康" : "Agent Runtime 降级", `Runtime 上报状态：${input.status}`, input.observedAt]
+        );
+      } else if (input.status === "healthy") {
+        await client.query("UPDATE alerts SET status='resolved', resolved_at=COALESCE(resolved_at,now()) WHERE agent_id=$1 AND runtime_id=$2 AND code IN ('runtime.health','runtime.offline') AND status IN ('open','acknowledged')", [input.agentId, input.runtimeId]);
+      }
       for (const component of input.components ?? []) {
         await client.query(
           `INSERT INTO agent_components (id, organization_id, agent_id, runtime_id, layer, module_id, status, version, upstream_ref, capabilities, metrics, observed_at)
@@ -230,6 +250,49 @@ export class PostgresPlatformRepository {
     const query = organizationId ? ["SELECT * FROM alerts WHERE organization_id=$1 ORDER BY last_seen_at DESC", [organizationId]] : ["SELECT * FROM alerts ORDER BY last_seen_at DESC", []];
     const { rows } = await this.pool.query(...query);
     return rows.map(mapAlert);
+  }
+
+  async updateAlertStatus(input) {
+    const status = ["open", "acknowledged", "resolved", "closed"].includes(input.status) ? input.status : null;
+    if (!status) throw new TypeError("Invalid alert status");
+    const { rows } = await this.pool.query("UPDATE alerts SET status=$2, acknowledged_by=CASE WHEN $2='acknowledged' THEN $3 ELSE acknowledged_by END, resolved_at=CASE WHEN $2 IN ('resolved','closed') THEN now() ELSE NULL END WHERE id=$1 RETURNING *", [input.alertId, status, input.actorUserId]);
+    return mapAlert(rows[0]);
+  }
+
+  async evaluateOfflineAlerts({ organizationId, staleAfterMs = 120_000 } = {}) {
+    await this.pool.query(
+      `UPDATE alerts alert
+       SET status='resolved', resolved_at=COALESCE(alert.resolved_at,now())
+       FROM agents agent
+       JOIN agent_runtimes runtime ON runtime.agent_id=agent.id
+       WHERE alert.agent_id=agent.id
+         AND alert.runtime_id=runtime.id
+         AND alert.code='runtime.offline'
+         AND alert.status IN ('open','acknowledged')
+         AND (agent.desired_runtime_state<>'running' OR runtime.status IN ('uninitialized','stopped','suspended','deleting','deleted'))
+         ${organizationId ? "AND alert.organization_id=$1" : ""}`,
+      organizationId ? [organizationId] : []
+    );
+    const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
+    const condition = `WHERE agent.desired_runtime_state='running' AND runtime.status NOT IN ('uninitialized','stopped','suspended','deleting','deleted')${organizationId ? " AND agent.organization_id=$1" : ""}`;
+    const { rows } = await this.pool.query(`SELECT agent.id AS agent_id, agent.organization_id, runtime.id AS runtime_id, runtime.last_heartbeat_at FROM agents agent JOIN agent_runtimes runtime ON runtime.agent_id=agent.id ${condition}`, organizationId ? [organizationId] : []);
+    const results = [];
+    for (const row of rows) {
+      const stale = !row.last_heartbeat_at || new Date(row.last_heartbeat_at).getTime() < Date.parse(cutoff);
+      if (stale) {
+        const { rows: alertRows } = await this.pool.query(
+          `INSERT INTO alerts (id, organization_id, agent_id, runtime_id, code, severity, status, title, summary, first_seen_at, last_seen_at)
+           VALUES ($1,$2,$3,$4,'runtime.offline','high','open','Agent Runtime 离线',$5,now(),now())
+           ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged') DO UPDATE SET last_seen_at=now(), summary=EXCLUDED.summary
+           RETURNING *`,
+          [randomUUID(), row.organization_id, row.agent_id, row.runtime_id, `超过 ${Math.round(staleAfterMs / 1000)} 秒未收到心跳`]
+        );
+        results.push(mapAlert(alertRows[0]));
+      } else {
+        await this.pool.query("UPDATE alerts SET status='resolved', resolved_at=COALESCE(resolved_at,now()) WHERE agent_id=$1 AND runtime_id=$2 AND code='runtime.offline' AND status IN ('open','acknowledged')", [row.agent_id, row.runtime_id]);
+      }
+    }
+    return results;
   }
 
   async listUsageRollups(organizationId, userId, agentId, limit = 1000) {
@@ -613,7 +676,10 @@ export class PostgresPlatformRepository {
   }
 
   async listIntegrationRuns(organizationId, limit = 20) {
-    const { rows } = await this.pool.query("SELECT * FROM integration_runs WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2", [organizationId, limit]);
+    const query = organizationId
+      ? ["SELECT * FROM integration_runs WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2", [organizationId, limit]]
+      : ["SELECT * FROM integration_runs ORDER BY created_at DESC LIMIT $1", [limit]];
+    const { rows } = await this.pool.query(...query);
     return rows.map(mapIntegrationRun);
   }
 
@@ -728,5 +794,125 @@ export class PostgresPlatformRepository {
   async listAgentHotspotBookmarkIds(organizationId, userId, agentId) {
     const { rows } = await this.pool.query("SELECT hotspot_item_id FROM agent_hotspot_bookmarks WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 ORDER BY created_at DESC", [organizationId, userId, agentId]);
     return rows.map((row) => row.hotspot_item_id);
+  }
+
+  async listChannelBindings(organizationId) {
+    const query = organizationId ? ["SELECT * FROM agent_channel_bindings WHERE organization_id=$1 ORDER BY channel,status,updated_at DESC", [organizationId]] : ["SELECT * FROM agent_channel_bindings ORDER BY organization_id,channel,status,updated_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map(mapChannelBinding);
+  }
+
+  async listConfigRevisions(organizationId, agentId) {
+    const conditions = [];
+    const values = [];
+    if (organizationId) { values.push(organizationId); conditions.push(`organization_id=$${values.length}`); }
+    if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
+    const { rows } = await this.pool.query(`SELECT * FROM config_revisions${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT 500`, values);
+    return rows.map(mapConfigRevision);
+  }
+
+  async listTelemetryEvents(organizationId, limit = 500) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 2000));
+    const query = organizationId ? ["SELECT * FROM telemetry_events WHERE organization_id=$1 ORDER BY occurred_at DESC LIMIT $2", [organizationId, safeLimit]] : ["SELECT * FROM telemetry_events ORDER BY occurred_at DESC LIMIT $1", [safeLimit]];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, componentId: row.component_id, eventType: row.event_type, severity: row.severity, traceId: row.trace_id, metrics: row.metrics, occurredAt: row.occurred_at?.toISOString?.() ?? row.occurred_at }));
+  }
+
+  async listProviderChannels(organizationId) {
+    const { rows } = await this.pool.query("SELECT * FROM provider_channels WHERE organization_id=$1 ORDER BY enabled DESC, priority, name", [organizationId]);
+    return rows.map(mapProviderChannel);
+  }
+
+  async upsertProviderChannel(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO provider_channels (id, organization_id, name, provider, base_url, model, api_key_envelope, key_hint, status, priority, weight, max_concurrency, monthly_budget_usd, enabled, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (organization_id, name) DO UPDATE SET provider=EXCLUDED.provider, base_url=EXCLUDED.base_url, model=EXCLUDED.model,
+         api_key_envelope=COALESCE(EXCLUDED.api_key_envelope,provider_channels.api_key_envelope), key_hint=COALESCE(EXCLUDED.key_hint,provider_channels.key_hint),
+         status='pending', priority=EXCLUDED.priority, weight=EXCLUDED.weight, max_concurrency=EXCLUDED.max_concurrency,
+         monthly_budget_usd=EXCLUDED.monthly_budget_usd, enabled=EXCLUDED.enabled, updated_by=EXCLUDED.updated_by, updated_at=now()
+       RETURNING *`,
+      [input.id ?? randomUUID(), input.organizationId, input.name, input.provider, input.baseUrl, input.model, input.apiKeyEnvelope ?? null, input.keyHint ?? null, input.priority ?? 100, input.weight ?? 1, input.maxConcurrency ?? null, input.monthlyBudgetUsd ?? null, input.enabled ?? true, input.updatedBy]
+    );
+    return mapProviderChannel(rows[0]);
+  }
+
+  async getModelPolicy(organizationId) {
+    const { rows } = await this.pool.query("SELECT * FROM model_policies WHERE organization_id=$1", [organizationId]);
+    return mapModelPolicy(rows[0]);
+  }
+
+  async upsertModelPolicy(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO model_policies (organization_id, allowed_models, default_model, user_custom_keys_allowed, daily_token_limit, monthly_budget_usd, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (organization_id) DO UPDATE SET allowed_models=EXCLUDED.allowed_models,
+       default_model=EXCLUDED.default_model, user_custom_keys_allowed=EXCLUDED.user_custom_keys_allowed, daily_token_limit=EXCLUDED.daily_token_limit,
+       monthly_budget_usd=EXCLUDED.monthly_budget_usd, updated_by=EXCLUDED.updated_by, updated_at=now() RETURNING *`,
+      [input.organizationId, input.allowedModels ?? [], input.defaultModel ?? null, Boolean(input.userCustomKeysAllowed), input.dailyTokenLimit ?? null, input.monthlyBudgetUsd ?? null, input.updatedBy]
+    );
+    return mapModelPolicy(rows[0]);
+  }
+
+  async getRetentionPolicy(organizationId) {
+    const { rows } = await this.pool.query("SELECT * FROM data_retention_policies WHERE organization_id=$1", [organizationId]);
+    return mapRetentionPolicy(rows[0]);
+  }
+
+  async upsertRetentionPolicy(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO data_retention_policies (organization_id, telemetry_days, usage_days, audit_days, sensitive_access_event_days, backup_days, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (organization_id) DO UPDATE SET telemetry_days=EXCLUDED.telemetry_days,
+       usage_days=EXCLUDED.usage_days, audit_days=EXCLUDED.audit_days, sensitive_access_event_days=EXCLUDED.sensitive_access_event_days,
+       backup_days=EXCLUDED.backup_days, updated_by=EXCLUDED.updated_by, updated_at=now() RETURNING *`,
+      [input.organizationId, input.telemetryDays, input.usageDays, input.auditDays, input.sensitiveAccessEventDays, input.backupDays, input.updatedBy]
+    );
+    return mapRetentionPolicy(rows[0]);
+  }
+
+  async listSensitiveAccessGrants(organizationId) {
+    const { rows } = await this.pool.query("SELECT * FROM sensitive_access_grants WHERE organization_id=$1 ORDER BY created_at DESC", [organizationId]);
+    return rows.map(mapSensitiveGrant);
+  }
+
+  async createSensitiveAccessGrant(input) {
+    const { rows } = await this.pool.query("INSERT INTO sensitive_access_grants (id, organization_id, grantee_user_id, permission, scope, target_id, reason, granted_by, expires_at) VALUES ($1,$2,$3,'conversation_content_read',$4,$5,$6,$7,$8) RETURNING *", [input.id ?? randomUUID(), input.organizationId, input.granteeUserId, input.scope, input.targetId ?? null, input.reason, input.grantedBy, input.expiresAt]);
+    return mapSensitiveGrant(rows[0]);
+  }
+
+  async revokeSensitiveAccessGrant(organizationId, grantId) {
+    const { rows } = await this.pool.query("UPDATE sensitive_access_grants SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL RETURNING *", [grantId, organizationId]);
+    return mapSensitiveGrant(rows[0]);
+  }
+
+  async listSensitiveAccessEvents(organizationId, limit = 500) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 2000));
+    const { rows } = await this.pool.query("SELECT * FROM sensitive_access_events WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2", [organizationId, safeLimit]);
+    return rows.map((row) => ({ id: row.id, grantId: row.grant_id, organizationId: row.organization_id, actorUserId: row.actor_user_id, targetType: row.target_type, targetId: row.target_id, reason: row.reason, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+  }
+
+  async recordSensitiveAccessEvent(input) {
+    const { rows } = await this.pool.query(
+      "INSERT INTO sensitive_access_events (id, grant_id, organization_id, actor_user_id, target_type, target_id, reason) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+      [input.id ?? randomUUID(), input.grantId, input.organizationId, input.actorUserId, input.targetType, input.targetId, input.reason]
+    );
+    const row = rows[0];
+    return { id: row.id, grantId: row.grant_id, organizationId: row.organization_id, actorUserId: row.actor_user_id, targetType: row.target_type, targetId: row.target_id, reason: row.reason, createdAt: row.created_at?.toISOString?.() ?? row.created_at };
+  }
+
+  async listBackupRecords(organizationId) {
+    const query = organizationId ? ["SELECT backup.* FROM backup_records backup JOIN control_deployments deployment ON deployment.id=backup.deployment_id WHERE deployment.organization_id=$1 ORDER BY backup.created_at DESC", [organizationId]] : ["SELECT backup.* FROM backup_records backup ORDER BY backup.created_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ id: row.id, deploymentId: row.deployment_id, policyId: row.policy_id, backupType: row.backup_type, status: row.status, storageUri: row.storage_uri, sha256: row.sha256, encrypted: row.encrypted, sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes), verifiedAt: row.verified_at?.toISOString?.() ?? row.verified_at, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }));
+  }
+
+  async listReleaseGates(organizationId) {
+    const query = organizationId ? ["SELECT gate.* FROM release_gates gate JOIN control_deployments deployment ON deployment.id=gate.deployment_id WHERE deployment.organization_id=$1 ORDER BY gate.evaluated_at DESC", [organizationId]] : ["SELECT * FROM release_gates ORDER BY evaluated_at DESC", []];
+    const { rows } = await this.pool.query(...query);
+    return rows.map((row) => ({ id: row.id, releaseManifestId: row.release_manifest_id, deploymentId: row.deployment_id, gateName: row.gate_name, outcome: row.outcome, evidenceRefs: row.evidence_refs, evaluatedAt: row.evaluated_at?.toISOString?.() ?? row.evaluated_at }));
+  }
+
+  async listUpstreamCandidates() {
+    const { rows } = await this.pool.query("SELECT * FROM upstream_candidates ORDER BY updated_at DESC");
+    return rows.map((row) => ({ id: row.id, upstreamId: row.upstream_id, currentRef: row.current_ref, candidateRef: row.candidate_ref, status: row.status, compatibilityTestRunId: row.compatibility_test_run_id, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }));
   }
 }

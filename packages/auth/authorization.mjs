@@ -23,6 +23,9 @@ export const PERMISSIONS = Object.freeze({
   PLATFORM_RELEASES_MANAGE: "platform:releases:manage",
   PLATFORM_PROVIDER_SETTINGS_MANAGE: "platform:provider-settings:manage",
   CONTROL_PLANE_READ: "control-plane:read",
+  CONTROL_PLANE_MANAGE: "control-plane:manage",
+  DATA_GOVERNANCE_MANAGE: "data-governance:manage",
+  SENSITIVE_ACCESS_MANAGE: "sensitive-access:manage",
   CONTROL_PLANE_INGEST: "control-plane:ingest"
 });
 
@@ -47,7 +50,9 @@ const grants = new Map([
     PERMISSIONS.ORG_MEMBERS_MANAGE,
     PERMISSIONS.ORG_AGENTS_MANAGE,
     PERMISSIONS.ORG_AUDIT_READ,
-    PERMISSIONS.CONTROL_PLANE_READ
+    PERMISSIONS.CONTROL_PLANE_READ,
+    PERMISSIONS.CONTROL_PLANE_MANAGE,
+    PERMISSIONS.DATA_GOVERNANCE_MANAGE
   ])],
   [ROLES.PLATFORM_ADMIN, new Set(Object.values(PERMISSIONS))]
 ]);

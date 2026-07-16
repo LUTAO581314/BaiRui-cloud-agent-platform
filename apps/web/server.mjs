@@ -73,6 +73,19 @@ const server = createPlatformServer({
   bailongmaSceneBootstrap: fs.readFileSync(path.join(appDir, "public", "bairui-scene-bootstrap.js"), "utf8")
 });
 
+const healthEvaluationIntervalMs = Math.max(15_000, Number(process.env.BAIRUI_HEALTH_EVALUATION_INTERVAL_MS) || 30_000);
+const runtimeStaleAfterMs = Math.max(30_000, Number(process.env.BAIRUI_RUNTIME_STALE_AFTER_MS) || 120_000);
+async function evaluateControlPlaneHealth() {
+  try {
+    await repository.evaluateOfflineAlerts({ staleAfterMs: runtimeStaleAfterMs });
+  } catch (error) {
+    console.error("Control-plane health evaluation failed", error);
+  }
+}
+await evaluateControlPlaneHealth();
+const healthEvaluationTimer = setInterval(evaluateControlPlaneHealth, healthEvaluationIntervalMs);
+healthEvaluationTimer.unref();
+
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1", () => {
   console.log(`bairui-agent platform listening on port ${port}`);
