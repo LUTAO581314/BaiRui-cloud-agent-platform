@@ -85,6 +85,23 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     await repository.evaluateOfflineAlerts({ organizationId, staleAfterMs: 60_000 });
     assert.equal((await repository.listAlerts(organizationId)).find((item) => item.code === "runtime.offline").status, "resolved");
 
+    const testRunId = `test_${suffix}`;
+    const probeOperation = await repository.requestControlOperation({ organizationId, agentId, action: "probe.run", arguments: { probe_ids: ["runtime.health"], test_run_id: testRunId }, requestedBy: userId });
+    const [probeCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
+    assert.equal(probeCommand.command_id, probeOperation.command.id);
+    for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: probeCommand.command_id, serverId, attempt: probeCommand.attempt, state, resultSummary: state === "succeeded" ? { checks: 1, passed: 1 } : {} });
+    assert.equal((await repository.pool.query("SELECT status FROM test_runs WHERE id=$1", [testRunId])).rows[0].status, "passed");
+
+    const applyOperation = await repository.requestControlOperation({ organizationId, agentId, action: "config.apply", arguments: { config_revision_id: provision.runtime.configRevisionId }, requestedBy: userId, approvalRequired: true, reason: "PostgreSQL configuration approval test" });
+    assert.equal((await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).length, 0);
+    await repository.decideControlApproval({ approvalId: applyOperation.approval.id, decision: "approved", reason: "Approved by PostgreSQL integration test", decidedBy: userId });
+    const [applyCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
+    assert.equal(applyCommand.command_id, applyOperation.command.id);
+    assert.deepEqual(applyCommand.config.secret_envelope.providerApiKey, { encrypted: true });
+
+    const manifest = await repository.createReleaseManifest({ id: `manifest_${suffix}`, version: `1.0.${suffix}`, agentCommit: "a".repeat(40), imageDigest: `ghcr.io/bairui/bundle@sha256:${"a".repeat(64)}`, sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64), compatibility: { hermes_image: `ghcr.io/bairui/hermes@sha256:${"b".repeat(64)}`, runtime_image: `ghcr.io/bairui/runtime@sha256:${"c".repeat(64)}` }, createdBy: userId });
+    assert.equal((await repository.listReleaseManifests())[0].id, manifest.id);
+
     assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
     const deletion = await repository.requestAgentLifecycle({ agentId, request: "delete", requestedBy: userId, reason: "PostgreSQL integration test" });
     assert.ok(deletion.command.approvalId);
