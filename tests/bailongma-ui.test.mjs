@@ -60,7 +60,7 @@ test("adapts the BaiLongma console into a persistent Hermes chat column", () => 
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
   for (const evidence of [".bairui-chat-header", "#chat-history.open", "#chat-messages .msg", ".bairui-attach-button", ".bairui-streaming #send-btn::before"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  for (const evidence of ["mountHermesChatSurface", "applyViewportLayout", "100dvh", "ClipboardEvent", "DataTransfer", "attach-image", "Hermes ·"]) assert.match(adapter, new RegExp(evidence));
+  for (const evidence of ["mountHermesChatSurface", "applyViewportLayout", "document.documentElement).zoom", "height / zoom", "ClipboardEvent", "DataTransfer", "attach-image", "Hermes ·"]) assert.match(adapter, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(adapter, /bairui:chat-layout/);
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
   assert.match(workspace, /dispatchEvent\(new CustomEvent\("bairui:chat-layout"\)\)/);
