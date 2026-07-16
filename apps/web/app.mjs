@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   CONTROL_APPROVAL_ACTIONS,
   validateCredentialResolution,
@@ -14,16 +14,22 @@ import {
   isRole,
   requirePermission
 } from "../../packages/auth/authorization.mjs";
-import { verifyPassword, hashPassword } from "../../packages/auth/password.mjs";
 import {
   SESSION_COOKIE,
-  clearSessionCookie,
-  createSessionToken,
   parseCookies,
-  sessionCookie,
   verifySessionToken
 } from "../../packages/auth/session.mjs";
 import { loginPage, adminPage } from "./views.mjs";
+import {
+  constantTokenMatch,
+  html,
+  json,
+  readJson,
+  readSignedJson,
+  redirect,
+  sameOrigin,
+  securityHeaders
+} from "./http.mjs";
 import { issueLicense } from "../../packages/license/license.mjs";
 import {
   HERMES_MEMORY_TARGETS,
@@ -38,8 +44,10 @@ import {
   toBailongmaMemories
 } from "../../packages/bailongma-ui/compatibility.mjs";
 import { parseTavernCharacterCard } from "../../packages/character-card/tavern-card.mjs";
+import { createAuthRoutes } from "./routes/auth.mjs";
+import { createAdminControlRoutes } from "./routes/admin-control.mjs";
+import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
 
-const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
 const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
@@ -89,71 +97,6 @@ const INTEGRATION_CATALOG = Object.freeze([
   { id: "sonic", name: "Sonic", layer: "服务集成层", importType: "submodule", status: "registered" },
   { id: "firecrawl", name: "Firecrawl", layer: "服务集成层", importType: "submodule", status: "adapter-needs-key" }
 ]);
-
-function json(response, statusCode, body, headers = {}) {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", ...headers });
-  response.end(JSON.stringify(body));
-}
-
-function html(response, statusCode, body) {
-  response.writeHead(statusCode, { "content-type": "text/html; charset=utf-8" });
-  response.end(body);
-}
-
-function redirect(response, location) {
-  response.writeHead(303, { location });
-  response.end();
-}
-
-async function readJson(request, maxBytes = MAX_BODY_BYTES) {
-  return (await readSignedJson(request, maxBytes)).body;
-}
-
-async function readSignedJson(request, maxBytes = MAX_BODY_BYTES) {
-  let size = 0;
-  const chunks = [];
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > maxBytes) {
-      const error = new Error("Request body too large");
-      error.statusCode = 413;
-      throw error;
-    }
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return { raw: "", body: {} };
-  const raw = Buffer.concat(chunks).toString("utf8");
-  try {
-    return { raw, body: JSON.parse(raw) };
-  } catch {
-    const error = new Error("Invalid JSON");
-    error.statusCode = 400;
-    throw error;
-  }
-}
-
-function sameOrigin(request, configuredOrigin) {
-  const origin = request.headers.origin;
-  if (!origin) return true;
-  const expected = configuredOrigin ?? `${request.headers["x-forwarded-proto"] ?? "http"}://${request.headers.host}`;
-  return origin === expected;
-}
-
-function constantTokenMatch(actual, expected) {
-  if (!actual || !expected) return false;
-  const actualHash = createHash("sha256").update(actual).digest();
-  const expectedHash = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(actualHash, expectedHash);
-}
-
-function securityHeaders(response) {
-  response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
-  response.setHeader("referrer-policy", "no-referrer");
-  response.setHeader("x-content-type-options", "nosniff");
-  response.setHeader("x-frame-options", "DENY");
-  response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
-  response.setHeader("cache-control", "no-store");
-}
 
 function sessionMessage(body) {
   const text = typeof body.message === "string" ? body.message.trim() : "";
@@ -383,7 +326,6 @@ export function createPlatformApp(options) {
   if (!repository) throw new TypeError("repository is required");
   if (!sessionSecret || sessionSecret.length < 32) throw new TypeError("sessionSecret must contain at least 32 characters");
   if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
-  const loginAttempts = new Map();
   const runtimeRouteHosts = new Set(["host.docker.internal", "127.0.0.1", "localhost", ...(options.runtimeRouteHosts ?? [])]);
   const runtimeStaleAfterMs = Math.max(30_000, Number(options.runtimeStaleAfterMs) || 120_000);
   const resourceStaleAfterMs = Math.max(30_000, Number(options.resourceStaleAfterMs) || 120_000);
@@ -571,6 +513,39 @@ export function createPlatformApp(options) {
     }
   }
 
+  const routeAuth = createAuthRoutes({
+    repository,
+    sessionSecret,
+    secureCookies,
+    allowRegistration,
+    requireLogin
+  });
+  const routeUserRuntime = createUserRuntimeRoutes({
+    repository,
+    runtimeClient,
+    requireLogin,
+    ownedAgent,
+    requireOperationalAgent,
+    modelAccess,
+    startAgentRun,
+    synchronizeAgentRun,
+    pipeRuntimeStream,
+    maxChatBodyBytes: MAX_CHAT_BODY_BYTES,
+    sessionMessage,
+    publicAgentRun,
+    terminalAgentRunStatuses: TERMINAL_AGENT_RUN_STATUSES
+  });
+  const routeAdminControl = createAdminControlRoutes({
+    repository,
+    requireLogin,
+    managedOrganizationId,
+    adminControlActions: ADMIN_CONTROL_ACTIONS,
+    platformControlActions: PLATFORM_CONTROL_ACTIONS,
+    approvalControlActions: APPROVAL_CONTROL_ACTIONS,
+    controlOperationArguments,
+    immutableImage: IMMUTABLE_IMAGE
+  });
+
   return async function handle(request, response) {
     securityHeaders(response);
     const url = new URL(request.url, "http://platform.internal");
@@ -650,42 +625,7 @@ export function createPlatformApp(options) {
         return html(response, 200, adminPage(principal));
       }
 
-      if (method === "POST" && url.pathname === "/api/auth/login") {
-        const ip = request.socket.remoteAddress ?? "unknown";
-        const attempt = loginAttempts.get(ip) ?? { count: 0, resetAt: Date.now() + 60_000 };
-        if (attempt.resetAt <= Date.now()) Object.assign(attempt, { count: 0, resetAt: Date.now() + 60_000 });
-        if (attempt.count >= 10) return json(response, 429, { error: "too_many_attempts" });
-        attempt.count += 1;
-        loginAttempts.set(ip, attempt);
-        const body = await readJson(request);
-        const user = typeof body.email === "string" ? await repository.findUserByEmail(body.email) : null;
-        if (!user || user.status !== "active" || !(await verifyPassword(body.password, user.passwordHash))) {
-          return json(response, 401, { error: "invalid_credentials" });
-        }
-        loginAttempts.delete(ip);
-        const token = createSessionToken({ userId: user.id, organizationId: user.organizationId, role: user.role }, sessionSecret);
-        await repository.recordAudit({ organizationId: user.organizationId, actorUserId: user.id, action: "auth.login", targetType: "user", targetId: user.id });
-        return json(response, 200, { user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role } }, { "set-cookie": sessionCookie(token, { secure: secureCookies }) });
-      }
-
-      if (method === "POST" && url.pathname === "/api/auth/register") {
-        if (!allowRegistration) return json(response, 404, { error: "not_found" });
-        const body = await readJson(request);
-        const organization = await repository.createOrganization({ name: body.organizationName || "Personal workspace" });
-        const passwordHash = await hashPassword(body.password);
-        const user = await repository.createUser({ organizationId: organization.id, email: body.email, displayName: body.displayName || body.email, passwordHash, role: ROLES.ORG_ADMIN });
-        await repository.createAgent({ organizationId: organization.id, ownerUserId: user.id, name: "bairui-agent", description: "User-owned Hermes agent" });
-        await repository.recordAudit({ organizationId: organization.id, actorUserId: user.id, action: "organization.register", targetType: "organization", targetId: organization.id });
-        return json(response, 201, { id: user.id });
-      }
-
-      if (method === "POST" && url.pathname === "/api/auth/logout") {
-        return json(response, 200, { ok: true }, { "set-cookie": clearSessionCookie({ secure: secureCookies }) });
-      }
-      if (method === "GET" && url.pathname === "/api/me") {
-        requirePermission(requireLogin(principal), PERMISSIONS.SELF_READ, { userId: principal.userId, organizationId: principal.organizationId });
-        return json(response, 200, { user: principal });
-      }
+      if (await routeAuth({ method, url, request, response, principal })) return;
       if (method === "GET" && url.pathname === "/api/user/bootstrap") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
         const [models, policy] = await Promise.all([modelAccess(principal.organizationId), repository.getModelPolicy(principal.organizationId)]);
@@ -836,157 +776,7 @@ export function createPlatformApp(options) {
         return json(response, result.command ? 202 : 200, result);
       }
 
-      const discoveryMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runtime\/discovery$/);
-      if (discoveryMatch && method === "GET") {
-        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, discoveryMatch[1]);
-        const names = ["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets"];
-        const [settled, policy] = await Promise.all([Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation }))), modelAccess(principal.organizationId)]);
-        return json(response, 200, {
-          agentId: agent.id,
-          discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])),
-          policy
-        });
-      }
-
-      const sessionsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions$/);
-      if (sessionsMatch && ["GET", "POST"].includes(method)) {
-        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, sessionsMatch[1]);
-        if (method === "POST") await requireOperationalAgent(principal, agent);
-        if (method === "GET") {
-          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.list", input: { limit: url.searchParams.get("limit") ?? 50, offset: url.searchParams.get("offset") ?? 0, include_children: url.searchParams.get("include_children") ?? false } }));
-        }
-        const body = await readJson(request);
-        const policy = await modelAccess(principal.organizationId);
-        const preferredModel = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : undefined;
-        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || policy.defaultModel || undefined } } });
-        return json(response, 201, result);
-      }
-
-      const sessionActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)\/(messages|fork|chat|chat\/stream)$/);
-      if (sessionActionMatch) {
-        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, sessionActionMatch[1]);
-        const sessionId = sessionActionMatch[2];
-        const action = sessionActionMatch[3];
-        if (method === "POST" && ["fork", "chat", "chat/stream"].includes(action)) await requireOperationalAgent(principal, agent);
-        if (action === "messages" && method === "GET") return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.messages", input: { session_id: sessionId } }));
-        if (action === "fork" && method === "POST") {
-          const body = await readJson(request);
-          return json(response, 201, await runtimeClient.operation({ principal, agent, operation: "sessions.fork", input: { session_id: sessionId, body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined } } }));
-        }
-        if (action === "chat" && method === "POST") {
-          const body = await readJson(request, MAX_CHAT_BODY_BYTES);
-          const message = sessionMessage(body);
-          if (!message) return json(response, 400, { error: "invalid_message" });
-          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message } } }));
-        }
-        if (action === "chat/stream" && method === "POST") {
-          const body = await readJson(request, MAX_CHAT_BODY_BYTES);
-          const message = sessionMessage(body);
-          if (!message) return json(response, 400, { error: "invalid_message" });
-          const controller = new AbortController();
-          response.on("close", () => controller.abort());
-          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message } }, signal: controller.signal });
-          return pipeRuntimeStream(response, upstream);
-        }
-      }
-
-      const sessionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)$/);
-      if (sessionMatch && ["GET", "PATCH", "DELETE"].includes(method)) {
-        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, sessionMatch[1]);
-        const input = { session_id: sessionMatch[2] };
-        if (method === "PATCH") {
-          const body = await readJson(request);
-          input.body = { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined };
-        }
-        const operation = method === "GET" ? "sessions.get" : method === "PATCH" ? "sessions.update" : "sessions.delete";
-        return json(response, 200, await runtimeClient.operation({ principal, agent, operation, input }));
-      }
-
-      const runsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs$/);
-      if (runsMatch && ["GET", "POST"].includes(method)) {
-        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        const agent = await ownedAgent(principal, runsMatch[1]);
-        if (method === "GET") {
-          const runs = await repository.listAgentRuns(principal.organizationId, principal.userId, agent.id, url.searchParams.get("limit") ?? 50);
-          return json(response, 200, { runs: runs.map(publicAgentRun) });
-        }
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        await requireOperationalAgent(principal, agent);
-        const body = await readJson(request);
-        if (typeof body.input !== "string" || !body.input.trim() || body.input.length > 20_000) return json(response, 400, { error: "invalid_run_input" });
-        const policy = await modelAccess(principal.organizationId);
-        const model = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : policy.defaultModel;
-        return json(response, 202, await startAgentRun(principal, agent, body.input.trim(), model));
-      }
-
-      const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop|retry)$/);
-      if (runActionMatch) {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, runActionMatch[1]);
-        const runId = runActionMatch[2];
-        const action = runActionMatch[3];
-        if (action === "retry" && method === "POST") {
-          await requireOperationalAgent(principal, agent);
-          const previous = await repository.getAgentRun(principal.organizationId, principal.userId, agent.id, runId);
-          if (!previous) return json(response, 404, { error: "run_not_found" });
-          if (!TERMINAL_AGENT_RUN_STATUSES.has(previous.status)) return json(response, 409, { error: "run_not_terminal" });
-          return json(response, 202, await startAgentRun(principal, agent, previous.inputText, previous.model, previous.id));
-        }
-        if (action === "events" && method === "GET") {
-          const controller = new AbortController();
-          response.on("close", () => controller.abort());
-          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "runs.events", input: { run_id: runId }, signal: controller.signal });
-          return pipeRuntimeStream(response, upstream);
-        }
-        if (action === "approval" && method === "POST") {
-          const body = await readJson(request);
-          if (!["once", "session", "always", "deny"].includes(body.choice)) return json(response, 400, { error: "invalid_approval_choice" });
-          const result = await runtimeClient.operation({ principal, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } });
-          await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "running" });
-          return json(response, 200, result);
-        }
-        if (action === "stop" && method === "POST") {
-          const result = await runtimeClient.operation({ principal, agent, operation: "runs.stop", input: { run_id: runId } });
-          await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "stopping" });
-          return json(response, 202, result);
-        }
-      }
-
-      const runMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)$/);
-      if (runMatch && method === "GET") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_READ, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, runMatch[1]);
-        return json(response, 200, await synchronizeAgentRun(principal, agent, runMatch[2]));
-      }
-
-      const jobsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/jobs(?:\/([^/]+))?(?:\/(pause|resume|run))?$/);
-      if (jobsMatch) {
-        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
-        const agent = await ownedAgent(principal, jobsMatch[1]);
-        const jobId = jobsMatch[2];
-        const action = jobsMatch[3];
-        let operation;
-        let input = {};
-        if (!jobId && method === "GET") operation = "jobs.list";
-        else if (!jobId && method === "POST") { operation = "jobs.create"; input.body = await readJson(request); }
-        else if (action && method === "POST") { operation = `jobs.${action}`; input.job_id = jobId; }
-        else if (jobId && method === "GET") { operation = "jobs.get"; input.job_id = jobId; }
-        else if (jobId && method === "PATCH") { operation = "jobs.update"; input = { job_id: jobId, body: await readJson(request) }; }
-        else if (jobId && method === "DELETE") { operation = "jobs.delete"; input.job_id = jobId; }
-        if (["jobs.create", "jobs.run"].includes(operation)) await requireOperationalAgent(principal, agent);
-        if (operation) return json(response, method === "POST" ? 202 : 200, await runtimeClient.operation({ principal, agent, operation, input }));
-      }
+      if (await routeUserRuntime({ method, url, request, response, principal })) return;
 
       const memoryNotesMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes$/);
       if (memoryNotesMatch && ["GET", "POST"].includes(method)) {
@@ -1329,59 +1119,7 @@ export function createPlatformApp(options) {
         const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         return json(response, 200, { events: (await repository.listAudit(scope)).slice(0, 2000) });
       }
-      if (method === "GET" && url.pathname === "/api/admin/control-commands") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
-        return json(response, 200, { commands: await repository.listControlCommands(scope, url.searchParams.get("limit")) });
-      }
-      if (method === "POST" && url.pathname === "/api/admin/control-commands") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_MANAGE, { organizationId: principal.organizationId });
-        const body = await readJson(request);
-        if (!ADMIN_CONTROL_ACTIONS.has(body.action) || typeof body.agentId !== "string") return json(response, 400, { error: "invalid_control_operation" });
-        if (PLATFORM_CONTROL_ACTIONS.has(body.action) && principal.role !== ROLES.PLATFORM_ADMIN) throw new AuthorizationError();
-        const agent = await repository.getAgent(body.agentId);
-        if (!agent || (principal.role !== ROLES.PLATFORM_ADMIN && agent.organizationId !== principal.organizationId)) return json(response, 404, { error: "agent_not_found" });
-        const requestedOrganization = url.searchParams.get("organization_id");
-        if (requestedOrganization && requestedOrganization !== agent.organizationId) return json(response, 400, { error: "agent_scope_mismatch" });
-        const operationArguments = controlOperationArguments(body.action, body);
-        if (!operationArguments) return json(response, 400, { error: "invalid_control_arguments" });
-        const approvalRequired = APPROVAL_CONTROL_ACTIONS.has(body.action);
-        if (approvalRequired && (typeof body.reason !== "string" || body.reason.trim().length < 10)) return json(response, 400, { error: "control_reason_required" });
-        const suppliedIdempotencyKey = request.headers["idempotency-key"];
-        const idempotencyToken = typeof suppliedIdempotencyKey === "string" && /^[A-Za-z0-9._:-]{8,128}$/.test(suppliedIdempotencyKey) ? suppliedIdempotencyKey : randomUUID();
-        const result = await repository.requestControlOperation({ organizationId: agent.organizationId, agentId: agent.id, action: body.action, arguments: operationArguments, requestedBy: principal.userId, idempotencyKey: `${agent.id}/${body.action}/${idempotencyToken}`, approvalRequired, riskLevel: ["backup.restore", "release.apply", "release.rollback", "credential.revoke"].includes(body.action) ? "critical" : approvalRequired ? "high" : "medium", reason: typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : "" });
-        await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: principal.userId, action: "control.command.request", targetType: "control_command", targetId: result.command.id, metadata: { agentId: agent.id, action: body.action, approvalRequired, arguments: operationArguments } });
-        return json(response, 202, result);
-      }
-      if (method === "GET" && url.pathname === "/api/admin/control-approvals") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
-        return json(response, 200, { approvals: await repository.listControlApprovals(scope, url.searchParams.get("limit")) });
-      }
-      const approvalDecisionMatch = url.pathname.match(/^\/api\/admin\/control-approvals\/([^/]+)$/);
-      if (approvalDecisionMatch && method === "PATCH") {
-        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
-        const body = await readJson(request);
-        if (!["approved", "rejected"].includes(body.decision) || typeof body.reason !== "string" || body.reason.trim().length < 10) return json(response, 400, { error: "invalid_approval_decision" });
-        const approval = await repository.decideControlApproval({ approvalId: approvalDecisionMatch[1], decision: body.decision, reason: body.reason.trim().slice(0, 1000), decidedBy: principal.userId });
-        if (!approval) return json(response, 404, { error: "approval_not_found" });
-        await repository.recordAudit({ organizationId: approval.organizationId, actorUserId: principal.userId, action: `control.approval.${body.decision}`, targetType: "control_approval", targetId: approval.id, metadata: { commandId: approval.commandId, action: approval.action, reason: approval.reason } });
-        return json(response, 200, { approval });
-      }
-      if (method === "GET" && url.pathname === "/api/admin/release-manifests") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        return json(response, 200, { manifests: await repository.listReleaseManifests() });
-      }
-      if (method === "POST" && url.pathname === "/api/admin/release-manifests") {
-        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
-        const body = await readJson(request);
-        if (typeof body.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.version) || typeof body.agentCommit !== "string" || !/^[0-9a-f]{40}$/.test(body.agentCommit) || !IMMUTABLE_IMAGE.test(body.hermesImage) || !IMMUTABLE_IMAGE.test(body.runtimeImage) || !IMMUTABLE_IMAGE.test(body.imageDigest)) return json(response, 400, { error: "invalid_release_manifest" });
-        const trustedUrl = (value) => { try { const parsed = new URL(value); return parsed.protocol === "https:" && !parsed.username && !parsed.password; } catch { return false; } };
-        if (!trustedUrl(body.sbomUri) || !trustedUrl(body.provenanceUri) || typeof body.signature !== "string" || body.signature.length < 32 || body.signature.length > 20_000) return json(response, 400, { error: "invalid_release_evidence" });
-        const manifest = await repository.createReleaseManifest({ version: body.version, agentCommit: body.agentCommit, imageDigest: body.imageDigest, sbomUri: body.sbomUri, provenanceUri: body.provenanceUri, signature: body.signature, migrationVersion: typeof body.migrationVersion === "string" ? body.migrationVersion.slice(0, 200) : null, compatibility: { hermes_image: body.hermesImage, runtime_image: body.runtimeImage }, status: "candidate", createdBy: principal.userId });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "release.manifest.create", targetType: "release_manifest", targetId: manifest.id, metadata: { version: manifest.version, agentCommit: manifest.agentCommit, imageDigest: manifest.imageDigest } });
-        return json(response, 201, { manifest });
-      }
+      if (await routeAdminControl({ method, url, request, response, principal })) return;
       const alertStatusMatch = url.pathname.match(/^\/api\/admin\/alerts\/([^/]+)\/status$/);
       if (alertStatusMatch && method === "PATCH") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_MANAGE, { organizationId: principal.organizationId });
