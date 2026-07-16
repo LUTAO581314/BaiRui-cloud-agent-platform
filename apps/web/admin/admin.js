@@ -246,6 +246,7 @@ async function loadProviders() {
 async function loadIntegrations() {
   const data = await request(scoped("/api/admin/integrations"));
   rows("integration-rows", data.catalog, [item => item.name, item => item.layer, item => item.importType, item => statusNode(item.status)]);
+  rows("integration-authorization-rows", data.authorizations, [item => item.service, item => item.label, item => item.agentId, item => item.userId, item => statusNode(item.status), item => item.configured ? item.credentialMasked : "已吊销", item => formatTime(item.lastUsedAt)]);
   rows("integration-run-rows", data.runs, [item => `${item.integrationId}.${item.capability}`, item => statusNode(item.status), item => `${item.summary?.count ?? 0} 条`, item => formatTime(item.completedAt ?? item.createdAt)]);
 }
 

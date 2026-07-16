@@ -67,6 +67,20 @@ async function ordinaryDesktop(browser, baseUrl) {
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-memory.png"), fullPage: true });
 
+  await page.locator('.bw-nav [data-view="settings"]').click();
+  await page.getByText("第三方授权", { exact: true }).waitFor();
+  await page.locator("[data-auth-new]").click();
+  const authorizationDialog = page.locator("dialog.bw-dialog");
+  await authorizationDialog.locator('select[name="service"]').selectOption("firecrawl");
+  await authorizationDialog.locator('input[name="label"]').fill("Remote Firecrawl");
+  await authorizationDialog.locator('input[name="endpointUrl"]').fill("https://api.firecrawl.dev/v1");
+  await authorizationDialog.locator('input[name="secret"]').fill("remote-browser-firecrawl-secret");
+  await authorizationDialog.locator('button[type="submit"]').click();
+  await page.getByText("Remote Firecrawl", { exact: true }).waitFor();
+  const authorizationPayload = await (await page.request.get(`${baseUrl}/api/user/agents/agent_remote/authorizations`)).text();
+  assert.doesNotMatch(authorizationPayload, /remote-browser-firecrawl-secret/);
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-settings.png"), fullPage: true });
+
   await page.locator(".bw-header [data-close]").click();
   await page.locator("#msg-input").fill("Reply from the Hermes remote fixture");
   const sendGeometry = await page.locator("#send-btn").evaluate((element) => {
@@ -114,6 +128,10 @@ async function platformAdmin(browser, baseUrl) {
   for (const panel of expectedPanels) assert.equal(await page.locator(`[data-view-panel="${panel}"]`).count(), 1, `missing admin panel: ${panel}`);
   await page.locator('[data-admin-view="agents"]').click();
   await page.locator("#agent-rows").getByText("Hermes Memory Agent", { exact: true }).waitFor();
+  await page.locator('[data-admin-view="integrations"]').click();
+  await page.locator("#integration-authorization-rows").getByText("Remote Firecrawl", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(artifacts, "admin-integration-authorizations.png"), fullPage: true });
+  await page.locator('[data-admin-view="agents"]').click();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "admin-agent-fleet.png"), fullPage: true });
   await context.close();

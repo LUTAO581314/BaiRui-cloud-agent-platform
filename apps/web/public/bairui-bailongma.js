@@ -137,8 +137,10 @@
     await readyDom();
     const bootstrap = await requestJson("/api/user/bootstrap");
     const modelOptions = (bootstrap.models?.allowedModels ?? []).map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("");
+    const authorizationOptions = (bootstrap.authorizationServices ?? []).filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} - ${escapeHtml(item.purpose)}</option>`).join("");
     return new Promise((resolve, reject) => {
       let createdAgent = null;
+      let authorizationStored = false;
       const overlay = document.createElement("div");
       overlay.className = "bairui-onboarding";
       overlay.innerHTML = `<form class="bairui-onboarding-form">
@@ -149,6 +151,7 @@
         <label>描述<textarea name="description" maxlength="500" rows="3" placeholder="这个 Agent 主要帮你做什么"></textarea></label>
         <label>身份与原则<textarea name="soulMarkdown" maxlength="50000" rows="7" placeholder="# Identity\n\n说明 Agent 的身份、语气和工作原则"></textarea></label>
         <label>模型<select name="preferredModel"><option value="">管理员默认模型</option>${modelOptions}</select></label>
+        ${authorizationOptions ? `<fieldset><legend>第三方授权（可选）</legend><label>服务<select name="authorizationService"><option value="">暂不配置</option>${authorizationOptions}</select></label><label>授权名称<input name="authorizationLabel" maxlength="100" value="首次初始化"></label><label>HTTPS 接口地址<input name="authorizationEndpoint" type="url" maxlength="2000"></label><label>Provider<input name="authorizationProvider" maxlength="200"></label><label>模型<input name="authorizationModel" maxlength="200"></label><label>密钥或 Token<input name="authorizationSecret" type="password" maxlength="64000" autocomplete="new-password"></label></fieldset>` : ""}
         <div class="bairui-onboarding-progress" hidden><span></span><strong></strong></div>
         <p class="bairui-onboarding-error" role="alert"></p>
         <div class="bairui-onboarding-actions"><button type="button" data-later hidden>稍后查看</button><button type="submit">创建并初始化</button></div>
@@ -178,6 +181,18 @@
               body: JSON.stringify({ name: data.get("name"), avatarUrl: data.get("avatarUrl"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown"), preferredModel: data.get("preferredModel") })
             });
             createdAgent = result.agent;
+          }
+          if (!authorizationStored) {
+            const authorizationSecret = String(data.get("authorizationSecret") || "").trim();
+            const authorizationService = String(data.get("authorizationService") || "").trim();
+            if (authorizationSecret && authorizationService) {
+              await requestJson(`/api/user/agents/${encodeURIComponent(createdAgent.id)}/authorizations`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ service: authorizationService, label: data.get("authorizationLabel") || "首次初始化", authType: "api_key", endpointUrl: data.get("authorizationEndpoint"), secret: authorizationSecret, metadata: { provider: data.get("authorizationProvider"), model: data.get("authorizationModel") } })
+              });
+            }
+            authorizationStored = true;
             for (const field of form.elements) if (field.name) field.disabled = true;
           }
           progress.hidden = false;

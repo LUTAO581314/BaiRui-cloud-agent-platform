@@ -32,6 +32,7 @@ const required = [
   "packages/db/migrations/013_user_runtime_history.sql",
   "packages/db/migrations/014_user_configuration_apply.sql",
   "packages/db/migrations/015_hermes_obsidian_memory.sql",
+  "packages/db/migrations/016_agent_authorizations.sql",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
@@ -178,6 +179,9 @@ for (const fragment of ["memory_kind", "hermes_target", "hermes_sync_status"]) i
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }
+const authorizationMigration = fs.readFileSync(path.join(root, "packages/db/migrations/016_agent_authorizations.sql"), "utf8");
+for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_authorizations", "agent_authorizations_owner_fkey", "credential_envelope"]) if (!authorizationMigration.includes(fragment)) failures.push(`Agent authorization migration is missing ${fragment}`);
+for (const evidence of ["/authorizations", "publicAgentAuthorization", "/api/internal/runtime/agents/"]) if (!server.includes(evidence)) failures.push(`Missing Agent authorization evidence: ${evidence}`);
 const adminDomainsMigrationPath = path.join(root, "packages/db/migrations/009_control_plane_admin_domains.sql");
 const adminDomainsMigration = fs.existsSync(adminDomainsMigrationPath) ? fs.readFileSync(adminDomainsMigrationPath, "utf8") : "";
 for (const table of ["provider_channels", "model_policies", "data_retention_policies", "sensitive_access_grants", "sensitive_access_events"]) {

@@ -18,7 +18,7 @@
   Object.assign(STATUS_LABELS, {
     started: "已启动", queued: "排队中", running: "运行中", waiting_for_approval: "等待审批",
     stopping: "停止中", completed: "已完成", cancelled: "已取消", scheduled: "已计划",
-    paused: "已暂停", ok: "成功", error: "失败"
+    paused: "已暂停", ok: "成功", error: "失败", stored: "已安全保存", revoked: "已吊销"
   });
   const workspaceState = { view: "conversations", runId: null, runStream: null };
   let root;
@@ -353,13 +353,27 @@
   }
 
   async function renderSettings() {
-    const [agentResult, discovery] = await Promise.all([bridge.request(agentApi()), bridge.request(agentApi("/runtime/discovery")).catch(() => ({ discovery: {} }))]);
+    const [agentResult, discovery, authorizationResult] = await Promise.all([bridge.request(agentApi()), bridge.request(agentApi("/runtime/discovery")).catch(() => ({ discovery: {} })), bridge.request(agentApi("/authorizations"))]);
     const agent = agentResult.agent;
     const discoveredModels = normalizeList(discovery.discovery?.["discovery.models"]?.data, ["models"]).map((item) => typeof item === "string" ? item : item.id || item.name || item.model).filter(Boolean);
     const modelIds = (discovery.policy?.allowedModels || []).filter((id) => discoveredModels.includes(id));
-    content.innerHTML = `<div class="bw-split"><section><h3>Agent 设置</h3><form class="bw-form" data-agent-form><label>名称<input name="name" value="${escapeHtml(agent.name)}" required maxlength="64"></label><label>描述<textarea name="description" rows="4" maxlength="500">${escapeHtml(agent.description || "")}</textarea></label><label>身份与原则<textarea name="soulMarkdown" rows="12" maxlength="50000">${escapeHtml(agent.soulMarkdown || "")}</textarea></label><button type="submit" class="primary">保存 Agent 设置</button></form></section><section><h3>模型与偏好</h3><form class="bw-form" data-pref-form><label>模型<select name="preferredModel"><option value="">管理员默认模型</option>${modelIds.map((id) => `<option value="${escapeHtml(id)}" ${agent.settings?.preferredModel === id ? "selected" : ""}>${escapeHtml(id)}</option>`).join("")}</select></label><label>语言<select name="locale"><option value="zh-CN" ${agent.settings?.locale !== "en-US" ? "selected" : ""}>简体中文</option><option value="en-US" ${agent.settings?.locale === "en-US" ? "selected" : ""}>English</option></select></label><label class="bw-check"><input type="checkbox" name="notifications" ${agent.settings?.notifications !== false ? "checked" : ""}>启用运行通知</label><button type="submit" class="primary">保存偏好</button></form><div class="bw-security-note"><strong>凭证边界</strong><p>Hermes API key、Runtime 签名密钥和平台 Provider key 不会进入浏览器。个人第三方授权只在对应渠道或服务页面提交并加密保存。</p></div></section></div>`;
+    const authorizations = authorizationResult.authorizations || [];
+    const enabledServices = (authorizationResult.services || []).filter((item) => item.enabled);
+    const serviceLabels = Object.fromEntries((authorizationResult.services || []).map((item) => [item.id, item.name]));
+    content.innerHTML = `<div class="bw-split"><section><h3>Agent 设置</h3><form class="bw-form" data-agent-form><label>名称<input name="name" value="${escapeHtml(agent.name)}" required maxlength="64"></label><label>描述<textarea name="description" rows="4" maxlength="500">${escapeHtml(agent.description || "")}</textarea></label><label>身份与原则<textarea name="soulMarkdown" rows="12" maxlength="50000">${escapeHtml(agent.soulMarkdown || "")}</textarea></label><button type="submit" class="primary">保存 Agent 设置</button></form></section><section><h3>模型与偏好</h3><form class="bw-form" data-pref-form><label>模型<select name="preferredModel"><option value="">管理员默认模型</option>${modelIds.map((id) => `<option value="${escapeHtml(id)}" ${agent.settings?.preferredModel === id ? "selected" : ""}>${escapeHtml(id)}</option>`).join("")}</select></label><label>语言<select name="locale"><option value="zh-CN" ${agent.settings?.locale !== "en-US" ? "selected" : ""}>简体中文</option><option value="en-US" ${agent.settings?.locale === "en-US" ? "selected" : ""}>English</option></select></label><label class="bw-check"><input type="checkbox" name="notifications" ${agent.settings?.notifications !== false ? "checked" : ""}>启用运行通知</label><button type="submit" class="primary">保存偏好</button></form><div class="bw-security-note"><strong>凭证边界</strong><p>Hermes API key、Runtime 签名密钥和平台 Provider key 不会进入浏览器。个人第三方凭证只以加密密文保存，并由当前 Agent 的 Runtime 身份按需读取。</p></div></section></div><section class="bw-authorizations"><div class="bw-section-head"><div><h3>第三方授权</h3><p>Firecrawl、搜索、语音、文档和管理员允许的个人模型 Provider</p></div><button type="button" class="primary" data-auth-new ${enabledServices.length ? "" : "disabled"}>＋ 添加授权</button></div><div class="bw-list">${authorizations.length ? authorizations.map((item) => `<article class="bw-row"><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(serviceLabels[item.service] || item.service)} · ${escapeHtml(item.authType)}${item.endpointUrl ? ` · ${escapeHtml(item.endpointUrl)}` : ""}</span></div><div class="bw-actions">${status(item.status)}<span>${escapeHtml(item.credentialMasked || "凭证已清除")}</span>${item.status !== "revoked" ? `<button type="button" class="danger-icon" data-auth-revoke="${escapeHtml(item.id)}" title="吊销">×</button>` : ""}</div></article>`).join("") : '<div class="bw-empty">还没有个人第三方授权</div>'}</div></section>`;
     content.querySelector("[data-agent-form]").addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.target)); await bridge.request(agentApi(), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); toast("Agent 设置已保存", "success"); });
     content.querySelector("[data-pref-form]").addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.target)); values.notifications = event.target.elements.notifications.checked; await bridge.request(agentApi(), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings: values }) }); toast("偏好已保存", "success"); });
+    content.querySelector("[data-auth-new]")?.addEventListener("click", async () => {
+      const values = await openForm({ heading: "添加第三方授权", fields: [{ name: "service", label: "服务", type: "select", options: enabledServices.map((item) => ({ value: item.id, label: `${item.name} - ${item.purpose}` })) }, { name: "label", label: "名称", required: true, maxLength: 100 }, { name: "authType", label: "认证类型", type: "select", options: [{ value: "api_key", label: "API Key" }, { value: "bearer_token", label: "Bearer Token" }] }, { name: "endpointUrl", label: "HTTPS 接口地址（可选）", type: "url" }, { name: "provider", label: "Provider（可选）", maxLength: 200 }, { name: "model", label: "模型（可选）", maxLength: 200 }, { name: "secret", label: "密钥或 Token", type: "password", required: true, maxLength: 64000 }] });
+      if (!values) return;
+      await bridge.request(agentApi("/authorizations"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service: values.service, label: values.label, authType: values.authType, endpointUrl: values.endpointUrl, secret: values.secret, metadata: { provider: values.provider, model: values.model } }) });
+      toast("授权已加密保存", "success"); renderSettings();
+    });
+    content.querySelectorAll("[data-auth-revoke]").forEach((button) => button.addEventListener("click", async () => {
+      if (!await openForm({ heading: "吊销第三方授权", submitLabel: "确认吊销", danger: true, fields: [] })) return;
+      await bridge.request(agentApi(`/authorizations/${encodeURIComponent(button.dataset.authRevoke)}`), { method: "DELETE" });
+      toast("授权已吊销，密钥密文已清除"); renderSettings();
+    }));
   }
 
   function mount() {
