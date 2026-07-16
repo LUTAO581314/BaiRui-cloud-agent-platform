@@ -31,8 +31,11 @@ const required = [
   "packages/db/migrations/012_agent_resource_telemetry.sql",
   "packages/db/migrations/013_user_runtime_history.sql",
   "packages/db/migrations/014_user_configuration_apply.sql",
+  "packages/db/migrations/015_hermes_obsidian_memory.sql",
+  "docs/18-hermes-obsidian-memory.md",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
+  "packages/bailongma-ui/brain-app-transform.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
@@ -156,6 +159,8 @@ for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_runs", "agent_runs_own
 }
 const userConfigurationMigration = fs.readFileSync(path.join(root, "packages/db/migrations/014_user_configuration_apply.sql"), "utf8");
 if (!userConfigurationMigration.includes("'config.apply-user'")) failures.push("Missing owner-scoped configuration control action");
+const memoryProjectionMigration = fs.readFileSync(path.join(root, "packages/db/migrations/015_hermes_obsidian_memory.sql"), "utf8");
+for (const fragment of ["memory_kind", "hermes_target", "hermes_sync_status"]) if (!memoryProjectionMigration.includes(fragment)) failures.push(`Memory projection migration is missing ${fragment}`);
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }

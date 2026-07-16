@@ -35,9 +35,9 @@
     return Number.isNaN(date.getTime()) ? "--" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
   }
 
-  function status(value) {
+  function status(value, label) {
     const key = String(value || "unknown");
-    return `<span class="bw-status bw-status-${escapeHtml(key)}">${escapeHtml(STATUS_LABELS[key] || key)}</span>`;
+    return `<span class="bw-status bw-status-${escapeHtml(key)}">${escapeHtml(label || STATUS_LABELS[key] || key)}</span>`;
   }
 
   function activeAgent() {
@@ -66,7 +66,9 @@
       agent_not_ready: "Agent 当前尚未就绪",
       Forbidden: "当前账户没有执行此操作的权限",
       agent_not_initialized: "Agent 尚未初始化",
-      no_agent_capacity: "当前没有可用服务器容量"
+      no_agent_capacity: "当前没有可用服务器容量",
+      memory_projection_unavailable: "当前 Runtime 版本尚未支持 Hermes 记忆同步",
+      memory_projection_conflict: "Hermes 记忆在同步期间发生变化，请重新同步"
     };
     content.innerHTML = `<div class="bw-empty bw-error"><strong>无法加载</strong><p>${escapeHtml(labels[error.message] || error.message || "未知错误")}</p><button type="button" data-retry>重试</button></div>`;
     content.querySelector("[data-retry]")?.addEventListener("click", () => render(workspaceState.view));
@@ -217,19 +219,25 @@
   async function renderMemory() {
     const result = await bridge.request(agentApi("/memory-notes"));
     const notes = result.notes || [];
-    content.innerHTML = `<div class="bw-toolbar"><input type="search" placeholder="搜索标题和正文"><button type="button" data-import>导入 .md</button><button type="button" data-export>导出全部</button><button type="button" class="primary" data-new>＋ 新记忆</button></div><input type="file" accept=".md,text/markdown" multiple hidden data-files><div class="bw-list" data-list></div>`;
+    const projection = result.projection || { memory: { charCount: 0, limit: 2200, notes: 0 }, user: { charCount: 0, limit: 1375, notes: 0 }, excluded: 0 };
+    const kindLabels = { knowledge: "知识", fact: "事实", preference: "偏好", constraint: "约束", procedure: "流程", person: "人物", project: "项目", event: "事件" };
+    const targetLabels = { auto: "自动分配", memory: "MEMORY.md", user: "USER.md", none: "仅 Obsidian" };
+    const syncLabels = { pending: "待同步", materialized: "已进入 Hermes", excluded: "容量外", conflict: "有冲突", failed: "同步失败" };
+    const capacity = (target, label) => { const value = projection[target] || {}; const percent = Math.min(100, Math.round((Number(value.charCount) || 0) / Math.max(1, Number(value.limit) || 1) * 100)); return `<section class="bw-memory-meter"><header><div><strong>${label}</strong><span>${value.notes || 0} 条活跃记忆</span></div><b>${value.charCount || 0} / ${value.limit || 0}</b></header><div><i style="width:${percent}%"></i></div></section>`; };
+    content.innerHTML = `<div class="bw-memory-summary">${capacity("memory", "Hermes 运行记忆")}${capacity("user", "Hermes 用户画像")}<section class="bw-memory-sync"><strong>Obsidian 知识库</strong><span>${notes.length} 篇 · ${projection.excluded || 0} 篇未进入活跃上下文</span><button type="button" data-sync>同步 Hermes</button></section></div><div class="bw-toolbar"><input type="search" placeholder="搜索标题和正文"><div class="bw-actions"><button type="button" data-import>导入 .md</button><button type="button" data-export>导出全部</button><button type="button" class="primary" data-new>＋ 新记忆</button></div></div><input type="file" accept=".md,text/markdown" multiple hidden data-files><div class="bw-list" data-list></div>`;
     const list = content.querySelector("[data-list]");
-    const draw = (items) => { list.innerHTML = items.length ? items.map((note) => `<article class="bw-row"><div><strong>${escapeHtml(note.title)}</strong><span>${escapeHtml((note.frontmatter?.tags || []).join(" · "))} ${formatTime(note.updatedAt)}</span><p>${escapeHtml(noteBody(note).slice(0, 180))}</p></div><div class="bw-actions"><button type="button" data-edit="${note.id}">编辑</button><button type="button" data-download="${note.id}" title="导出">↓</button><button type="button" data-delete="${note.id}" class="danger-icon" title="删除">×</button></div></article>`).join("") : '<div class="bw-empty">还没有记忆笔记</div>'; };
+    const draw = (items) => { list.innerHTML = items.length ? items.map((note) => `<article class="bw-row bw-memory-row"><div><div class="bw-memory-title"><strong>${escapeHtml(note.title)}</strong><span class="bw-memory-kind">${kindLabels[note.memoryKind] || note.memoryKind}</span><span class="bw-memory-importance">重要度 ${note.importance || 3}</span></div><span>${escapeHtml((note.frontmatter?.tags || []).join(" · "))}${note.frontmatter?.tags?.length ? " · " : ""}${targetLabels[note.hermesTarget] || note.hermesTarget} · ${formatTime(note.updatedAt)}</span><p>${escapeHtml(noteBody(note).slice(0, 180))}</p></div><div class="bw-actions">${status(note.hermesSyncStatus || "pending", syncLabels[note.hermesSyncStatus] || note.hermesSyncStatus)}<button type="button" data-edit="${note.id}">编辑</button><button type="button" data-download="${note.id}" title="导出">↓</button><button type="button" data-delete="${note.id}" class="danger-icon" title="删除">×</button></div></article>`).join("") : '<div class="bw-empty">还没有记忆笔记</div>'; };
     draw(notes);
     content.querySelector("input[type=search]").addEventListener("input", async (event) => { const data = await bridge.request(agentApi(`/memory-notes?query=${encodeURIComponent(event.target.value)}`)); draw(data.notes || []); });
     const editNote = async (note) => {
-      const values = await openForm({ heading: note ? "编辑记忆" : "新建记忆", fields: [{ name: "title", label: "标题", value: note?.title || "", required: true, maxLength: 200 }, { name: "tags", label: "标签（逗号分隔）", value: (note?.frontmatter?.tags || []).join(",") }, { name: "body", label: "Markdown 正文", type: "textarea", value: note ? noteBody(note) : "", required: true, rows: 14 }] });
+      const values = await openForm({ heading: note ? "编辑记忆" : "新建记忆", fields: [{ name: "title", label: "标题", value: note?.title || "", required: true, maxLength: 200 }, { name: "memoryKind", label: "记忆类型", type: "select", value: note?.memoryKind || "knowledge", options: (result.memoryKinds || Object.keys(kindLabels)).map((value) => ({ value, label: kindLabels[value] || value })) }, { name: "importance", label: "重要度", type: "select", value: String(note?.importance || 3), options: [1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: `${value} - ${{ 1: "低", 2: "一般", 3: "常用", 4: "重要", 5: "关键" }[value]}` })) }, { name: "hermesTarget", label: "Hermes 活跃记忆", type: "select", value: note?.hermesTarget || "auto", options: (result.hermesTargets || Object.keys(targetLabels)).map((value) => ({ value, label: targetLabels[value] || value })) }, { name: "tags", label: "标签（逗号分隔）", value: (note?.frontmatter?.tags || []).join(",") }, { name: "body", label: "Markdown 正文", type: "textarea", value: note ? noteBody(note) : "", required: true, rows: 14 }] });
       if (!values) return;
-      const payload = { title: values.title, body: values.body, tags: values.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean) };
-      await bridge.request(agentApi(`/memory-notes${note ? `/${encodeURIComponent(note.id)}` : ""}`), { method: note ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-      toast("记忆已保存", "success");
+      const payload = { title: values.title, body: values.body, memoryKind: values.memoryKind, importance: Number(values.importance), hermesTarget: values.hermesTarget, tags: values.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean) };
+      const saved = await bridge.request(agentApi(`/memory-notes${note ? `/${encodeURIComponent(note.id)}` : ""}`), { method: note ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      toast(saved.sync?.status === "materialized" ? "记忆已保存并同步到 Hermes" : "记忆已保存，将在 Runtime 可用后同步", saved.sync?.status === "materialized" ? "success" : "info");
       renderMemory();
     };
+    content.querySelector("[data-sync]").addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { const synced = await bridge.request(agentApi("/memory-sync"), { method: "POST" }); toast(synced.status === "conflict" ? `同步完成，${synced.conflicts.length} 篇需要确认` : `已同步 ${synced.memory.notes + synced.user.notes} 条活跃记忆`, synced.status === "conflict" ? "info" : "success"); renderMemory(); } catch (error) { toast(error.message, "error"); event.currentTarget.disabled = false; } });
     content.querySelector("[data-new]").addEventListener("click", () => editNote(null));
     list.addEventListener("click", async (event) => {
       const button = event.target.closest("button"); if (!button) return;
@@ -245,7 +253,7 @@
       for (const file of fileInput.files) {
         const markdown = await file.text();
         const heading = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || file.name.replace(/\.md$/i, "");
-        await bridge.request(agentApi("/memory-notes"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: heading, body: markdown }) });
+        await bridge.request(agentApi("/memory-notes"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: heading, body: noteBody({ markdown }), memoryKind: "knowledge", importance: 3, hermesTarget: "auto" }) });
       }
       toast("Markdown 已导入", "success"); renderMemory();
     });

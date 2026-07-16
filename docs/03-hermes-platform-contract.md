@@ -74,6 +74,13 @@ The platform must not provide raw model API keys or connector tokens through
 customer-visible contracts. Secret delivery must use a protected server-side
 workflow.
 
+The authenticated user data plane may exchange the current user's Agent-scoped
+Obsidian memory projection through the signed `memory.snapshot` and
+`memory.apply` Runtime operations. This is not Control Plane telemetry: memory
+content is never placed in heartbeats, control commands, admin APIs, or support
+evidence, and another user or administrator cannot invoke it for an Agent they
+do not own.
+
 ## 3. Runtime And Server-Agent To Platform
 
 Runtime and customer server-agent may report:

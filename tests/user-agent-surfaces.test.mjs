@@ -62,14 +62,20 @@ test("Agent workspaces isolate memory, skills, channels, hotspots and usage", as
   const rootCookie = await login(context.baseUrl, "root@example.test");
   const base = `${context.baseUrl}/api/user/agents/${context.agent.id}`;
 
-  const noteResponse = await fetch(`${base}/memory-notes`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ title: "Project decision", body: "Use PostgreSQL", wikilinks: ["Architecture"] }) });
+  const noteResponse = await fetch(`${base}/memory-notes`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ title: "Project decision", body: "Use PostgreSQL", wikilinks: ["Architecture"], memoryKind: "project", importance: 5, hermesTarget: "memory" }) });
   assert.equal(noteResponse.status, 201);
   const note = (await noteResponse.json()).note;
   assert.equal(note.agentId, context.agent.id);
+  assert.equal(note.memoryKind, "project");
+  assert.equal(note.importance, 5);
   assert.equal((await fetch(`${base}/memory-notes`, { headers: { cookie: peerCookie } })).status, 404);
   const search = await (await fetch(`${base}/memory-notes?query=PostgreSQL`, { headers: { cookie: ownerCookie } })).json();
   assert.equal(search.notes.length, 1);
   assert.match(search.notes[0].markdown, /\[\[Architecture\]\]/);
+  const graph = await (await fetch(`${context.baseUrl}/memories?agent_id=${context.agent.id}`, { headers: { cookie: ownerCookie } })).json();
+  assert.equal(graph[0].event_type, "self");
+  assert.equal(graph.find((item) => item.id === note.id).parent_id, `agent:${context.agent.id}`);
+  assert.equal((await fetch(`${base}/memory-sync`, { method: "POST", headers: { cookie: ownerCookie } })).status, 200);
   const update = await fetch(`${base}/memory-notes/${note.id}`, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ title: "Project decision", body: "Use PostgreSQL 17", tags: ["database"] }) });
   assert.equal(update.status, 200);
   assert.match((await update.json()).note.markdown, /PostgreSQL 17/);

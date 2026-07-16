@@ -359,6 +359,7 @@
           signal: controller.signal
         });
         await consumeHermesSse(response);
+        setTimeout(() => platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/memory-sync`, { method: "POST" }).catch(() => {}), 1200);
       } catch (error) {
         if (error.name !== "AbortError") emitCompatibility("error", { error: error.message || "Hermes Runtime 请求失败" });
       } finally {
@@ -436,6 +437,11 @@
     if (url.pathname === "/agent-profile") {
       const agent = await loadActiveAgent();
       return jsonResponse({ name: agent.name, agentId: agent.id, runtime: "Hermes", runtimeStatus: agent.runtime?.status || "uninitialized", ui: "BaiLongma Brain UI" });
+    }
+    if (url.pathname === "/memories") {
+      const agent = await loadActiveAgent();
+      url.searchParams.set("agent_id", agent.id);
+      return nativeFetch(url, options);
     }
     return nativeFetch(input, options);
   };

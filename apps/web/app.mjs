@@ -19,7 +19,12 @@ import {
 } from "../../packages/auth/session.mjs";
 import { loginPage, adminPage } from "./views.mjs";
 import { issueLicense } from "../../packages/license/license.mjs";
-import { createObsidianNote } from "../../packages/memory/obsidian-note.mjs";
+import {
+  HERMES_MEMORY_TARGETS,
+  MEMORY_KINDS,
+  buildHermesMemoryProjection,
+  createObsidianNote
+} from "../../packages/memory/obsidian-note.mjs";
 import { secretHint } from "../../packages/security/secret-envelope.mjs";
 import { deriveMachineKey, verifyMachineRequest } from "../../packages/security/machine-request.mjs";
 import {
@@ -394,6 +399,77 @@ export function createPlatformApp(options) {
     if (view.operational.code === "offline") throw Object.assign(new Error("runtime_offline"), { statusCode: 503, expose: true });
     if (!["ready", "degraded"].includes(view.operational.code)) throw Object.assign(new Error("agent_not_ready"), { statusCode: 409, expose: true });
     return view;
+  }
+
+  function memoryNoteDocument(body, current = null) {
+    if (body.memoryKind !== undefined && !MEMORY_KINDS.includes(body.memoryKind)) throw Object.assign(new TypeError("Invalid memory kind"), { statusCode: 400, code: "invalid_memory_kind" });
+    if (body.hermesTarget !== undefined && !HERMES_MEMORY_TARGETS.includes(body.hermesTarget)) throw Object.assign(new TypeError("Invalid Hermes memory target"), { statusCode: 400, code: "invalid_memory_target" });
+    if (body.importance !== undefined && (!Number.isInteger(Number(body.importance)) || Number(body.importance) < 1 || Number(body.importance) > 5)) throw Object.assign(new TypeError("Invalid memory importance"), { statusCode: 400, code: "invalid_memory_importance" });
+    return createObsidianNote({
+      title: body.title.slice(0, 200),
+      body: body.body.slice(0, 200_000),
+      tags: Array.isArray(body.tags) ? body.tags : [],
+      wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [],
+      memoryKind: body.memoryKind ?? current?.memoryKind,
+      importance: body.importance ?? current?.importance,
+      hermesTarget: body.hermesTarget ?? current?.hermesTarget,
+      sourceRef: current?.sourceRef ?? "bairui-user",
+      createdAt: current?.createdAt
+    });
+  }
+
+  async function synchronizeAgentMemory(principal, agent) {
+    if (!runtimeClient) throw Object.assign(new Error("Runtime is unavailable"), { code: "runtime_unavailable", statusCode: 503 });
+    const snapshot = await runtimeClient.operation({ principal, agent, operation: "memory.snapshot" });
+    const manifest = snapshot.projection && typeof snapshot.projection === "object" ? snapshot.projection : { memory: [], user: [] };
+    const conflicts = new Set();
+    for (const target of ["memory", "user"]) {
+      const currentHashes = new Set((snapshot[target]?.entries ?? []).map((entry) => entry.sha256));
+      for (const entry of manifest[target] ?? []) if (!currentHashes.has(entry.sha256)) conflicts.add(entry.note_id);
+    }
+
+    let notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id);
+    const nativeSources = new Set(notes.map((note) => note.sourceRef));
+    const projectedHashes = new Set([...(manifest.memory ?? []), ...(manifest.user ?? [])].map((entry) => entry.sha256));
+    let imported = 0;
+    for (const target of ["memory", "user"]) {
+      for (const entry of snapshot[target]?.entries ?? []) {
+        if (projectedHashes.has(entry.sha256)) continue;
+        const sourceRef = `hermes-native:${target}:${entry.sha256}`;
+        if (nativeSources.has(sourceRef)) continue;
+        const note = createObsidianNote({
+          title: `Hermes ${target === "user" ? "用户" : "运行"}记忆 ${entry.sha256.slice(0, 8)}`,
+          body: entry.content,
+          memoryKind: target === "user" ? "preference" : "knowledge",
+          importance: 4,
+          hermesTarget: target,
+          sourceRef
+        });
+        const importedNote = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.hermes.import", targetType: "obsidian_note", targetId: importedNote.id, metadata: { agentId: agent.id, target, sourceHash: entry.sha256 } });
+        nativeSources.add(sourceRef);
+        imported += 1;
+      }
+    }
+
+    notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id);
+    const projection = buildHermesMemoryProjection(notes, { excludeNoteIds: [...conflicts] });
+    const applied = await runtimeClient.operation({ principal, agent, operation: "memory.apply", input: { expected_digest: snapshot.digest, projection } });
+    await repository.markObsidianProjection({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, includedNoteIds: projection.included_note_ids, conflictNoteIds: [...conflicts] });
+    return {
+      status: conflicts.size ? "conflict" : "materialized",
+      projectionId: projection.projection_id,
+      imported,
+      conflicts: [...conflicts],
+      memory: { charCount: applied.memory?.char_count ?? projection.memory.char_count, limit: projection.memory.limit, notes: projection.memory.entries.length },
+      user: { charCount: applied.user?.char_count ?? projection.user.char_count, limit: projection.user.limit, notes: projection.user.entries.length },
+      excluded: projection.excluded_note_ids.length
+    };
+  }
+
+  async function bestEffortMemorySync(principal, agent) {
+    try { return await synchronizeAgentMemory(principal, agent); }
+    catch (error) { return { status: error.code === "memory_projection_conflict" ? "conflict" : "pending", error: error.code ?? "runtime_unavailable" }; }
   }
 
   async function startAgentRun(principal, agent, inputText, model, parentRunId = null) {
@@ -878,14 +954,23 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await ownedAgent(principal, memoryNotesMatch[1]);
         if (method === "GET") {
-          return json(response, 200, { notes: await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id, url.searchParams.get("query") ?? ""), format: "obsidian-markdown" });
+          const notes = await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id, url.searchParams.get("query") ?? "");
+          const projection = buildHermesMemoryProjection(notes);
+          return json(response, 200, { notes, format: "obsidian-markdown", memoryKinds: MEMORY_KINDS, hermesTargets: HERMES_MEMORY_TARGETS, projection: { memory: { charCount: projection.memory.char_count, limit: projection.memory.limit, notes: projection.memory.entries.length }, user: { charCount: projection.user.char_count, limit: projection.user.limit, notes: projection.user.entries.length }, excluded: projection.excluded_note_ids.length } });
         }
         const body = await readJson(request);
         if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
-        const note = createObsidianNote({ title: body.title.slice(0, 200), body: body.body.slice(0, 200_000), tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        const note = memoryNoteDocument(body);
         const saved = await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.upsert", targetType: "obsidian_note", targetId: saved.id, metadata: { agentId: agent.id } });
-        return json(response, 201, { note: saved });
+        return json(response, 201, { note: saved, sync: await bestEffortMemorySync(principal, agent) });
+      }
+
+      const memorySyncMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-sync$/);
+      if (memorySyncMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, memorySyncMatch[1]);
+        return json(response, 200, await synchronizeAgentMemory(principal, agent));
       }
 
       const memoryNoteMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes\/([^/]+)$/);
@@ -899,16 +984,16 @@ export function createPlatformApp(options) {
         if (method === "DELETE") {
           await repository.deleteObsidianNote(principal.organizationId, principal.userId, agent.id, noteId);
           await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.delete", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
-          return json(response, 200, { deleted: true });
+          return json(response, 200, { deleted: true, sync: await bestEffortMemorySync(principal, agent) });
         }
         const body = await readJson(request);
         if (typeof body.title !== "string" || !body.title.trim() || typeof body.body !== "string" || !body.body.trim()) return json(response, 400, { error: "invalid_note" });
-        const note = createObsidianNote({ title: body.title.slice(0, 200), body: body.body.slice(0, 200_000), tags: Array.isArray(body.tags) ? body.tags : [], wikilinks: Array.isArray(body.wikilinks) ? body.wikilinks : [] });
+        const note = memoryNoteDocument(body, current);
         let saved;
         try { saved = await repository.updateObsidianNote({ ...note, id: noteId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id }); }
         catch (error) { if (error.code === "23505") return json(response, 409, { error: "memory_note_slug_conflict" }); throw error; }
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "memory.note.update", targetType: "obsidian_note", targetId: noteId, metadata: { agentId: agent.id } });
-        return json(response, 200, { note: saved });
+        return json(response, 200, { note: saved, sync: await bestEffortMemorySync(principal, agent) });
       }
 
       const skillsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/skills(?:\/([^/]+))?$/);
@@ -1008,7 +1093,7 @@ export function createPlatformApp(options) {
         const requested = url.searchParams.get("agent_id");
         const agent = agents.find((item) => item.id === requested) ?? agents[0];
         const notes = agent ? await repository.listObsidianNotes(principal.organizationId, principal.userId, agent.id) : [];
-        return json(response, 200, toBailongmaMemories(notes).slice(0, Math.max(1, Math.min(Number(url.searchParams.get("limit")) || 120, 200))));
+        return json(response, 200, toBailongmaMemories(notes, agent).slice(0, Math.max(1, Math.min(Number(url.searchParams.get("limit")) || 120, 200))));
       }
       if (method === "GET" && url.pathname === "/hotspots") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });

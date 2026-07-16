@@ -84,6 +84,12 @@ only to the fixed action map in `server-agent/supervisor.mjs`. The Supervisor
 uses Docker argument arrays without a shell. The one-shot observation command
 remains available for diagnostics.
 
+`BAIRUI_HERMES_DATA_UID` defaults to `10000`, matching the non-root Hermes and
+Bairui Runtime image users. The Supervisor assigns only each Agent's
+`hermes-data/memories` directory to this UID so the signed memory data-plane
+adapter can materialize `MEMORY.md` and `USER.md`; no other Hermes workspace
+directory is shared with Runtime.
+
 The same daemon collects infrastructure telemetry every
 `BAIRUI_RESOURCE_INTERVAL_MS` (default `30000`). The collector enumerates only
 containers named in verified `instance.json` files, then calls fixed `docker

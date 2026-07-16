@@ -20,6 +20,7 @@ export function supervisorFromEnv(env = process.env, options = {}) {
     backupEncryptionKey: env.BAIRUI_BACKUP_ENCRYPTION_KEY,
     portStart: Number(env.BAIRUI_RUNTIME_PORT_START ?? 19000),
     portEnd: Number(env.BAIRUI_RUNTIME_PORT_END ?? 19999),
+    hermesDataUid: Number(env.BAIRUI_HERMES_DATA_UID ?? 10000),
     execFile: options.execFile
   });
 }

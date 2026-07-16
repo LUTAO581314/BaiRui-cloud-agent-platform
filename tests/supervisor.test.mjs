@@ -35,6 +35,10 @@ test("Supervisor provisions fixed local images without executing remote shell or
   assert.ok(calls.some((call) => call.args.includes("local/runtime:verified")));
   const instanceDir = fs.readdirSync(root)[0];
   assert.equal(fs.statSync(path.join(root, instanceDir, "hermes.env")).mode & 0o777, 0o600);
+  assert.match(fs.readFileSync(path.join(root, instanceDir, "runtime.env"), "utf8"), /BAIRUI_HERMES_DATA_PATH=\/opt\/hermes-data/);
+  const runtimeRun = calls.find((call) => call.args.includes("local/runtime:verified"));
+  assert.ok(runtimeRun.args.includes("--volume"));
+  assert.ok(runtimeRun.args.some((value) => value.endsWith(":/opt/hermes-data/memories")));
   assert.doesNotMatch(fs.readFileSync(path.join(root, instanceDir, "instance.json"), "utf8"), /provider-secret|runtime-secret/);
 });
 

@@ -18,7 +18,7 @@ const requiredTables = [
 ];
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
-const requiredObsidianColumns = ["agent_id"];
+const requiredObsidianColumns = ["agent_id", "memory_kind", "importance", "hermes_target", "source_ref", "revision", "hermes_sync_status", "hermes_synced_revision", "hermes_synced_at"];
 const requiredBackupColumns = ["expired_at"];
 const client = new pg.Client({ connectionString });
 await client.connect();
