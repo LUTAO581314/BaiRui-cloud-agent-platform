@@ -848,7 +848,7 @@ export class PostgresPlatformRepository {
        VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (organization_id) DO UPDATE SET allowed_models=EXCLUDED.allowed_models,
        default_model=EXCLUDED.default_model, user_custom_keys_allowed=EXCLUDED.user_custom_keys_allowed, daily_token_limit=EXCLUDED.daily_token_limit,
        monthly_budget_usd=EXCLUDED.monthly_budget_usd, updated_by=EXCLUDED.updated_by, updated_at=now() RETURNING *`,
-      [input.organizationId, input.allowedModels ?? [], input.defaultModel ?? null, Boolean(input.userCustomKeysAllowed), input.dailyTokenLimit ?? null, input.monthlyBudgetUsd ?? null, input.updatedBy]
+      [input.organizationId, JSON.stringify(input.allowedModels ?? []), input.defaultModel ?? null, Boolean(input.userCustomKeysAllowed), input.dailyTokenLimit ?? null, input.monthlyBudgetUsd ?? null, input.updatedBy]
     );
     return mapModelPolicy(rows[0]);
   }
