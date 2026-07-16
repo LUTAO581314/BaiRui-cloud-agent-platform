@@ -11,6 +11,7 @@ const requiredTables = [
   "test_runs", "backup_records", "upstream_candidates", "server_credentials",
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
+  "agent_runs",
   "provider_channels", "model_policies", "data_retention_policies",
   "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs",
   "agent_resource_samples", "agent_container_resource_samples"

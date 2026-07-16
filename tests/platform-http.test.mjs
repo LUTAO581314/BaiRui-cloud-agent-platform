@@ -381,6 +381,47 @@ test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE
   assert.equal(operations.length, 3);
 });
 
+test("user Runs persist across requests and retry only from terminal records", async (t) => {
+  let created = 0;
+  const operations = [];
+  const runtimeClient = {
+    operation: async (input) => {
+      operations.push(input);
+      if (input.operation === "runs.create") return { run_id: `run_${++created}`, status: "started" };
+      if (input.operation === "runs.get") return { run_id: input.input.run_id, status: "failed", error: "provider unavailable" };
+      return { ok: true };
+    }
+  };
+  const context = await setup({ runtimeClient });
+  t.after(() => context.server.close());
+  await makeAgentReady(context);
+  const ownerCookie = await login(context.baseUrl, "user@example.test");
+  const peerCookie = await login(context.baseUrl, "same-org@example.test");
+  const base = `${context.baseUrl}/api/user/agents/${context.agent.id}/runs`;
+
+  const started = await fetch(base, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ input: "Prepare the release report" }) });
+  assert.equal(started.status, 202);
+  assert.equal((await started.json()).run_id, "run_1");
+  assert.equal((await fetch(`${base}/run_1/retry`, { method: "POST", headers: { cookie: ownerCookie } })).status, 409);
+
+  const list = await (await fetch(base, { headers: { cookie: ownerCookie } })).json();
+  assert.equal(list.runs.length, 1);
+  assert.equal(list.runs[0].inputPreview, "Prepare the release report");
+  assert.equal(list.runs[0].inputText, undefined);
+  assert.equal((await fetch(base, { headers: { cookie: peerCookie } })).status, 404);
+
+  const refreshed = await (await fetch(`${base}/run_1`, { headers: { cookie: ownerCookie } })).json();
+  assert.equal(refreshed.record.status, "failed");
+  assert.equal(refreshed.record.lastError, "provider unavailable");
+  const retried = await fetch(`${base}/run_1/retry`, { method: "POST", headers: { cookie: ownerCookie } });
+  assert.equal(retried.status, 202);
+  assert.equal((await retried.json()).run_id, "run_2");
+  const history = await (await fetch(base, { headers: { cookie: ownerCookie } })).json();
+  assert.equal(history.runs.length, 2);
+  assert.equal(history.runs[0].parentRunId, "run_1");
+  assert.equal(operations.filter((item) => item.operation === "runs.create").length, 2);
+});
+
 test("operational state blocks new Runtime work while preserving recovery operations", async (t) => {
   const operations = [];
   const runtimeClient = {

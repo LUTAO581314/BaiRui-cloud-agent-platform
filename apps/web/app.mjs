@@ -41,6 +41,8 @@ const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contrac
 const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
+const AGENT_RUN_STATUSES = new Set(["started", "queued", "running", "waiting_for_approval", "stopping", "completed", "failed", "cancelled", "unknown"]);
+const TERMINAL_AGENT_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function numericMetrics(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -283,6 +285,19 @@ function discoveryIds(value, keys) {
   return new Set(discoveryItems(value, keys).map((item) => typeof item === "string" ? item : item?.id ?? item?.name ?? item?.model).filter((item) => typeof item === "string" && item));
 }
 
+function publicAgentRun(record) {
+  if (!record) return null;
+  const { inputText, ...value } = record;
+  return { ...value, inputPreview: String(inputText ?? "").slice(0, 500) };
+}
+
+function agentRunError(value) {
+  const error = value?.error;
+  if (typeof error === "string") return error.slice(0, 1000);
+  if (typeof error?.message === "string") return error.message.slice(0, 1000);
+  return null;
+}
+
 export function createPlatformApp(options) {
   const {
     repository,
@@ -378,6 +393,27 @@ export function createPlatformApp(options) {
     if (view.operational.code === "offline") throw Object.assign(new Error("runtime_offline"), { statusCode: 503, expose: true });
     if (!["ready", "degraded"].includes(view.operational.code)) throw Object.assign(new Error("agent_not_ready"), { statusCode: 409, expose: true });
     return view;
+  }
+
+  async function startAgentRun(principal, agent, inputText, model, parentRunId = null) {
+    const upstream = await runtimeClient.operation({ principal, agent, operation: "runs.create", input: { body: { input: inputText, model: model || undefined } } });
+    if (typeof upstream?.run_id !== "string" || !upstream.run_id) throw Object.assign(new Error("runtime_run_id_missing"), { statusCode: 502, expose: true });
+    const status = AGENT_RUN_STATUSES.has(upstream.status) ? upstream.status : "started";
+    const record = await repository.createAgentRun({ id: upstream.run_id, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, parentRunId, inputText, model, status });
+    await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: parentRunId ? "agent.run.retry" : "agent.run.create", targetType: "agent_run", targetId: record.id, metadata: { agentId: agent.id, model: model ?? null, parentRunId } });
+    return { ...upstream, record: publicAgentRun(record) };
+  }
+
+  async function synchronizeAgentRun(principal, agent, runId) {
+    const record = await repository.getAgentRun(principal.organizationId, principal.userId, agent.id, runId);
+    if (!record) throw Object.assign(new Error("run_not_found"), { statusCode: 404, expose: true });
+    const upstream = await runtimeClient.operation({ principal, agent, operation: "runs.get", input: { run_id: runId } });
+    const status = AGENT_RUN_STATUSES.has(upstream?.status) ? upstream.status : "unknown";
+    const updated = await repository.updateAgentRun({
+      id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id,
+      status, lastError: agentRunError(upstream), completedAt: TERMINAL_AGENT_RUN_STATUSES.has(status) ? record.completedAt ?? new Date().toISOString() : record.completedAt
+    });
+    return { ...upstream, record: publicAgentRun(updated) };
   }
 
   async function authenticateMachine(request, url, rawBody, credentialType) {
@@ -757,25 +793,36 @@ export function createPlatformApp(options) {
       }
 
       const runsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs$/);
-      if (runsMatch && method === "POST") {
-        requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+      if (runsMatch && ["GET", "POST"].includes(method)) {
+        requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await ownedAgent(principal, runsMatch[1]);
+        if (method === "GET") {
+          const runs = await repository.listAgentRuns(principal.organizationId, principal.userId, agent.id, url.searchParams.get("limit") ?? 50);
+          return json(response, 200, { runs: runs.map(publicAgentRun) });
+        }
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         await requireOperationalAgent(principal, agent);
         const body = await readJson(request);
         if (typeof body.input !== "string" || !body.input.trim() || body.input.length > 20_000) return json(response, 400, { error: "invalid_run_input" });
         const policy = await modelAccess(principal.organizationId);
         const model = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : policy.defaultModel;
-        return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.create", input: { body: { input: body.input.trim(), model: model || undefined } } }));
+        return json(response, 202, await startAgentRun(principal, agent, body.input.trim(), model));
       }
 
-      const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop)$/);
+      const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop|retry)$/);
       if (runActionMatch) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, runActionMatch[1]);
         const runId = runActionMatch[2];
         const action = runActionMatch[3];
+        if (action === "retry" && method === "POST") {
+          await requireOperationalAgent(principal, agent);
+          const previous = await repository.getAgentRun(principal.organizationId, principal.userId, agent.id, runId);
+          if (!previous) return json(response, 404, { error: "run_not_found" });
+          if (!TERMINAL_AGENT_RUN_STATUSES.has(previous.status)) return json(response, 409, { error: "run_not_terminal" });
+          return json(response, 202, await startAgentRun(principal, agent, previous.inputText, previous.model, previous.id));
+        }
         if (action === "events" && method === "GET") {
           const controller = new AbortController();
           response.on("close", () => controller.abort());
@@ -785,9 +832,15 @@ export function createPlatformApp(options) {
         if (action === "approval" && method === "POST") {
           const body = await readJson(request);
           if (!["once", "session", "always", "deny"].includes(body.choice)) return json(response, 400, { error: "invalid_approval_choice" });
-          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } }));
+          const result = await runtimeClient.operation({ principal, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } });
+          await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "running" });
+          return json(response, 200, result);
         }
-        if (action === "stop" && method === "POST") return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.stop", input: { run_id: runId } }));
+        if (action === "stop" && method === "POST") {
+          const result = await runtimeClient.operation({ principal, agent, operation: "runs.stop", input: { run_id: runId } });
+          await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "stopping" });
+          return json(response, 202, result);
+        }
       }
 
       const runMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)$/);
@@ -795,7 +848,7 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_READ, { organizationId: principal.organizationId, userId: principal.userId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, runMatch[1]);
-        return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "runs.get", input: { run_id: runMatch[2] } }));
+        return json(response, 200, await synchronizeAgentRun(principal, agent, runMatch[2]));
       }
 
       const jobsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/jobs(?:\/([^/]+))?(?:\/(pause|resume|run))?$/);
