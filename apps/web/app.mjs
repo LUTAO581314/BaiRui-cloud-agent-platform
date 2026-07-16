@@ -28,10 +28,12 @@ import {
 } from "../../packages/bailongma-ui/compatibility.mjs";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
 const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
+const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
 
 function numericMetrics(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -66,16 +68,16 @@ function redirect(response, location) {
   response.end();
 }
 
-async function readJson(request) {
-  return (await readSignedJson(request)).body;
+async function readJson(request, maxBytes = MAX_BODY_BYTES) {
+  return (await readSignedJson(request, maxBytes)).body;
 }
 
-async function readSignedJson(request) {
+async function readSignedJson(request, maxBytes = MAX_BODY_BYTES) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       const error = new Error("Request body too large");
       error.statusCode = 413;
       throw error;
@@ -116,6 +118,27 @@ function securityHeaders(response) {
   response.setHeader("cache-control", "no-store");
 }
 
+function sessionMessage(body) {
+  const text = typeof body.message === "string" ? body.message.trim() : "";
+  if (text.length > 20_000) return null;
+  const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 5) : [];
+  const images = [];
+  let imageBytes = 0;
+  for (const attachment of attachments) {
+    const dataUrl = typeof attachment?.data_url === "string" ? attachment.data_url.trim() : "";
+    const match = dataUrl.match(/^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=]+)$/i);
+    if (!match) return null;
+    const estimatedBytes = Math.ceil(match[2].length * 0.75);
+    if (estimatedBytes > 2 * 1024 * 1024) return null;
+    imageBytes += estimatedBytes;
+    if (imageBytes > 8 * 1024 * 1024) return null;
+    images.push({ type: "image_url", image_url: { url: dataUrl, detail: "auto" } });
+  }
+  if (!text && !images.length) return null;
+  if (!images.length) return text;
+  return [...(text ? [{ type: "text", text }] : []), ...images];
+}
+
 function publicProviderConfiguration(configuration) {
   if (!configuration) return { configured: false, provider: "", baseUrl: "", model: "", keyMasked: null, applyStatus: "missing", updatedAt: null };
   return {
@@ -137,8 +160,14 @@ function publicChannelBinding(binding) {
 
 function channelSecretHint(credentials) {
   if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) return null;
-  const value = Object.values(credentials).find((item) => typeof item === "string" && item.trim());
+  const entries = Object.entries(credentials).filter(([, item]) => typeof item === "string" && item.trim());
+  const value = (entries.find(([key]) => /(secret|token|key|password)/i.test(key)) ?? entries[0])?.[1];
   return value ? secretHint(value.trim()) : null;
+}
+
+function channelMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, item]) => CHANNEL_METADATA_KEYS.has(key) && typeof item === "string").map(([key, item]) => [key, item.trim().slice(0, 200)]));
 }
 
 function usageSummary(rollups) {
@@ -150,6 +179,17 @@ function usageSummary(rollups) {
     failedRunCount: summary.failedRunCount + item.failedRunCount,
     latencySumMs: summary.latencySumMs + item.latencySumMs
   }), { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, runCount: 0, failedRunCount: 0, latencySumMs: 0 });
+}
+
+function discoveryItems(value, keys) {
+  if (Array.isArray(value)) return value;
+  for (const key of keys) if (Array.isArray(value?.[key])) return value[key];
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
+}
+
+function discoveryIds(value, keys) {
+  return new Set(discoveryItems(value, keys).map((item) => typeof item === "string" ? item : item?.id ?? item?.name ?? item?.model).filter((item) => typeof item === "string" && item));
 }
 
 export function createPlatformApp(options) {
@@ -304,6 +344,11 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.bailongmaOverlayScript);
       }
+      if (method === "GET" && url.pathname === "/assets/bairui-workspace.js") {
+        if (!options.bairuiWorkspaceScript) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
+        return response.end(options.bairuiWorkspaceScript);
+      }
 
       const principal = await principalFor(request);
       if (method === "GET" && url.pathname === "/bailongma-ui/src/ui/scene-shell/bootstrap.js") {
@@ -425,6 +470,24 @@ export function createPlatformApp(options) {
         if (body.description !== undefined) patch.description = String(body.description).trim().slice(0, 500);
         if (body.avatarUrl !== undefined) patch.avatarUrl = body.avatarUrl ? String(body.avatarUrl).trim().slice(0, 2000) : null;
         if (body.soulMarkdown !== undefined) patch.soulMarkdown = String(body.soulMarkdown).slice(0, 50_000);
+        if (body.settings !== undefined) {
+          if (!body.settings || typeof body.settings !== "object" || Array.isArray(body.settings)) return json(response, 400, { error: "invalid_agent_settings" });
+          const settings = { ...(agent.settings ?? {}) };
+          if (body.settings.preferredModel !== undefined) {
+            if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+            const preferredModel = String(body.settings.preferredModel ?? "").trim();
+            if (preferredModel) {
+              const provider = await repository.getProviderConfiguration(principal.organizationId);
+              if (provider?.applyStatus !== "applied" || preferredModel !== provider.model) return json(response, 400, { error: "model_not_allowed" });
+              const discovered = await runtimeClient.operation({ principal, agent, operation: "discovery.models" });
+              if (!discoveryIds(discovered, ["models"]).has(preferredModel)) return json(response, 400, { error: "model_not_allowed" });
+            }
+            settings.preferredModel = preferredModel || null;
+          }
+          if (body.settings.notifications !== undefined) settings.notifications = Boolean(body.settings.notifications);
+          if (body.settings.locale !== undefined) settings.locale = String(body.settings.locale).slice(0, 20);
+          patch.settings = settings;
+        }
         const updated = await repository.updateAgent(agent.id, patch);
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch) } });
         return json(response, 200, { agent: updated });
@@ -457,14 +520,31 @@ export function createPlatformApp(options) {
         return json(response, 202, result);
       }
 
+      const lifecycleMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/lifecycle$/);
+      if (lifecycleMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+        const agent = await ownedAgent(principal, lifecycleMatch[1]);
+        const body = await readJson(request);
+        if (!["pause", "resume", "delete"].includes(body.action)) return json(response, 400, { error: "invalid_lifecycle_action" });
+        if (body.action === "delete" && body.confirmName !== agent.name) return json(response, 400, { error: "agent_delete_confirmation_required" });
+        const result = await repository.requestAgentLifecycle({ agentId: agent.id, request: body.action, requestedBy: principal.userId, reason: body.action === "delete" ? "Agent owner confirmed deletion in the user workspace" : undefined });
+        if (!result) return json(response, 404, { error: "agent_runtime_not_found" });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: `agent.lifecycle.${body.action}`, targetType: "agent", targetId: agent.id, metadata: { commandId: result.command?.id ?? null, commandState: result.state, immediate: result.command === null } });
+        return json(response, result.command ? 202 : 200, result);
+      }
+
       const discoveryMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runtime\/discovery$/);
       if (discoveryMatch && method === "GET") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, discoveryMatch[1]);
         const names = ["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets"];
-        const settled = await Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation })));
-        return json(response, 200, { agentId: agent.id, discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])) });
+        const [settled, provider] = await Promise.all([Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation }))), repository.getProviderConfiguration(principal.organizationId)]);
+        return json(response, 200, {
+          agentId: agent.id,
+          discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])),
+          policy: { allowedModels: provider?.applyStatus === "applied" ? [provider.model] : [], defaultModel: provider?.applyStatus === "applied" ? provider.model : null }
+        });
       }
 
       const sessionsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions$/);
@@ -477,7 +557,8 @@ export function createPlatformApp(options) {
         }
         const body = await readJson(request);
         const provider = await repository.getProviderConfiguration(principal.organizationId);
-        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: provider?.applyStatus === "applied" ? provider.model : undefined } } });
+        const preferredModel = provider?.applyStatus === "applied" && agent.settings?.preferredModel === provider.model ? agent.settings.preferredModel : undefined;
+        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || (provider?.applyStatus === "applied" ? provider.model : undefined) } } });
         return json(response, 201, result);
       }
 
@@ -494,16 +575,18 @@ export function createPlatformApp(options) {
           return json(response, 201, await runtimeClient.operation({ principal, agent, operation: "sessions.fork", input: { session_id: sessionId, body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined } } }));
         }
         if (action === "chat" && method === "POST") {
-          const body = await readJson(request);
-          if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) return json(response, 400, { error: "invalid_message" });
-          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message: body.message.trim() } } }));
+          const body = await readJson(request, MAX_CHAT_BODY_BYTES);
+          const message = sessionMessage(body);
+          if (!message) return json(response, 400, { error: "invalid_message" });
+          return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message } } }));
         }
         if (action === "chat/stream" && method === "POST") {
-          const body = await readJson(request);
-          if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) return json(response, 400, { error: "invalid_message" });
+          const body = await readJson(request, MAX_CHAT_BODY_BYTES);
+          const message = sessionMessage(body);
+          if (!message) return json(response, 400, { error: "invalid_message" });
           const controller = new AbortController();
           response.on("close", () => controller.abort());
-          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message: body.message.trim() } }, signal: controller.signal });
+          const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message } }, signal: controller.signal });
           return pipeRuntimeStream(response, upstream);
         }
       }
@@ -666,7 +749,7 @@ export function createPlatformApp(options) {
           status: channel === "web" ? "connected" : "pending",
           credentialEnvelope: credentialText ? providerVault.seal(credentialText) : null,
           credentialHint: channelSecretHint(credentials),
-          metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}
+          metadata: channelMetadata(body.metadata)
         });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.channel.bind", targetType: "agent", targetId: agent.id, metadata: { channel, status: binding.status, credentialChanged: Boolean(credentialText) } });
         return json(response, channel === "web" ? 200 : 202, { binding: publicChannelBinding(binding) });
