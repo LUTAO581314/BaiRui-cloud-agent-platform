@@ -488,6 +488,18 @@ export class MemoryPlatformRepository {
         runtime.configRevisionId = config.id;
       }
     }
+    if (input.state === "succeeded" && ["deployment.provision", "config.apply"].includes(command.action)) {
+      const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      const provider = config?.configDocument?.provider;
+      const legacy = config ? this.#providerConfigurations.get(config.organizationId) : null;
+      if (legacy && legacy.provider === provider?.provider && legacy.baseUrl === provider?.base_url && legacy.model === provider?.model) legacy.applyStatus = "applied";
+      for (const channel of this.#providerChannels.filter((item) => item.organizationId === config?.organizationId && item.provider === provider?.provider && item.baseUrl === provider?.base_url && item.model === provider?.model)) Object.assign(channel, { status: "applied", lastErrorCode: null, updatedAt: new Date().toISOString() });
+    }
+    if (input.state === "failed" && command.action === "config.apply") {
+      const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      const legacy = config ? this.#providerConfigurations.get(config.organizationId) : null;
+      if (legacy) legacy.applyStatus = "failed";
+    }
     if (["probe.run", "contract.test", "smoke.test"].includes(command.action) && command.arguments.test_run_id) {
       const run = this.#testRuns.find((item) => item.id === command.arguments.test_run_id);
       if (run && input.state === "running") Object.assign(run, { status: "running", startedAt: run.startedAt ?? new Date().toISOString() });

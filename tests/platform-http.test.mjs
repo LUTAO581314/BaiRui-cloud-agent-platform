@@ -47,6 +47,11 @@ async function login(baseUrl, email) {
   return response.headers.get("set-cookie").split(";")[0];
 }
 
+async function makeAgentReady(context, { observedAt = new Date().toISOString(), usage } = {}) {
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { ciphertext: "encrypted-provider-key" }, keyHint: "test", updatedBy: "root" });
+  await context.repository.saveAgentHeartbeat({ organizationId: "org_a", userId: context.users.user.id, agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", observedAt, components: [], ...(usage ? { usage } : {}) });
+}
+
 test("public pages expose the bairui-agent brand assets", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
@@ -181,6 +186,28 @@ test("users can create and manage only their own isolated Agents", async (t) => 
   assert.equal((await update.json()).agent.name, "Updated Agent");
 });
 
+test("user bootstrap exposes model policy without Provider secrets", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const secret = "bootstrap-provider-secret";
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: new SecretEnvelope(providerEncryptionKey).seal(secret), keyHint: "cret", updatedBy: "root" });
+  await context.repository.upsertModelPolicy({ organizationId: "org_a", allowedModels: ["example/model"], defaultModel: "example/model", userCustomKeysAllowed: false, dailyTokenLimit: 1000, monthlyBudgetUsd: 10, updatedBy: "root" });
+  const ownerCookie = await login(context.baseUrl, "user@example.test");
+  const peerCookie = await login(context.baseUrl, "same-org@example.test");
+  const bootstrap = await (await fetch(`${context.baseUrl}/api/user/bootstrap`, { headers: { cookie: ownerCookie } })).json();
+  assert.deepEqual(bootstrap.models.allowedModels, ["example/model"]);
+  assert.equal(bootstrap.models.defaultModel, "example/model");
+  assert.equal(bootstrap.memoryFormat, "obsidian-markdown");
+  assert.doesNotMatch(JSON.stringify(bootstrap), /apiKey|api_key|Envelope|bootstrap-provider-secret/i);
+
+  const invalid = await fetch(`${context.baseUrl}/api/user/agents`, { method: "POST", headers: { cookie: peerCookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Invalid model", preferredModel: "other/model" }) });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error, "model_not_allowed");
+  const valid = await fetch(`${context.baseUrl}/api/user/agents`, { method: "POST", headers: { cookie: peerCookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Policy model", preferredModel: "example/model" }) });
+  assert.equal(valid.status, 201);
+  assert.equal((await valid.json()).agent.settings.preferredModel, "example/model");
+});
+
 test("Agent initialization queues a deployment provision command and never reports false readiness", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
@@ -221,6 +248,7 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 401);
   const vault = new SecretEnvelope(providerEncryptionKey);
   await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: vault.seal("provider-secret-value"), keyHint: "alue", updatedBy: "root" });
+  await context.repository.upsertProviderChannel({ organizationId: "org_a", name: "primary", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: vault.seal("provider-secret-value"), keyHint: "alue", updatedBy: "root" });
 
   const initialize = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: "{}" });
   assert.equal(initialize.status, 202);
@@ -241,6 +269,8 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   await sendCommandReceipt({ ...receiptOptions, state: "running" });
   await assert.rejects(() => sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://169.254.169.254/latest/meta-data" }), { code: "invalid_runtime_endpoint", statusCode: 400 });
   await sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://127.0.0.1:19001", resultSummary: { containers: 2 } });
+  assert.equal((await context.repository.getProviderConfiguration("org_a")).applyStatus, "applied");
+  assert.equal((await context.repository.listProviderChannels("org_a"))[0].status, "applied");
   const route = await context.repository.getAgentRuntimeRoute(context.agent.id);
   assert.equal(route.runtime.endpointRef, "http://127.0.0.1:19001");
   assert.equal(route.runtime.status, "starting");
@@ -286,6 +316,7 @@ test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE
   };
   const context = await setup({ runtimeClient });
   t.after(() => context.server.close());
+  await makeAgentReady(context);
   const ownerCookie = await login(context.baseUrl, "user@example.test");
   const sameOrgCookie = await login(context.baseUrl, "same-org@example.test");
 
@@ -324,6 +355,69 @@ test("user Runtime routes enforce Agent ownership and preserve native Hermes SSE
   const denied = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/sessions`, { headers: { cookie: sameOrgCookie } });
   assert.equal(denied.status, 404);
   assert.equal(operations.length, 3);
+});
+
+test("operational state blocks new Runtime work while preserving recovery operations", async (t) => {
+  const operations = [];
+  const runtimeClient = {
+    operation: async (input) => { operations.push(input); return input.operation === "sessions.list" ? { object: "list", data: [] } : { ok: true }; },
+    streamOperation: async (input) => { operations.push(input); return new Response("", { headers: { "content-type": "text/event-stream" } }); }
+  };
+  const context = await setup({ runtimeClient, runtimeStaleAfterMs: 30_000 });
+  t.after(() => context.server.close());
+  await context.repository.upsertModelPolicy({ organizationId: "org_a", allowedModels: ["example/model"], defaultModel: "example/model", dailyTokenLimit: 10, monthlyBudgetUsd: 100, updatedBy: "root" });
+  await makeAgentReady(context, { usage: { bucketStart: new Date().toISOString(), bucketSeconds: 3600, model: "example/model", inputTokens: 8, outputTokens: 4, estimatedCostUsd: 0.01, runCount: 1, failedRunCount: 0, latencySumMs: 10 } });
+  const ownerCookie = await login(context.baseUrl, "user@example.test");
+  const peerCookie = await login(context.baseUrl, "same-org@example.test");
+  const agentView = await (await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}`, { headers: { cookie: ownerCookie } })).json();
+  assert.equal(agentView.agent.operational.code, "quota_exhausted");
+  assert.equal(agentView.agent.operational.quota.dailyTokens, 12);
+  const peerAgents = await (await fetch(`${context.baseUrl}/api/user/agents`, { headers: { cookie: peerCookie } })).json();
+  assert.deepEqual(peerAgents.agents, []);
+
+  const requests = [
+    ["/sessions", { title: "blocked" }],
+    ["/sessions/session_a/chat", { message: "blocked" }],
+    ["/runs", { input: "blocked" }],
+    ["/jobs", { name: "blocked" }],
+    ["/jobs/job_a/run", {}]
+  ];
+  for (const [path, body] of requests) {
+    const response = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}${path}`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(response.status, 429, path);
+    assert.equal((await response.json()).error, "quota_exhausted", path);
+  }
+  assert.equal(operations.length, 0);
+
+  const list = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/sessions`, { headers: { cookie: ownerCookie } });
+  assert.equal(list.status, 200);
+  const stop = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/runs/run_a/stop`, { method: "POST", headers: { cookie: ownerCookie } });
+  assert.equal(stop.status, 202);
+  assert.deepEqual(operations.map((item) => item.operation), ["sessions.list", "runs.stop"]);
+});
+
+test("operational state distinguishes unconfigured models and stale Runtime heartbeats", async (t) => {
+  const modelContext = await setup({ runtimeClient: { operation: async () => ({ ok: true }) } });
+  t.after(() => modelContext.server.close());
+  const modelCookie = await login(modelContext.baseUrl, "user@example.test");
+  const uninitialized = await fetch(`${modelContext.baseUrl}/api/user/agents/${modelContext.agent.id}/sessions`, { method: "POST", headers: { cookie: modelCookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(uninitialized.status, 409);
+  assert.equal((await uninitialized.json()).error, "agent_not_ready");
+  await modelContext.repository.saveAgentHeartbeat({ organizationId: "org_a", userId: modelContext.users.user.id, agentId: modelContext.agent.id, runtimeId: modelContext.runtime.id, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [] });
+  const modelBlocked = await fetch(`${modelContext.baseUrl}/api/user/agents/${modelContext.agent.id}/sessions`, { method: "POST", headers: { cookie: modelCookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(modelBlocked.status, 409);
+  assert.equal((await modelBlocked.json()).error, "model_not_configured");
+
+  const offlineContext = await setup({ runtimeClient: { operation: async () => ({ ok: true }) }, runtimeStaleAfterMs: 30_000 });
+  t.after(() => offlineContext.server.close());
+  await makeAgentReady(offlineContext, { observedAt: new Date(Date.now() - 60_000).toISOString() });
+  const offlineCookie = await login(offlineContext.baseUrl, "user@example.test");
+  const offlineView = await (await fetch(`${offlineContext.baseUrl}/api/user/agents/${offlineContext.agent.id}`, { headers: { cookie: offlineCookie } })).json();
+  assert.equal(offlineView.agent.operational.code, "offline");
+  assert.equal(offlineView.agent.runtime.effectiveStatus, "offline");
+  const offlineBlocked = await fetch(`${offlineContext.baseUrl}/api/user/agents/${offlineContext.agent.id}/runs`, { method: "POST", headers: { cookie: offlineCookie, "content-type": "application/json" }, body: JSON.stringify({ input: "blocked" }) });
+  assert.equal(offlineBlocked.status, 503);
+  assert.equal((await offlineBlocked.json()).error, "runtime_offline");
 });
 
 test("provider credentials are platform-admin only and responses are masked", async (t) => {

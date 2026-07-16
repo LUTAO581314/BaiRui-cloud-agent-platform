@@ -11,7 +11,9 @@
   const STATUS_LABELS = {
     ready: "正常", active: "正常", connected: "已连接", applied: "已生效", pending: "待应用",
     provisioning: "初始化中", starting: "启动中", suspended: "已暂停", stopped: "已停止",
-    failed: "失败", degraded: "降级", unavailable: "不可用", unconfigured: "未配置", disabled: "已停用"
+    initializing: "初始化中", uninitialized: "未初始化", offline: "Runtime 离线", upgrading: "升级中",
+    model_unconfigured: "模型未配置", quota_exhausted: "额度已用尽", deleting: "删除中", deleted: "已删除",
+    failed: "失败", degraded: "降级", unavailable: "不可用", unconfigured: "未配置", disabled: "已停用", unknown: "未知"
   };
   const workspaceState = { view: "conversations", runId: null, runStream: null };
   let root;
@@ -53,6 +55,11 @@
       runtime_unavailable: "Agent Runtime 当前不可用",
       runtime_route_unavailable: "Agent 还没有可用的运行环境",
       model_not_allowed: "该模型不在管理员允许范围内",
+      model_not_configured: "管理员尚未配置可用模型",
+      quota_exhausted: "当前用量额度已耗尽",
+      runtime_offline: "Agent Runtime 已离线",
+      agent_not_ready: "Agent 当前尚未就绪",
+      Forbidden: "当前账户没有执行此操作的权限",
       agent_not_initialized: "Agent 尚未初始化",
       no_agent_capacity: "当前没有可用服务器容量"
     };
@@ -167,7 +174,7 @@
     const result = await bridge.request("/api/user/agents");
     bridge.state.agents = result.agents || [];
     const agent = bridge.state.agents.find((item) => item.id === activeAgent().id) || activeAgent();
-    content.innerHTML = `<div class="bw-split"><section><div class="bw-section-head"><h3>我的 Agent</h3><button type="button" class="primary" data-create>＋ 创建</button></div><div class="bw-list">${bridge.state.agents.map((item) => `<article class="bw-row ${item.id === agent.id ? "selected" : ""}"><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description || "未填写描述")}</span></div><div>${status(item.runtime?.status || item.initializationStatus)}<button type="button" data-switch="${escapeHtml(item.id)}">切换</button></div></article>`).join("")}</div></section><section><h3>当前 Agent</h3><dl class="bw-details"><div><dt>名称</dt><dd>${escapeHtml(agent.name)}</dd></div><div><dt>Runtime</dt><dd>${status(agent.runtime?.status || "uninitialized")}</dd></div><div><dt>Hermes</dt><dd>${escapeHtml(agent.runtime?.hermesVersion || "等待上报")}</dd></div><div><dt>最近心跳</dt><dd>${formatTime(agent.runtime?.lastHeartbeatAt)}</dd></div></dl><div class="bw-actions bw-actions-wide"><button type="button" data-edit>编辑资料</button>${["uninitialized", "failed"].includes(agent.initializationStatus) ? '<button type="button" class="primary" data-init>初始化/重试</button>' : ""}${agent.runtime?.status === "suspended" ? '<button type="button" class="primary" data-resume>恢复</button>' : '<button type="button" data-pause>暂停</button>'}<button type="button" class="danger" data-remove>删除 Agent</button></div></section></div>`;
+    content.innerHTML = `<div class="bw-split"><section><div class="bw-section-head"><h3>我的 Agent</h3><button type="button" class="primary" data-create>＋ 创建</button></div><div class="bw-list">${bridge.state.agents.map((item) => `<article class="bw-row ${item.id === agent.id ? "selected" : ""}"><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description || "未填写描述")}</span></div><div>${status(item.operational?.code || item.runtime?.effectiveStatus || item.runtime?.status || item.initializationStatus)}<button type="button" data-switch="${escapeHtml(item.id)}">切换</button></div></article>`).join("")}</div></section><section><h3>当前 Agent</h3><dl class="bw-details"><div><dt>名称</dt><dd>${escapeHtml(agent.name)}</dd></div><div><dt>状态</dt><dd>${status(agent.operational?.code || "uninitialized")}</dd></div><div><dt>Runtime</dt><dd>${status(agent.runtime?.effectiveStatus || agent.runtime?.status || "uninitialized")}</dd></div><div><dt>Hermes</dt><dd>${escapeHtml(agent.runtime?.hermesVersion || "等待上报")}</dd></div><div><dt>最近心跳</dt><dd>${formatTime(agent.runtime?.lastHeartbeatAt)}</dd></div><div><dt>今日 Token</dt><dd>${Number(agent.operational?.quota?.dailyTokens || 0).toLocaleString()}</dd></div></dl><div class="bw-actions bw-actions-wide"><button type="button" data-edit>编辑资料</button>${["uninitialized", "failed"].includes(agent.operational?.code || agent.initializationStatus) ? '<button type="button" class="primary" data-init>初始化/重试</button>' : ""}${agent.runtime?.status === "suspended" ? '<button type="button" class="primary" data-resume>恢复</button>' : '<button type="button" data-pause>暂停</button>'}<button type="button" class="danger" data-remove>删除 Agent</button></div></section></div>`;
     content.querySelector("[data-create]").addEventListener("click", async () => { const created = await bridge.createAgentDialog(); bridge.activateAgent(created.id); });
     content.querySelectorAll("[data-switch]").forEach((button) => button.addEventListener("click", () => bridge.activateAgent(button.dataset.switch)));
     content.querySelector("[data-edit]").addEventListener("click", async () => {

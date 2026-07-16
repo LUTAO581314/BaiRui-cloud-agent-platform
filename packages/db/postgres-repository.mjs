@@ -646,6 +646,30 @@ export class PostgresPlatformRepository {
         if (input.state === "failed") await client.query("UPDATE config_revisions SET status='failed' WHERE id=$1", [configId]);
         if (input.state === "succeeded" && command.action === "config.apply") await client.query("UPDATE agent_runtimes runtime SET config_revision_id=$2, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, configId]);
       }
+      if (input.state === "succeeded" && ["deployment.provision", "config.apply"].includes(command.action)) {
+        const configId = command.arguments.config_revision_id;
+        await client.query(
+          `UPDATE provider_configurations provider SET apply_status='applied', updated_at=now()
+           FROM config_revisions revision
+           WHERE revision.id=$1 AND provider.organization_id=revision.organization_id
+             AND provider.provider=revision.config_document->'provider'->>'provider'
+             AND provider.base_url=revision.config_document->'provider'->>'base_url'
+             AND provider.model=revision.config_document->'provider'->>'model'`,
+          [configId]
+        );
+        await client.query(
+          `UPDATE provider_channels channel SET status='applied', last_error_code=NULL, updated_at=now()
+           FROM config_revisions revision
+           WHERE revision.id=$1 AND channel.organization_id=revision.organization_id
+             AND channel.provider=revision.config_document->'provider'->>'provider'
+             AND channel.base_url=revision.config_document->'provider'->>'base_url'
+             AND channel.model=revision.config_document->'provider'->>'model'`,
+          [configId]
+        );
+      }
+      if (input.state === "failed" && command.action === "config.apply") {
+        await client.query("UPDATE provider_configurations SET apply_status='failed', updated_at=now() WHERE organization_id=(SELECT organization_id FROM config_revisions WHERE id=$1)", [command.arguments.config_revision_id]);
+      }
       if (["probe.run", "contract.test", "smoke.test"].includes(command.action) && command.arguments.test_run_id) {
         const status = input.state === "running" ? "running" : input.state === "succeeded" ? "passed" : input.state === "failed" ? "failed" : null;
         if (status) await client.query("UPDATE test_runs SET status=$2, started_at=CASE WHEN $2='running' THEN COALESCE(started_at,now()) ELSE started_at END, completed_at=CASE WHEN $2 IN ('passed','failed') THEN now() ELSE completed_at END WHERE id=$1", [command.arguments.test_run_id, status]);

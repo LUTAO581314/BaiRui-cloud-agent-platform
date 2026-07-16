@@ -27,6 +27,11 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
   assert.doesNotMatch(adapter, /createBailongmaEventHub/);
   assert.match(adapter, /AbortController/);
   assert.match(adapter, /attachments/);
+  assert.match(adapter, /operationalFailure/);
+  assert.match(adapter, /bairui-operational-blocker/);
+  assert.match(adapter, /quota_exhausted/);
+  assert.match(adapter, /runtime_offline/);
+  assert.match(adapter, /\/api\/user\/bootstrap/);
 });
 
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {

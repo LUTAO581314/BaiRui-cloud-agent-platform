@@ -82,7 +82,7 @@ for (const evidence of ["sessions.chat.stream", "runs.events", "runtimeClient.st
 }
 const overlayPath = path.join(root, "apps/web/public/bairui-bailongma.js");
 const overlay = fs.existsSync(overlayPath) ? fs.readFileSync(overlayPath, "utf8") : "";
-for (const evidence of ["assistant.delta", "assistant.completed", "sessions/${encodeURIComponent", "chat/stream", "AbortController", "attachments"]) {
+for (const evidence of ["assistant.delta", "assistant.completed", "sessions/${encodeURIComponent", "chat/stream", "AbortController", "attachments", "operationalFailure", "bairui-operational-blocker", "/api/user/bootstrap"]) {
   if (!overlay.includes(evidence)) failures.push(`Missing BaiLongma native Hermes adapter evidence: ${evidence}`);
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
