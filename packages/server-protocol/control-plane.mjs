@@ -17,6 +17,7 @@ export const CONTROL_ACTIONS = Object.freeze([
   "config.apply",
   "backup.create",
   "backup.verify",
+  "backup.restore",
   "release.stage",
   "release.apply",
   "release.rollback",
@@ -40,13 +41,14 @@ const ARGUMENTS = Object.freeze({
   "config.apply": [["config_revision_id"], []],
   "backup.create": [["backup_policy_id"], ["backup_id"]],
   "backup.verify": [["backup_id"], []],
+  "backup.restore": [["backup_id", "restore_id"], []],
   "release.stage": [["release_id"], ["rollout_id"]],
   "release.apply": [["release_id"], ["rollout_id"]],
   "release.rollback": [["release_id", "rollback_release_id"], ["rollout_id"]],
   "service.restart": [["service_id"], []]
 });
 
-const APPROVAL_REQUIRED = new Set(["config.apply", "release.apply", "release.rollback", "service.restart", "deployment.delete", "credential.revoke"]);
+const APPROVAL_REQUIRED = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "deployment.delete", "credential.revoke"]);
 const TOP_LEVEL = new Set(["schema_version", "command_id", "idempotency_key", "deployment_id", "action", "target", "arguments", "approval_id", "expected_observation_version", "not_before", "expires_at", "created_at"]);
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);

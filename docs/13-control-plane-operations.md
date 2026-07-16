@@ -31,6 +31,11 @@ upstream branch head.
 
 PostgreSQL is the authoritative BaiRui production database. Backups are
 encrypted, checksummed, retained, verified, and restore-drilled against RPO/RTO.
+An Agent backup restore accepts only a registered backup identifier, requires a
+platform-administrator approval, validates the encrypted backup and Agent
+identity, stops the fixed Runtime containers, preserves rollback history, and
+restarts the same deployment. Host paths and archive locations never enter the
+control command.
 Incidents link alerts, SLO impact, observations, actions, evidence, and audit.
 Closure requires a healthy post-remediation observation.
 

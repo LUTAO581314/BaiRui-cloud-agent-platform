@@ -39,3 +39,13 @@ test("rejects content and executable fields", () => {
   assert.throws(() => validateControlCommand({ ...base(), arguments: { release_id: "rel_1", prompt: "hello" } }), /not allowed/);
   assert.throws(() => validateControlCommand({ ...base(), script: "restart everything" }), /Unknown control command field/);
 });
+
+test("backup restore is a fixed approval-gated operation", () => {
+  const value = base();
+  value.action = "backup.restore";
+  value.arguments = { backup_id: "backup_a", restore_id: "restore_a" };
+  assert.equal(validateControlCommand(value).action, "backup.restore");
+  delete value.approval_id;
+  assert.throws(() => validateControlCommand(value), /approval_id/);
+  assert.throws(() => validateControlCommand({ ...base(), action: "backup.restore", arguments: { backup_id: "backup_a", restore_id: "restore_a", path: "/tmp/archive" } }), /not allowed/);
+});

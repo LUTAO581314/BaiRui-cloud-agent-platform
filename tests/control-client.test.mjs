@@ -23,3 +23,15 @@ test("control client reports executor failures without accepting remote shell fi
   await assert.rejects(() => executeControlCycle({ platformUrl: "https://platform.example.test", serverId: "server_a", token: "server-token-that-is-longer-than-thirty-two-characters", fetch, executor: { execute: async () => ({}) } }), /Unknown control command field/);
   assert.equal(receipts.length, 0);
 });
+
+test("control client redacts local paths and secrets from executor failure receipts", async () => {
+  const receipts = [];
+  const command = { schema_version: "1.0", command_id: "cmd_restore", idempotency_key: "dep_a/backup.restore/restore_a", deployment_id: "dep_a", action: "backup.restore", target: { module_id: "bairui.supervisor" }, arguments: { backup_id: "backup_a", restore_id: "restore_a" }, approval_id: "approval_a", expected_observation_version: 0, created_at: "2026-07-16T00:00:00.000Z", expires_at: "2030-07-16T00:10:00.000Z", attempt: 1 };
+  const fetch = async (url, options) => url.endsWith("/lease") ? Response.json({ commands: [command] }) : (receipts.push(JSON.parse(options.body)), Response.json({ receipt: {} }, { status: 202 }));
+  const error = Object.assign(new Error("Failed reading /var/lib/bairui/backups/secret-file"), { code: "backup_read_failed" });
+  const result = await executeControlCycle({ platformUrl: "https://platform.example.test", serverId: "server_a", token: "server-token-that-is-longer-than-thirty-two-characters", fetch, executor: { execute: async () => { throw error; } } });
+  assert.equal(result[0].state, "failed");
+  const failure = receipts.find((item) => item.state === "failed");
+  assert.equal(failure.errorCode, "backup_read_failed");
+  assert.doesNotMatch(failure.errorSummary, /var\/lib|secret-file/);
+});

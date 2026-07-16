@@ -72,8 +72,9 @@ export async function executeControlCycle(options) {
       await sendCommandReceipt({ ...base, state: "succeeded", runtimeEndpointRef: result?.runtimeEndpointRef, resultSummary: result?.summary, evidenceRefs: result?.evidenceRefs });
       results.push({ commandId: command.command_id, state: "succeeded", result });
     } catch (error) {
-      const errorCode = typeof error.code === "string" ? error.code : "executor_failed";
-      const errorSummary = String(error.message || "Control executor failed").slice(0, 1000);
+      const rawErrorCode = typeof error.code === "string" ? error.code : "executor_failed";
+      const errorCode = rawErrorCode.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 200) || "executor_failed";
+      const errorSummary = `Control executor failed (${errorCode})`;
       await sendCommandReceipt({ ...base, state: "failed", errorCode, errorSummary });
       results.push({ commandId: command.command_id, state: "failed", errorCode });
     } finally {

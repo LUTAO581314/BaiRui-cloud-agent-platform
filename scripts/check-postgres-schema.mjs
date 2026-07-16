@@ -12,7 +12,7 @@ const requiredTables = [
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
   "provider_channels", "model_policies", "data_retention_policies",
-  "sensitive_access_grants", "sensitive_access_events"
+  "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs"
 ];
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
@@ -34,7 +34,7 @@ try {
   for (const column of requiredObsidianColumns) if (!obsidianColumns.has(column)) throw new Error(`Missing obsidian_notes column: ${column}`);
   const { rows: actionRows } = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='control_commands_action_check'");
   const actionConstraint = actionRows[0]?.definition ?? "";
-  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke"]) {
+  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "backup.restore"]) {
     if (!actionConstraint.includes(action)) throw new Error(`Missing control action in PostgreSQL constraint: ${action}`);
   }
   console.log("PostgreSQL schema check passed.");

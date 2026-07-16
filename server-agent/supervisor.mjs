@@ -44,6 +44,17 @@ function copyFileSecure(source, destination) {
   fs.chmodSync(destination, 0o600);
 }
 
+function assertSafeTree(root) {
+  if (!fs.existsSync(root)) throw Object.assign(new Error("Backup content is incomplete"), { code: "invalid_backup" });
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const item = path.join(root, entry.name);
+    const stat = fs.lstatSync(item);
+    if (stat.isSymbolicLink()) throw Object.assign(new Error("Backup content contains a symbolic link"), { code: "unsafe_backup_content" });
+    if (stat.isDirectory()) assertSafeTree(item);
+    else if (!stat.isFile()) throw Object.assign(new Error("Backup content contains an unsupported file type"), { code: "unsafe_backup_content" });
+  }
+}
+
 function envFile(values) {
   return `${Object.entries(values).map(([key, value]) => `${key}=${envValue(value, key)}`).join("\n")}\n`;
 }
@@ -279,6 +290,7 @@ export class AgentSupervisor {
     this.readMetadata(agentId);
     const backupId = identifier(command.arguments?.backup_id ?? command.command_id, "backup_id");
     const instancePath = this.instancePath(agentId);
+    assertSafeTree(path.join(instancePath, "hermes-data"));
     fs.mkdirSync(this.backupRoot, { recursive: true, mode: 0o700 });
     const plainPath = path.join(this.backupRoot, `.${backupId}.tar.gz`);
     try {
@@ -299,18 +311,95 @@ export class AgentSupervisor {
   }
 
   async verifyBackup(command) {
-    if (!this.backupKey) throw Object.assign(new Error("Backup encryption key is unavailable"), { code: "backup_key_unavailable" });
+    const agentId = this.commandAgentId(command);
+    this.readMetadata(agentId);
     const backupId = identifier(command.arguments?.backup_id, "backup_id");
-    const input = fs.readFileSync(this.backupPath(backupId));
+    const { input, digest } = this.readBackup(backupId, agentId);
+    return { summary: { bytes: input.length, verified: 1 }, evidenceRefs: [`backup:${backupId}:verified`, `plaintext-sha256:${digest}`] };
+  }
+
+  readBackup(backupId, expectedAgentId) {
+    if (!this.backupKey) throw Object.assign(new Error("Backup encryption key is unavailable"), { code: "backup_key_unavailable" });
+    let input;
+    try { input = fs.readFileSync(this.backupPath(backupId)); }
+    catch (error) {
+      if (error.code === "ENOENT") throw Object.assign(new Error("Backup file is unavailable"), { code: "backup_not_found" });
+      throw error;
+    }
+    if (input.length < 7) throw Object.assign(new Error("Backup envelope is invalid"), { code: "invalid_backup" });
     const headerLength = input.readUInt32BE(0);
     if (headerLength < 2 || headerLength > 16_384 || input.length <= 4 + headerLength) throw Object.assign(new Error("Backup envelope is invalid"), { code: "invalid_backup" });
-    const header = JSON.parse(input.subarray(4, 4 + headerLength).toString("utf8"));
-    const decipher = createDecipheriv("aes-256-gcm", this.backupKey, Buffer.from(header.iv, "base64"));
-    decipher.setAuthTag(Buffer.from(header.tag, "base64"));
-    const plain = Buffer.concat([decipher.update(input.subarray(4 + headerLength)), decipher.final()]);
+    let header;
+    try { header = JSON.parse(input.subarray(4, 4 + headerLength).toString("utf8")); }
+    catch { throw Object.assign(new Error("Backup header is invalid"), { code: "invalid_backup" }); }
+    if (header.schemaVersion !== "1.0" || header.algorithm !== "aes-256-gcm" || header.backupId !== backupId || !IDENTIFIER.test(header.agentId) || (expectedAgentId && header.agentId !== expectedAgentId)) throw Object.assign(new Error("Backup identity validation failed"), { code: "backup_identity_mismatch" });
+    let plain;
+    try {
+      const decipher = createDecipheriv("aes-256-gcm", this.backupKey, Buffer.from(header.iv, "base64"));
+      decipher.setAuthTag(Buffer.from(header.tag, "base64"));
+      plain = Buffer.concat([decipher.update(input.subarray(4 + headerLength)), decipher.final()]);
+    } catch { throw Object.assign(new Error("Backup decryption failed"), { code: "backup_integrity_failed" }); }
     const digest = createHash("sha256").update(plain).digest("hex");
-    if (digest !== header.plaintextSha256 || header.backupId !== backupId) throw Object.assign(new Error("Backup integrity verification failed"), { code: "backup_integrity_failed" });
-    return { summary: { bytes: input.length, verified: 1 }, evidenceRefs: [`backup:${backupId}:verified`, `plaintext-sha256:${digest}`] };
+    if (digest !== header.plaintextSha256) throw Object.assign(new Error("Backup integrity verification failed"), { code: "backup_integrity_failed" });
+    return { input, header, plain, digest };
+  }
+
+  async restoreBackup(command) {
+    if (!command.approval_id) throw Object.assign(new Error("Backup restore requires approval"), { code: "approval_required" });
+    const agentId = this.commandAgentId(command);
+    const metadata = this.readMetadata(agentId);
+    const backupId = identifier(command.arguments?.backup_id, "backup_id");
+    const restoreId = identifier(command.arguments?.restore_id, "restore_id");
+    const { plain, digest } = this.readBackup(backupId, agentId);
+    const instancePath = this.instancePath(agentId);
+    const plainPath = path.join(this.backupRoot, `.${restoreId}.tar.gz`);
+    const stagePath = path.join(instancePath, "restore-staging", restoreId);
+    const historyPath = path.join(instancePath, "restore-history", restoreId);
+    const activeData = path.join(instancePath, "hermes-data");
+    const activeHermesEnv = path.join(instancePath, "hermes.env");
+    const activeRuntimeEnv = path.join(instancePath, "runtime.env");
+    const hadData = fs.existsSync(activeData);
+    const hadHermesEnv = fs.existsSync(activeHermesEnv);
+    const hadRuntimeEnv = fs.existsSync(activeRuntimeEnv);
+    fs.mkdirSync(this.backupRoot, { recursive: true, mode: 0o700 });
+    fs.rmSync(stagePath, { recursive: true, force: true });
+    fs.mkdirSync(stagePath, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(plainPath, plain, { mode: 0o600 });
+    try {
+      const { stdout } = await this.execFile("tar", ["-tzf", plainPath], { encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+      const entries = stdout.split(/\r?\n/).map((item) => item.replace(/^\.\/+/, "").replace(/\/$/, "")).filter(Boolean);
+      if (!entries.length || entries.some((entry) => path.isAbsolute(entry) || entry.includes("\\") || entry.split("/").includes("..") || !["hermes-data", "instance.json", "hermes.env", "runtime.env"].includes(entry.split("/")[0]))) throw Object.assign(new Error("Backup archive contains an unsafe path"), { code: "unsafe_backup_content" });
+      await this.execFile("tar", ["-xzf", plainPath, "-C", stagePath, "--no-same-owner", "--no-same-permissions"], { encoding: "utf8", timeout: 300_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+      assertSafeTree(stagePath);
+      const archivedMetadata = JSON.parse(fs.readFileSync(path.join(stagePath, "instance.json"), "utf8"));
+      if (archivedMetadata.agentId !== agentId) throw Object.assign(new Error("Backup Agent identity does not match"), { code: "backup_identity_mismatch" });
+      for (const required of [path.join(stagePath, "hermes-data"), path.join(stagePath, "hermes.env"), path.join(stagePath, "runtime.env")]) if (!fs.existsSync(required)) throw Object.assign(new Error("Backup content is incomplete"), { code: "invalid_backup" });
+
+      fs.rmSync(historyPath, { recursive: true, force: true });
+      fs.mkdirSync(historyPath, { recursive: true, mode: 0o700 });
+      if (hadData) fs.cpSync(activeData, path.join(historyPath, "hermes-data"), { recursive: true, force: false, errorOnExist: true });
+      if (hadHermesEnv) copyFileSecure(activeHermesEnv, path.join(historyPath, "hermes.env"));
+      if (hadRuntimeEnv) copyFileSecure(activeRuntimeEnv, path.join(historyPath, "runtime.env"));
+      for (const name of [metadata.names.runtime, metadata.names.hermes]) if (await this.exists("container", name)) await this.docker(["container", "stop", name]);
+      try {
+        fs.rmSync(activeData, { recursive: true, force: true });
+        fs.renameSync(path.join(stagePath, "hermes-data"), activeData);
+        copyFileSecure(path.join(stagePath, "hermes.env"), activeHermesEnv);
+        copyFileSecure(path.join(stagePath, "runtime.env"), activeRuntimeEnv);
+        await this.runContainers(metadata, { hermesEnv: activeHermesEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage });
+      } catch (error) {
+        fs.rmSync(activeData, { recursive: true, force: true });
+        if (hadData) fs.cpSync(path.join(historyPath, "hermes-data"), activeData, { recursive: true });
+        if (hadHermesEnv) copyFileSecure(path.join(historyPath, "hermes.env"), activeHermesEnv); else fs.rmSync(activeHermesEnv, { force: true });
+        if (hadRuntimeEnv) copyFileSecure(path.join(historyPath, "runtime.env"), activeRuntimeEnv); else fs.rmSync(activeRuntimeEnv, { force: true });
+        if (hadHermesEnv && hadRuntimeEnv) await this.runContainers(metadata, { hermesEnv: activeHermesEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage }).catch(() => {});
+        throw error;
+      }
+      return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { restored: 1, files: 4, containers: 2 }, evidenceRefs: [`backup:${backupId}:restored`, `restore:${restoreId}:succeeded`, `plaintext-sha256:${digest}`, `restore-history:${restoreId}`] };
+    } finally {
+      fs.rmSync(plainPath, { force: true });
+      fs.rmSync(stagePath, { recursive: true, force: true });
+    }
   }
 
   releaseDescriptor(command, idField = "release_id") {
@@ -390,6 +479,7 @@ export class AgentSupervisor {
     if (command.action === "config.apply") return this.applyConfiguration(command);
     if (command.action === "backup.create") return this.createBackup(command);
     if (command.action === "backup.verify") return this.verifyBackup(command);
+    if (command.action === "backup.restore") return this.restoreBackup(command);
     if (command.action === "release.stage") return this.stageRelease(command);
     if (command.action === "release.apply") return this.applyRelease(command);
     if (command.action === "release.rollback") return this.applyRelease({ ...command, release: command.rollback_release }, "rollback_release_id");

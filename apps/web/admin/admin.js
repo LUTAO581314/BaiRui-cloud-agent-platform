@@ -258,8 +258,16 @@ async function loadRelease() {
 }
 
 async function loadBackups() {
-  const { backups } = await request(scoped("/api/admin/backups"));
-  rows("backup-rows", backups, [item => item.backupType, item => statusNode(item.status), item => item.deploymentId, item => item.sizeBytes == null ? "-" : `${formatNumber(item.sizeBytes / 1024 / 1024)} MB`, item => item.encrypted ? "是" : "否", item => formatTime(item.verifiedAt), item => formatTime(item.expiresAt), item => ["created", "verified"].includes(item.status) ? commandButton("验证", () => issueControl("backup.verify", { backupId: item.id })) : "-"]);
+  const { backups, restores } = await request(scoped("/api/admin/backups"));
+  const latestRestore = new Map();
+  for (const restore of restores) if (!latestRestore.has(restore.backupId)) latestRestore.set(restore.backupId, restore);
+  rows("backup-rows", backups, [item => item.backupType, item => statusNode(item.status), item => item.agentId, item => item.deploymentId, item => item.sizeBytes == null ? "-" : `${formatNumber(item.sizeBytes / 1024 / 1024)} MB`, item => item.encrypted ? "是" : "否", item => formatTime(item.verifiedAt), item => latestRestore.has(item.id) ? statusNode(latestRestore.get(item.id).status) : "-", item => formatTime(item.expiresAt), item => {
+    const group = document.createElement("div");
+    group.className = "table-actions";
+    if (["created", "verified"].includes(item.status)) group.append(commandButton("验证", () => issueControl("backup.verify", { backupId: item.id }, { agentId: item.agentId })));
+    if (role === "platform_admin" && item.status === "verified") group.append(commandButton("恢复", () => issueControl("backup.restore", { backupId: item.id }, { agentId: item.agentId, reasonRequired: true }), true));
+    return group;
+  }]);
 }
 
 async function loadRetention() {

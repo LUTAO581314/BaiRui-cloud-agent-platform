@@ -41,3 +41,8 @@ configuration.
 
 Deleting an Agent removes its known containers and network but retains its data
 directory for the separate backup and retention workflow.
+
+`backup.restore` is leased only after approval and only for a verified backup
+owned by the target deployment. The Supervisor resolves the encrypted file from
+its fixed backup root, rejects unsafe archive paths and links, retains a local
+rollback copy, and reports restore evidence without returning backup content.

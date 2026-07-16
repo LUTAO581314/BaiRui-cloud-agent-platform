@@ -26,6 +26,7 @@ const required = [
   "packages/db/migrations/007_control_command_delivery.sql",
   "packages/db/migrations/008_user_agent_surfaces.sql",
   "packages/db/migrations/009_control_plane_admin_domains.sql",
+  "packages/db/migrations/010_backup_restore.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -92,7 +93,7 @@ for (const view of ["renderConversations", "renderAgents", "renderMemory", "rend
 }
 const controlProtocolPath = path.join(root, "packages/server-protocol/control-plane.mjs");
 const controlProtocol = fs.existsSync(controlProtocolPath) ? fs.readFileSync(controlProtocolPath, "utf8") : "";
-for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
+for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!controlProtocol.includes(`"${action}"`)) failures.push(`Missing allowed control action: ${action}`);
 }
 for (const prefix of ["prompt.", "conversation.", "task.", "model.", "tool.", "skill.", "memory.", "runtime.", "shell.", "script.", "sql."]) {
@@ -142,6 +143,9 @@ const adminDomainsMigration = fs.existsSync(adminDomainsMigrationPath) ? fs.read
 for (const table of ["provider_channels", "model_policies", "data_retention_policies", "sensitive_access_grants", "sensitive_access_events"]) {
   if (!adminDomainsMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing control-plane admin table: ${table}`);
 }
+const backupRestoreMigrationPath = path.join(root, "packages/db/migrations/010_backup_restore.sql");
+const backupRestoreMigration = fs.existsSync(backupRestoreMigrationPath) ? fs.readFileSync(backupRestoreMigrationPath, "utf8") : "";
+if (!backupRestoreMigration.includes("CREATE TABLE IF NOT EXISTS backup_restore_runs")) failures.push("Missing backup restore run table");
 for (const evidence of ["/api/admin/provider-channels", "/api/admin/model-policy", "/api/admin/data-retention", "/api/admin/sensitive-access", "/api/admin/release-gates", "/api/admin/backups", "/api/admin/upstreams", "/api/admin/control-commands", "/api/admin/control-approvals", "/api/admin/release-manifests"]) {
   if (!server.includes(evidence)) failures.push(`Missing control-plane administration API: ${evidence}`);
 }
