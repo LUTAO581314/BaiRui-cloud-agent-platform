@@ -14,7 +14,7 @@ import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 const password = "Correct-Horse-Battery-Staple-2026";
 const bailongmaUi = createBailongmaUi({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma") });
 
-async function setup() {
+async function setup(options = {}) {
   const repository = new MemoryPlatformRepository();
   await repository.createOrganization({ id: "org_a", name: "Organization A" });
   const passwordHash = await hashPassword(password);
@@ -23,7 +23,7 @@ async function setup() {
   await repository.createUser({ id: "root", organizationId: "org_a", email: "root@example.test", displayName: "Root", passwordHash, role: ROLES.PLATFORM_ADMIN });
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", ownerUserId: owner.id, name: "Agent A" });
   const runtime = await repository.createAgentRuntime({ id: "runtime_a", organizationId: "org_a", ownerUserId: owner.id, agentId: agent.id, workspaceRef: "hermes:org_a:user_a:agent_a" });
-  const runtimeClient = {
+  const runtimeClient = options.runtimeClient ?? {
     operation: async ({ operation }) => operation === "discovery.skills" ? { object: "list", data: [{ id: "browser/use", name: "Browser" }] } : { ok: true },
     invokeIntegration: async () => ({ status: "completed", completed_at: "2026-07-15T00:00:01.000Z", output: { sources: [{ source_id: "baidu", status: "ready", count: 1 }], items: [{ external_id: "one", source_id: "baidu", source_name: "Baidu", rank: 1, title: "Test hotspot", url: "https://www.baidu.com/", mobile_url: "", heat: "", category: "", fetched_at: "2026-07-15T00:00:00.000Z" }] } })
   };
@@ -48,6 +48,39 @@ async function setup() {
   await once(server, "listening");
   return { repository, agent, runtime, providerVault, server, baseUrl: `http://127.0.0.1:${server.address().port}` };
 }
+
+test("Runtime discovery and complete Hermes Jobs operations remain Agent-scoped", async (t) => {
+  const calls = [];
+  const runtimeClient = {
+    operation: async ({ operation, input }) => {
+      calls.push({ operation, input });
+      if (operation === "health.detailed") return { status: "healthy", version: "hermes-test" };
+      if (operation === "discovery.models") return { data: [{ id: "example/model" }] };
+      if (operation === "discovery.capabilities") return { features: { session_resources: true } };
+      if (operation === "discovery.skills") return { data: [{ id: "browser/use" }] };
+      if (operation === "discovery.toolsets") return { data: [{ name: "web", enabled: true, configured: true, tools: ["browser"] }] };
+      if (operation === "jobs.get") return { job: { id: input.job_id, name: "Daily" } };
+      if (operation === "jobs.update") return { job: { id: input.job_id, ...input.body } };
+      return { jobs: [] };
+    },
+    invokeIntegration: async () => ({ status: "completed", output: { sources: [], items: [] } })
+  };
+  const context = await setup({ runtimeClient });
+  t.after(() => context.server.close());
+  const ownerCookie = await login(context.baseUrl, "owner@example.test");
+  const peerCookie = await login(context.baseUrl, "peer@example.test");
+  const base = `${context.baseUrl}/api/user/agents/${context.agent.id}`;
+  const discovery = await fetch(`${base}/runtime/discovery`, { headers: { cookie: ownerCookie } });
+  assert.equal(discovery.status, 200);
+  assert.equal((await discovery.json()).discovery["discovery.toolsets"].data.data[0].name, "web");
+  assert.equal((await fetch(`${base}/runtime/discovery`, { headers: { cookie: peerCookie } })).status, 404);
+  assert.equal((await fetch(`${base}/jobs/job_one`, { headers: { cookie: ownerCookie } })).status, 200);
+  const updated = await fetch(`${base}/jobs/job_one`, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Updated", schedule: "0 9 * * *", prompt: "Research" }) });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).job.name, "Updated");
+  assert.equal((await fetch(`${base}/jobs/job_one`, { method: "PATCH", headers: { cookie: peerCookie, "content-type": "application/json" }, body: "{}" })).status, 404);
+  assert.ok(["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets", "jobs.get", "jobs.update"].every((operation) => calls.some((call) => call.operation === operation)));
+});
 
 async function login(baseUrl, email) {
   const response = await fetch(`${baseUrl}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }) });

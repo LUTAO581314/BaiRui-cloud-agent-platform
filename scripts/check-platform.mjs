@@ -117,6 +117,9 @@ const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, 
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
   if (!workspace.includes(view)) failures.push(`Missing BaiRui user workspace view: ${view}`);
 }
+for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {
+  if (!workspace.includes(evidence)) failures.push(`Missing exposed Hermes user capability: ${evidence}`);
+}
 const controlProtocolPath = path.join(root, "packages/server-protocol/control-plane.mjs");
 const controlProtocol = fs.existsSync(controlProtocolPath) ? fs.readFileSync(controlProtocolPath, "utf8") : "";
 for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {

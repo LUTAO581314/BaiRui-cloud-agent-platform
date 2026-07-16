@@ -77,6 +77,24 @@ async function ordinaryDesktop(browser, baseUrl) {
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-memory.png"), fullPage: true });
 
+  await page.locator('.bw-nav [data-view="skills"]').click();
+  await page.getByText("Runtime Capabilities", { exact: true }).waitFor();
+  await page.getByText("Web tools", { exact: true }).waitFor();
+  await page.getByText("fixture-hermes-1.0.0", { exact: true }).waitFor();
+  await page.getByText("approval events", { exact: true }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-runtime-capabilities.png"), fullPage: true });
+
+  await page.locator('.bw-nav [data-view="jobs"]').click();
+  await page.getByText("Daily research", { exact: true }).waitFor();
+  await page.locator('[data-edit-job="job_remote"]').click();
+  const jobDialog = page.locator("dialog.bw-dialog");
+  await jobDialog.locator('input[name="name"]').fill("Daily verified research");
+  await jobDialog.locator('textarea[name="prompt"]').fill("Summarize verified project updates");
+  await jobDialog.locator('button[type="submit"]').click();
+  await page.getByText("Daily verified research", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-jobs.png"), fullPage: true });
+
   await page.locator('.bw-nav [data-view="settings"]').click();
   await page.getByText("第三方授权", { exact: true }).waitFor();
   await page.locator("[data-auth-new]").click();
@@ -136,6 +154,11 @@ async function ordinaryMobile(browser, baseUrl) {
   assert.ok(mobileChrome.headerTop >= mobileChrome.toolbarBottom - 1, `mobile toolbar overlaps workspace header: ${JSON.stringify(mobileChrome)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });
+  await page.locator('.bw-nav [data-view="skills"]').click();
+  await page.getByText("Runtime Capabilities", { exact: true }).waitFor();
+  await page.getByText("Web tools", { exact: true }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(artifacts, "user-mobile-runtime-capabilities.png"), fullPage: true });
   await context.close();
 }
 
