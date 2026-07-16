@@ -747,6 +747,16 @@ body.bairui-streaming #send-btn {
     display: none;
   }
 
+  .bairui-platform-tools > img {
+    display: none;
+  }
+
+  .bairui-runtime-status {
+    max-width: 78px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .bairui-platform-tools select {
     width: 124px;
   }
@@ -766,7 +776,7 @@ body.bairui-streaming #send-btn {
   #chat-messages .msg { padding: 12px 13px; }
   #input-row { margin: 7px; }
 
-  .bairui-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 54px; }
+  .bairui-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 54px; box-sizing: border-box; padding-top: 56px; }
   .bairui-workspace > main { grid-row: 1; grid-template-rows: 58px minmax(0, 1fr); }
   .bw-nav { grid-row: 2; border-top: 1px solid #253443; border-right: 0; }
   .bw-nav header { display: none; }

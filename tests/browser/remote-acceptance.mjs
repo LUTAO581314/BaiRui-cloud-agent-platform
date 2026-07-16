@@ -94,6 +94,12 @@ async function ordinaryMobile(browser, baseUrl) {
   await page.locator('.bairui-platform-tools [data-action="workspace"]').click();
   await page.locator('.bw-nav [data-view="memory"]').click();
   await page.getByText("Hermes memory mapping", { exact: true }).waitFor();
+  const mobileChrome = await page.evaluate(() => {
+    const toolbar = document.querySelector(".bairui-platform-tools").getBoundingClientRect();
+    const header = document.querySelector(".bw-header").getBoundingClientRect();
+    return { toolbarBottom: toolbar.bottom, headerTop: header.top, headerBottom: header.bottom };
+  });
+  assert.ok(mobileChrome.headerTop >= mobileChrome.toolbarBottom - 1, `mobile toolbar overlaps workspace header: ${JSON.stringify(mobileChrome)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });
   await context.close();
