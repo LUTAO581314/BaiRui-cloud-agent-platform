@@ -176,6 +176,34 @@ test("Agent workspaces isolate memory, skills, channels, hotspots and usage", as
   assert.equal((await (await fetch(`${base}/memory-notes`, { headers: { cookie: ownerCookie } })).json()).notes.length, 0);
 });
 
+test("owners invoke Agent integrations with authorization references while peers remain isolated", async (t) => {
+  const calls = [];
+  const runtimeClient = {
+    operation: async () => ({ ok: true }),
+    invokeIntegration: async (options) => {
+      calls.push(options);
+      return { request_id: "request_1", integration_id: options.integrationId, status: "completed", output: { markdown: "authorized" }, trace: { correlation_id: "trace_1" }, completed_at: new Date().toISOString() };
+    }
+  };
+  const context = await setup({ runtimeClient });
+  t.after(() => context.server.close());
+  const ownerCookie = await login(context.baseUrl, "owner@example.test");
+  const peerCookie = await login(context.baseUrl, "peer@example.test");
+  const base = `${context.baseUrl}/api/user/agents/${context.agent.id}`;
+  const stored = await fetch(`${base}/authorizations`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ service: "firecrawl", label: "Crawler", authType: "api_key", secret: "private-runtime-secret" }) });
+  const authorization = (await stored.json()).authorization;
+  const endpoint = `${base}/integrations/firecrawl/scrape`;
+  const response = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ authorizationId: authorization.id, input: { url: "https://example.test" } }) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).output.markdown, "authorized");
+  assert.equal(calls[0].principal.userId, "user_a");
+  assert.equal(calls[0].agent.id, context.agent.id);
+  assert.equal(calls[0].authorizationId, authorization.id);
+  assert.doesNotMatch(JSON.stringify(calls), /private-runtime-secret/);
+  assert.equal((await fetch(endpoint, { method: "POST", headers: { cookie: peerCookie, "content-type": "application/json" }, body: "{}" })).status, 404);
+  assert.equal((await fetch(`${base}/integrations/searxng/search`, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ authorizationId: authorization.id, input: { query: "bairui" } }) })).status, 400);
+});
+
 test("owners preview and import character cards without exposing prompts or activating Lorebook", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());

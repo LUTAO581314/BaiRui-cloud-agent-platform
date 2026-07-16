@@ -87,7 +87,9 @@ export class BairuiRuntimeClient {
     throw Object.assign(new Error("BaiRui runtime did not complete the request"), { code: result?.error?.code ?? result?.status ?? "runtime_failed", statusCode: 503 });
   }
 
-  async invokeIntegration({ integrationId, capability, input = {} }) {
+  async invokeIntegration({ integrationId, capability, input = {}, authorizationId, principal, agent }) {
+    if ((principal && !agent) || (!principal && agent)) throw new TypeError("Integration requests require both principal and Agent");
+    if (principal && agent) this.validateAgent(principal, agent);
     const requestId = randomUUID();
     return this.signedPost("/v1/integrations/requests", validateIntegrationRequestEnvelope({
       request: {
@@ -95,10 +97,11 @@ export class BairuiRuntimeClient {
         integration_id: integrationId,
         capability,
         input,
+        ...(authorizationId ? { options: { authorization_id: authorizationId } } : {}),
         timeout_ms: this.timeoutMs,
         trace: { correlation_id: requestId }
       }
-    }));
+    }), agent ? { runtime: await this.resolveRuntime(agent) } : {});
   }
 
   validateAgent(principal, agent) {

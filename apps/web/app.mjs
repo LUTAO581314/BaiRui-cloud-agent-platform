@@ -59,6 +59,11 @@ const USER_AUTHORIZATION_SERVICES = Object.freeze({
 });
 const USER_AUTHORIZATION_TYPES = new Set(["api_key", "bearer_token"]);
 const AUTHORIZATION_METADATA_KEYS = new Set(["provider", "model", "region", "projectId"]);
+const USER_INTEGRATION_CAPABILITIES = Object.freeze({
+  firecrawl: new Set(["scrape"]),
+  searxng: new Set(["search"]),
+  trendradar: new Set(["list_hotspots"])
+});
 const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const APPROVAL_CONTROL_ACTIONS = new Set(CONTROL_APPROVAL_ACTIONS);
@@ -1184,6 +1189,28 @@ export function createPlatformApp(options) {
         const [latest, bookmarkIds] = await Promise.all([repository.listLatestHotspots(principal.organizationId), repository.listAgentHotspotBookmarkIds(principal.organizationId, principal.userId, agent.id)]);
         const bookmarks = new Set(bookmarkIds);
         return json(response, 200, { ...latest, items: latest.items.map((item) => ({ ...item, bookmarked: bookmarks.has(item.id) })) });
+      }
+
+      const userIntegrationMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/integrations\/([^/]+)\/([^/]+)$/);
+      if (userIntegrationMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId, userId: principal.userId });
+        if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const agent = await ownedAgent(principal, userIntegrationMatch[1]);
+        const integrationId = decodeURIComponent(userIntegrationMatch[2]);
+        const capability = decodeURIComponent(userIntegrationMatch[3]);
+        const supported = Object.hasOwn(USER_INTEGRATION_CAPABILITIES, integrationId) && USER_INTEGRATION_CAPABILITIES[integrationId].has(capability);
+        if (!supported) return json(response, 404, { error: "integration_capability_not_supported" });
+        const body = await readJson(request);
+        const authorizationId = typeof body.authorizationId === "string" && body.authorizationId ? body.authorizationId : undefined;
+        if (authorizationId) {
+          const authorization = await repository.getAgentAuthorization(principal.organizationId, principal.userId, agent.id, authorizationId);
+          if (!authorization || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
+          if (authorization.service !== integrationId) return json(response, 400, { error: "authorization_service_mismatch" });
+        }
+        const input = body.input && typeof body.input === "object" && !Array.isArray(body.input) ? body.input : {};
+        const result = await runtimeClient.invokeIntegration({ principal, agent, integrationId, capability, input, authorizationId });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.integration.invoke", targetType: "agent", targetId: agent.id, metadata: { integrationId, capability, authorizationId: authorizationId ?? null, status: result.status ?? "unknown" } });
+        return json(response, 200, result);
       }
 
       const hotspotBookmarkMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/hotspots\/([^/]+)\/bookmark$/);

@@ -72,6 +72,8 @@ The browser addresses only an Agent owned by the authenticated user:
 /api/user/agents/{agent_id}/memory-notes
 /api/user/agents/{agent_id}/memory-sync
 /api/user/agents/{agent_id}/channels
+/api/user/agents/{agent_id}/authorizations
+/api/user/agents/{agent_id}/integrations/{integration_id}/{capability}
 /api/user/agents/{agent_id}/hotspots
 /api/user/agents/{agent_id}/usage
 ```
@@ -152,6 +154,22 @@ POST   /api/user/agents/{agent_id}/authorizations
 DELETE /api/user/agents/{agent_id}/authorizations/{authorization_id}
 ```
 
+The owner invokes an allow-listed adapter through:
+
+```text
+POST /api/user/agents/{agent_id}/integrations/{integration_id}/{capability}
+{
+  "authorizationId": "authorization reference",
+  "input": {}
+}
+```
+
+The Platform verifies user, organization, Agent ownership, integration,
+capability, authorization ownership, active status, and matching service. It
+routes the request to that Agent's Runtime and sends only
+`options.authorization_id`; it never decrypts the value into a browser-facing
+or Runtime invocation payload.
+
 An adapter inside the matching Agent Runtime resolves a stored credential with
 its independent signed machine identity:
 
@@ -164,6 +182,12 @@ Runtime credential, and matching Agent id. Resolution is audited without the
 credential body. Revocation clears the encrypted envelope, so an old reference
 cannot be resolved again. Personal model credentials additionally require the
 organization policy `user_custom_keys_allowed=true`.
+
+The Runtime validates the shared credential contract, confirms that the
+authorization service equals the selected adapter, rejects unsafe endpoint
+overrides, and keeps the resolved value only in a short-lived process cache.
+Firecrawl and SearXNG consume the credential server-side; integration results,
+telemetry, and errors must not contain it.
 
 ## 6. Control plane and Server Agent
 
