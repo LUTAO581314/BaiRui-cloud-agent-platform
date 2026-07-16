@@ -29,15 +29,19 @@ function withinRoot(candidate, root) {
 function transformEntryHtml(source) {
   return source
     .replace(/<title>[\s\S]*?<\/title>/i, "<title>bairui-agent · Cognitive Surface</title>")
+    .replace(
+      "</head>",
+      `<link rel="icon" type="image/png" href="/assets/bairui-agent-icon.png">
+<link rel="stylesheet" data-bairui-overlay href="/assets/bairui-bailongma.css">
+</head>`
+    )
     .replace(/\s*<link rel="preconnect"[^>]*>/gi, "")
     .replace(/\s*<link href="https:\/\/fonts\.googleapis\.com[^>]*>/gi, "")
     .replace("./src/ui/brain-ui/styles.css", `${PREFIX}src/ui/brain-ui/styles.css`)
     .replace("/vendor/d3/d3.min.js", `${PREFIX}vendor/d3/d3.min.js`)
     .replace(
       '<script type="module" src="./src/ui/brain-ui/app.js"></script>',
-      `<link rel="icon" type="image/png" href="/assets/bairui-agent-icon.png">
-<link rel="stylesheet" href="/assets/bairui-bailongma.css">
-<script src="/assets/bairui-bailongma.js" defer></script>
+      `<script src="/assets/bairui-bailongma.js" defer></script>
 <script src="/assets/bairui-workspace.js" defer></script>
 <script type="module" src="${PREFIX}src/ui/brain-ui/app.js"></script>`
     );

@@ -35,14 +35,14 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.waitForFunction(() => document.querySelectorAll("#graph circle").length >= 3);
   await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
   await page.locator(".bairui-chat-header").waitFor({ state: "visible" });
+  assert.equal(await page.locator('head link[data-bairui-overlay][href="/assets/bairui-bailongma.css"]').count(), 1, "BaiRui overlay link is not in the document head");
+  assert.equal((await page.request.get(`${baseUrl}/assets/bairui-bailongma.css`)).status(), 200, "BaiRui overlay stylesheet request failed");
   assert.equal(await page.locator('.bairui-attach-button[data-action="attach-image"]').count(), 1);
   const chatGeometry = await page.locator("#chat-area").evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    const overlay = [...document.styleSheets].find((sheet) => sheet.href?.endsWith("/assets/bairui-bailongma.css"));
     const style = getComputedStyle(element);
-    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, position: style.position, styleHeight: style.height, overlayLoaded: Boolean(overlay) };
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, position: style.position, styleHeight: style.height };
   });
-  assert.equal(chatGeometry.overlayLoaded, true, "BaiRui BaiLongma overlay stylesheet is not loaded");
   assert.ok(chatGeometry.top < 100 && chatGeometry.bottom > chatGeometry.viewport - 40 && chatGeometry.height > chatGeometry.viewport * 0.75, `chat column is not viewport anchored: ${JSON.stringify(chatGeometry)}`);
   assert.equal(await page.locator('a[href="/admin"]').count(), 0, "ordinary users must not receive an admin link");
   assert.equal((await page.request.get(`${baseUrl}/api/admin/overview`)).status(), 403);
