@@ -461,6 +461,21 @@
     const messageInput = document.querySelector("#msg-input");
     if (!chatArea || !inputRow || !messageInput || chatArea.querySelector(".bairui-chat-header")) return;
 
+    const applyViewportLayout = () => {
+      const mobile = window.matchMedia("(max-width: 900px)").matches;
+      const top = mobile ? 62 : 72;
+      const bottom = mobile ? 10 : 18;
+      Object.assign(chatArea.style, {
+        position: "fixed",
+        top: `${top}px`,
+        bottom: `${bottom}px`,
+        height: `calc(100dvh - ${top + bottom}px)`,
+        maxHeight: `calc(100dvh - ${top + bottom}px)`
+      });
+    };
+    applyViewportLayout();
+    window.addEventListener("resize", applyViewportLayout, { passive: true });
+
     const header = document.createElement("header");
     header.className = "bairui-chat-header";
     const identity = document.createElement("div");
@@ -637,7 +652,8 @@
       location.href = "/login";
     });
     tools.appendChild(logout);
-    document.documentElement.appendChild(tools);
+    Object.assign(tools.style, { position: "fixed", zIndex: "2147483000", pointerEvents: "auto" });
+    document.body.appendChild(tools);
     mountHermesChatSurface(agent);
     mountOperationalSurface(agent);
 

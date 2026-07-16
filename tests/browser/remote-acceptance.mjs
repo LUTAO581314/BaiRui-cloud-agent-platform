@@ -38,8 +38,11 @@ async function ordinaryDesktop(browser, baseUrl) {
   assert.equal(await page.locator('.bairui-attach-button[data-action="attach-image"]').count(), 1);
   const chatGeometry = await page.locator("#chat-area").evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight };
+    const overlay = [...document.styleSheets].find((sheet) => sheet.href?.endsWith("/assets/bairui-bailongma.css"));
+    const style = getComputedStyle(element);
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, position: style.position, styleHeight: style.height, overlayLoaded: Boolean(overlay) };
   });
+  assert.equal(chatGeometry.overlayLoaded, true, "BaiRui BaiLongma overlay stylesheet is not loaded");
   assert.ok(chatGeometry.top < 100 && chatGeometry.bottom > chatGeometry.viewport - 40 && chatGeometry.height > chatGeometry.viewport * 0.75, `chat column is not viewport anchored: ${JSON.stringify(chatGeometry)}`);
   assert.equal(await page.locator('a[href="/admin"]').count(), 0, "ordinary users must not receive an admin link");
   assert.equal((await page.request.get(`${baseUrl}/api/admin/overview`)).status(), 403);
