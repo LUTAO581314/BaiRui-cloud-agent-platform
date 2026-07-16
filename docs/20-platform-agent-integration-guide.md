@@ -42,6 +42,27 @@ There is no browser-to-Hermes connection. There is no administrator credential
 that can call the Runtime data plane. The Server Agent opens outbound HTTPS
 requests; the customer host does not expose a public management shell.
 
+### 2.1 BaiLongma host boundary
+
+The BaiLongma submodule is pinned to a reviewed commit. The bailongma:build
+command copies its UI to build/bailongma-ui, applies deterministic patches,
+and writes .bairui-build.json with hashes for every patched entry. Platform
+startup verifies the manifest and serves only that build artifact.
+
+Patched BaiLongma modules call the immutable browser-owned
+window.BairuiHostAdapter for sendMessage, conversations, agentProfile,
+memories, and openEvents. The adapter maps those calls to Agent-scoped
+Platform routes. It must not replace global window.fetch or
+window.EventSource, and the HTTP server must not transform JavaScript per
+request.
+
+The main chat consumes native Hermes SSE events. run.started establishes the
+run identity, approval.request opens a text-safe user decision dialog, and
+terminal events clear local run state. Stop requests call the Agent-scoped
+Platform runs/{run_id}/stop route before aborting the browser stream. A stop
+clicked before run.started is retained and submitted as soon as Hermes
+provides the run id.
+
 ## 3. Identities and credentials
 
 | Identity | Scope | Authentication | Storage |

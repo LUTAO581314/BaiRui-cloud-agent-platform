@@ -147,6 +147,34 @@
 .bairui-card-notice.tone-success { border-color: #3b8464; }
 .bairui-card-notice.tone-error { border-color: #a84e47; }
 
+.bairui-approval-dialog {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(620px, calc(100vw - 28px));
+  max-height: calc(100dvh - 32px);
+  margin: 0;
+  border: 1px solid #9b7737;
+  border-radius: 8px;
+  background: #111a23;
+  color: #eef5fb;
+  padding: 0;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.68);
+}
+
+.bairui-approval-dialog::backdrop { background: rgba(3, 7, 12, 0.86); }
+.bairui-approval-dialog form { display: grid; max-height: calc(100dvh - 32px); grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.bairui-approval-dialog header { padding: 18px 20px 14px; border-bottom: 1px solid #34424e; }
+.bairui-approval-dialog h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+.bairui-approval-dialog header p { margin: 8px 0 0; color: #aebdca; line-height: 1.6; overflow-wrap: anywhere; }
+.bairui-approval-dialog pre { min-height: 76px; max-height: 34vh; margin: 0; overflow: auto; border-bottom: 1px solid #34424e; background: #071018; color: #d9e5ed; padding: 16px 20px; font: 12px/1.65 "JetBrains Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bairui-approval-status { min-height: 20px; margin: 0; color: #efc36b; padding: 10px 20px 0; font-size: 12px; }
+.bairui-approval-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; }
+.bairui-approval-dialog button { min-height: 36px; border: 1px solid #405366; border-radius: 5px; background: #172633; color: #dbe6ee; padding: 0 13px; }
+.bairui-approval-dialog button.primary { border-color: #4a9fff; background: #267bd4; color: #fff; }
+.bairui-approval-dialog button.danger { border-color: #b34a42; background: #8d302a; color: #fff; }
+.bairui-approval-dialog button:disabled { cursor: not-allowed; opacity: 0.45; }
+
 .bairui-chat-header {
   flex: 0 0 auto;
   display: flex;

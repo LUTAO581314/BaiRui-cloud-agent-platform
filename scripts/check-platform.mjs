@@ -45,6 +45,8 @@ const required = [
   "packages/server-protocol/runtime-client.mjs",
   "packages/bailongma-ui/brain-app-transform.mjs",
   "packages/bailongma-ui/app-shell-transform.mjs",
+  "packages/bailongma-ui/host-adapter-transform.mjs",
+  "packages/bailongma-ui/build.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
@@ -63,6 +65,9 @@ const required = [
   "tests/memory-projection-worker.test.mjs",
   "tests/browser/fixture-server.mjs",
   "tests/browser/remote-acceptance.mjs",
+  "tests/helpers/bailongma-ui.mjs",
+  "scripts/build-bailongma-ui.mjs",
+  "scripts/start-platform-dev.mjs",
   "server-agent/index.mjs",
   "server-agent/control-client.mjs",
   "server-agent/daemon.mjs",
@@ -97,6 +102,8 @@ if (fs.existsSync(path.join(root, "docs/06-server-agent-p0.md"))) failures.push(
 if (fs.existsSync(path.join(root, "apps/web/public/user.js"))) failures.push("Legacy handcrafted user frontend must be removed");
 const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 if (packageDocument.scripts?.["test:browser:remote"] !== "node tests/browser/remote-acceptance.mjs") failures.push("Missing remote browser acceptance package script");
+if (packageDocument.scripts?.["bailongma:build"] !== "node scripts/build-bailongma-ui.mjs") failures.push("Missing deterministic BaiLongma build script");
+if (packageDocument.scripts?.["platform:dev"] !== "node scripts/start-platform-dev.mjs") failures.push("Platform development must build BaiLongma before serving it");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
 for (const evidence of ["browser-acceptance:", "playwright install --with-deps chromium", "npm run test:browser:remote", "actions/upload-artifact@v4"]) {
   if (!workflow.includes(evidence)) failures.push(`Missing remote browser workflow evidence: ${evidence}`);
@@ -121,6 +128,19 @@ for (const evidence of ["assistant.delta", "assistant.completed", "sessions/${en
   if (!overlay.includes(evidence)) failures.push(`Missing BaiLongma native Hermes adapter evidence: ${evidence}`);
 }
 if (overlay.includes("memory-sync")) failures.push("Browser chat adapter must not own reliable memory synchronization");
+for (const evidence of ["approval.request", "BairuiHostAdapter", "Object.defineProperty", "activeRunId", "/stop"]) {
+  if (!overlay.includes(evidence)) failures.push("Missing BaiLongma Runtime control evidence: " + evidence);
+}
+for (const forbidden of ["window.fetch =", "window.EventSource ="]) {
+  if (overlay.includes(forbidden)) failures.push("BaiLongma adapter must not replace a global browser transport: " + forbidden);
+}
+const bailongmaServer = fs.readFileSync(path.join(root, "apps/web/server.mjs"), "utf8");
+if (!bailongmaServer.includes('path.join(repoRoot, "build", "bailongma-ui")')) failures.push("Runtime must serve the prebuilt BaiLongma artifact");
+if (bailongmaServer.includes('path.join(repoRoot, "upstreams", "bailongma")')) failures.push("Runtime must not transform or serve the BaiLongma source tree directly");
+const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/build.mjs"), "utf8");
+for (const evidence of [".bairui-build.json", "transformBailongmaHostApp", "transformBailongmaHostChat", "transformBailongmaHostVoiceWake", "BUILD_INTEGRITY_FILES"]) {
+  if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
+}
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {

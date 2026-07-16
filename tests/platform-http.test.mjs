@@ -9,13 +9,11 @@ import { ROLES } from "../packages/auth/authorization.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
 import { signedMachinePost, sendCommandReceipt } from "../server-agent/control-client.mjs";
 import { signMachineRequest } from "../packages/security/machine-request.mjs";
-import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
 
 const sessionSecret = "http-test-session-secret-that-is-longer-than-32-characters";
 const providerEncryptionKey = "http-test-provider-encryption-key-longer-than-32-characters";
-const bailongmaUi = createBailongmaUi({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma") });
+const bailongmaUi = createTestBailongmaUi();
 
 async function setup(options = {}) {
   const repository = new MemoryPlatformRepository();
@@ -89,7 +87,7 @@ test("anonymous and ordinary users cannot access administrator data", async (t) 
   const workspacePage = await fetch(`${context.baseUrl}/app`, { headers: { cookie } });
   assert.equal(workspacePage.status, 200);
   const workspaceHtml = await workspacePage.text();
-  assert.match(workspaceHtml, /bairui-agent · Cognitive Surface/);
+  assert.match(workspaceHtml, /bairui-agent \| Cognitive Surface/);
   assert.match(workspaceHtml, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
   assert.match(workspaceHtml, /\/assets\/bairui-workspace\.js/);
   assert.doesNotMatch(workspaceHtml, /\/assets\/user\.js/);

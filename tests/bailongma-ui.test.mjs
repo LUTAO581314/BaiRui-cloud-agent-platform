@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -7,13 +8,15 @@ import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 import { toBailongmaHotspots, toBailongmaMemories } from "../packages/bailongma-ui/compatibility.mjs";
 import { transformBailongmaBrainApp } from "../packages/bailongma-ui/brain-app-transform.mjs";
 import { transformBailongmaAppShell } from "../packages/bailongma-ui/app-shell-transform.mjs";
+import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostVoiceWake } from "../packages/bailongma-ui/host-adapter-transform.mjs";
+import { bailongmaBuildRoot, bailongmaSourceRoot, createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma");
+const root = bailongmaSourceRoot;
 
 test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
-  const ui = createBailongmaUi({ root });
+  const ui = createTestBailongmaUi();
   const html = ui.render();
-  assert.match(html, /bairui-agent · Cognitive Surface/);
+  assert.match(html, /bairui-agent \| Cognitive Surface/);
   assert.match(html, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
   assert.match(html, /\/assets\/bairui-workspace\.js/);
@@ -23,6 +26,33 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
+});
+
+test("serves only a verified build-time BaiLongma patch artifact", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(bailongmaBuildRoot, ".bairui-build.json"), "utf8"));
+  assert.equal(manifest.schemaVersion, "1.0");
+  assert.equal(manifest.source, "xiaoyuanda666-ship-it/BaiLongma");
+  assert.match(manifest.files["brain-ui.html"], /^[a-f0-9]{64}$/);
+  assert.match(manifest.files["src/ui/brain-ui/chat.js"], /^[a-f0-9]{64}$/);
+
+  const tampered = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-ui-tampered-"));
+  try {
+    fs.cpSync(bailongmaBuildRoot, tampered, { recursive: true });
+    fs.appendFileSync(path.join(tampered, "src", "ui", "brain-ui", "chat.js"), "\n// tampered\n");
+    assert.throws(() => createBailongmaUi({ root: tampered }), /integrity check failed/);
+  } finally {
+    fs.rmSync(tampered, { recursive: true, force: true });
+  }
+});
+
+test("compiles BaiLongma network calls to the explicit immutable host adapter", () => {
+  const app = transformBailongmaHostApp(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "app.js"), "utf8"));
+  const chat = transformBailongmaHostChat(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "chat.js"), "utf8"));
+  const wake = transformBailongmaHostVoiceWake(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "voice-wake.js"), "utf8"));
+  for (const method of ["agentProfile", "memories", "openEvents"]) assert.match(app, new RegExp("hostAdapter\\." + method));
+  for (const method of ["conversations", "sendMessage"]) assert.match(chat, new RegExp("hostAdapter\\." + method));
+  assert.match(wake, /BairuiHostAdapter\?\.openEvents/);
+  assert.throws(() => transformBailongmaHostChat("export const unrelated = true;"), /anchor/);
 });
 
 test("browser adapter consumes native Hermes session SSE and does not use the legacy event hub", () => {
@@ -39,6 +69,11 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
   assert.match(adapter, /runtime_offline/);
   assert.match(adapter, /\/api\/user\/bootstrap/);
   assert.doesNotMatch(adapter, /memory-sync/);
+  assert.match(adapter, /Object\.defineProperty\(window, "BairuiHostAdapter"/);
+  assert.match(adapter, /approval\.request/);
+  assert.match(adapter, /runs\/\$\{encodeURIComponent\(runId\)\}\/stop/);
+  assert.doesNotMatch(adapter, /window\.fetch\s*=/);
+  assert.doesNotMatch(adapter, /window\.EventSource\s*=/);
 });
 
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {

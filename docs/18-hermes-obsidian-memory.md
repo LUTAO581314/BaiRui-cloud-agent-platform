@@ -60,7 +60,11 @@ The administrator overview receives only queued and dead job counts within
 its authorized organization scope. It does not receive note ids, titles,
 Markdown, projection entries, or Hermes memory content.
 
-The BaiLongma upstream remains unmodified. The UI adapter transforms the served
-Brain graph module and fails closed when its source anchors change. Obsidian
-wikilinks and Agent-root relationships are rendered first; visual fallback
-links are used only when no semantic relationship exists.
+The BaiLongma upstream remains unmodified and pinned as a Git submodule. A
+deterministic build step copies the UI into a separate artifact, applies the
+Brain graph and explicit host-adapter patches, and records hashes in
+.bairui-build.json. The runtime verifies those hashes and serves only the
+artifact; it never rewrites source per request. The build fails closed when an
+upstream anchor changes. Obsidian wikilinks and Agent-root relationships are
+rendered first; visual fallback links are used only when no semantic
+relationship exists.
