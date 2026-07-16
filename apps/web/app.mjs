@@ -1,6 +1,12 @@
 import { createServer } from "node:http";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
+  CONTROL_APPROVAL_ACTIONS,
+  validateCredentialResolution,
+  validateResourceReport,
+  validateRuntimeHeartbeat
+} from "@bairui/contracts";
+import {
   PERMISSIONS,
   ROLES,
   AuthorizationError,
@@ -55,7 +61,7 @@ const USER_AUTHORIZATION_TYPES = new Set(["api_key", "bearer_token"]);
 const AUTHORIZATION_METADATA_KEYS = new Set(["provider", "model", "region", "projectId"]);
 const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
-const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
+const APPROVAL_CONTROL_ACTIONS = new Set(CONTROL_APPROVAL_ACTIONS);
 const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
 const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const AGENT_RUN_STATUSES = new Set(["started", "queued", "running", "waiting_for_approval", "stopping", "completed", "failed", "cancelled", "unknown"]);
@@ -371,6 +377,7 @@ export function createPlatformApp(options) {
   const runtimeRouteHosts = new Set(["host.docker.internal", "127.0.0.1", "localhost", ...(options.runtimeRouteHosts ?? [])]);
   const runtimeStaleAfterMs = Math.max(30_000, Number(options.runtimeStaleAfterMs) || 120_000);
   const resourceStaleAfterMs = Math.max(30_000, Number(options.resourceStaleAfterMs) || 120_000);
+  const readiness = options.readiness ?? (() => repository.readiness?.({ requiredMigration: options.requiredMigration }) ?? Promise.resolve({ ready: false, status: "readiness_unavailable" }));
   async function principalFor(request) {
     const token = parseCookies(request.headers.cookie)[SESSION_COOKIE];
     const session = verifySessionToken(token, sessionSecret);
@@ -618,7 +625,10 @@ export function createPlatformApp(options) {
       }
 
       if (method === "GET" && url.pathname === "/health") return json(response, 200, { status: "ok" });
-      if (method === "GET" && url.pathname === "/ready") return json(response, 200, { status: "ready" });
+      if (method === "GET" && url.pathname === "/ready") {
+        const report = await readiness();
+        return json(response, report.ready ? 200 : 503, report);
+      }
       if (method === "GET" && url.pathname === "/assets/styles.css") {
         response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.styles);
@@ -1621,7 +1631,8 @@ export function createPlatformApp(options) {
         const credential = JSON.parse(providerVault.open(authorization.credentialEnvelope));
         await repository.markAgentAuthorizationUsed(authorization.id);
         await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: null, action: "agent.authorization.resolve", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, runtimeCredentialId: machine.credential.id, service: authorization.service } });
-        return json(response, 200, { authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
+        const resolved = validateCredentialResolution({ authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
+        return json(response, 200, resolved);
       }
       if (method === "POST" && url.pathname === "/api/internal/control-plane/snapshots") {
         const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
@@ -1643,8 +1654,9 @@ export function createPlatformApp(options) {
         const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
         const machine = await authenticateMachine(request, url, signed.raw, "agent-runtime");
         if ((!machine || machine.machineId !== signed.body.agentId) && !constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
-        const body = signed.body;
-        if (!body.organizationId || !body.userId || !body.agentId || !body.runtimeId || !Number.isSafeInteger(body.sequence) || body.sequence < 1 || !COMPONENT_STATUSES.has(body.status) || !Number.isFinite(Date.parse(body.observedAt))) return json(response, 400, { error: "invalid_agent_heartbeat" });
+        let body;
+        try { body = validateRuntimeHeartbeat(signed.body); }
+        catch { return json(response, 400, { error: "invalid_agent_heartbeat" }); }
         const [agent, runtime] = await Promise.all([repository.getAgent(body.agentId), repository.getAgentRuntimeByAgent(body.agentId)]);
         if (!agent || !runtime || runtime.id !== body.runtimeId || agent.organizationId !== body.organizationId || agent.ownerUserId !== body.userId) return json(response, 404, { error: "agent_runtime_not_found" });
         const components = Array.isArray(body.components) ? body.components.slice(0, 100).map((component) => ({
@@ -1680,9 +1692,10 @@ export function createPlatformApp(options) {
       if (method === "POST" && url.pathname === "/api/internal/control-plane/resources") {
         const signed = await readSignedJson(request);
         const machine = await authenticateMachine(request, url, signed.raw, "server");
-        const body = signed.body;
-        if (!machine || body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
-        if (!Array.isArray(body.samples) || body.samples.length < 1 || body.samples.length > 500) return json(response, 400, { error: "invalid_resource_samples" });
+        if (!machine || signed.body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
+        let body;
+        try { body = validateResourceReport(signed.body); }
+        catch { return json(response, 400, { error: "invalid_resource_samples" }); }
         const samples = body.samples.map(resourceSample);
         if (samples.some((sample) => !sample)) return json(response, 400, { error: "invalid_resource_sample" });
         const saved = await repository.saveAgentResourceSamples({ serverId: machine.machineId, samples });

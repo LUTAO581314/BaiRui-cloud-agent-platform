@@ -56,6 +56,10 @@ async function makeAgentReady(context, { observedAt = new Date().toISOString(), 
 test("public pages expose the bairui-agent brand assets", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
+  assert.equal((await fetch(`${context.baseUrl}/health`)).status, 200);
+  const ready = await fetch(`${context.baseUrl}/ready`);
+  assert.equal(ready.status, 200);
+  assert.equal((await ready.json()).backend, "memory");
   const loginPage = await fetch(`${context.baseUrl}/login`);
   assert.equal(loginPage.status, 200);
   assert.match(await loginPage.text(), /bairui-agent/);
@@ -66,6 +70,15 @@ test("public pages expose the bairui-agent brand assets", async (t) => {
   const icon = await fetch(`${context.baseUrl}/assets/bairui-agent-icon.png`);
   assert.equal(icon.status, 200);
   assert.equal(icon.headers.get("content-type"), "image/png");
+});
+
+test("readiness fails closed while liveness remains available", async (t) => {
+  const context = await setup({ readiness: async () => ({ ready: false, status: "database_unavailable", backend: "postgresql" }) });
+  t.after(() => context.server.close());
+  assert.equal((await fetch(`${context.baseUrl}/health`)).status, 200);
+  const ready = await fetch(`${context.baseUrl}/ready`);
+  assert.equal(ready.status, 503);
+  assert.equal((await ready.json()).status, "database_unavailable");
 });
 
 test("anonymous and ordinary users cannot access administrator data", async (t) => {
@@ -138,11 +151,16 @@ test("Agent heartbeat updates the administrator fleet without accepting conversa
   const heartbeat = {
     organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id,
     sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0",
-    observedAt: "2026-07-16T00:00:00.000Z", activeRuns: 2, queueDepth: 1,
-    components: [{ layer: "core-runtime", moduleId: "hermes", status: "healthy", version: "hermes-1", metrics: { latency_ms: 12 }, prompt: "must-not-be-stored" }],
-    events: [{ layer: "core-runtime", componentId: "hermes", eventType: "runtime.health", severity: "info", metrics: { active_runs: 2 }, content: "must-not-be-stored" }],
-    usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "hermes", inputTokens: 10, outputTokens: 20, runCount: 1, failedRunCount: 0, latencySumMs: 12 }
+    observedAt: "2026-07-16T00:00:00.000Z", activeRuns: 2, queueDepth: 1, failedRuns: 0,
+    components: [{ layer: "core-runtime", moduleId: "hermes", status: "healthy", version: "hermes-1", capabilities: ["runs"], metrics: { latency_ms: 12 }, observedAt: "2026-07-16T00:00:00.000Z", prompt: "must-not-be-stored" }],
+    events: [{ layer: "core-runtime", componentId: "hermes", eventType: "runtime.health", severity: "info", metrics: { active_runs: 2 }, occurredAt: "2026-07-16T00:00:00.000Z", content: "must-not-be-stored" }],
+    usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "hermes", inputTokens: 10, outputTokens: 20, estimatedCostUsd: 0, runCount: 1, failedRunCount: 0, latencySumMs: 12 }
   };
+  const rejected = await fetch(`${context.baseUrl}/api/internal/control-plane/heartbeats`, { method: "POST", headers: { authorization: "Bearer agent-ingest-test-token", "content-type": "application/json" }, body: JSON.stringify(heartbeat) });
+  assert.equal(rejected.status, 400);
+  delete heartbeat.components[0].prompt;
+  delete heartbeat.events[0].content;
+  heartbeat.components.push({ ...heartbeat.components[0], moduleId: "bairui.runtime-boundary", version: "0.3.0", metrics: {} });
   const accepted = await fetch(`${context.baseUrl}/api/internal/control-plane/heartbeats`, { method: "POST", headers: { authorization: "Bearer agent-ingest-test-token", "content-type": "application/json" }, body: JSON.stringify(heartbeat) });
   assert.equal(accepted.status, 202);
   const rootCookie = await login(context.baseUrl, "root@example.test");
@@ -277,7 +295,9 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.equal(route.runtime.status, "starting");
   assert.doesNotMatch(JSON.stringify(route.secretEnvelope), /provider-secret-value/);
 
-  const heartbeat = { organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0", observedAt: new Date().toISOString(), components: [] };
+  const heartbeatObservedAt = new Date().toISOString();
+  const heartbeatComponent = { layer: "core-runtime", moduleId: "hermes", status: "healthy", version: "hermes-1", capabilities: ["runs"], metrics: {}, observedAt: heartbeatObservedAt };
+  const heartbeat = { organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0", observedAt: heartbeatObservedAt, queueDepth: 0, activeRuns: 0, failedRuns: 0, components: [heartbeatComponent, { ...heartbeatComponent, moduleId: "bairui.runtime-boundary", version: "0.3.0" }], events: [] };
   const heartbeatResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: "/api/internal/control-plane/heartbeats", payload: heartbeat });
   assert.equal(heartbeatResponse.status, 202);
   assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "ready");
@@ -294,7 +314,9 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const wrongMachine = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: resolvePath, payload: {} });
   assert.equal(wrongMachine.status, 401);
 
-  const resource = { agentId: context.agent.id, runtimeId: context.runtime.id, deploymentId: command.deployment_id, sequence: 10, status: "running", cpuPercent: 5.3, memoryUsedBytes: 201326592, memoryLimitBytes: 2147483648, agentStorageUsedBytes: 10485760, hostStorageUsedBytes: 53687091200, hostStorageLimitBytes: 107374182400, osType: "linux", architecture: "amd64", operatingSystem: "Test Linux", dockerVersion: "27.1.0", cpuCount: 8, startedAt: "2026-07-16T06:00:00.000Z", uptimeSeconds: 3600, observedAt: "2026-07-16T07:00:00.000Z", prompt: "must-not-be-stored", containers: [{ role: "hermes", status: "running", containerId: "a".repeat(64), containerName: "bairui-hermes-a", imageRef: "hermes:test", version: "1.2.3", cpuPercent: 3.1, memoryUsedBytes: 134217728, memoryLimitBytes: 2147483648, writableBytes: 1024, startedAt: "2026-07-16T06:00:00.000Z", secret: "must-not-be-stored" }, { role: "runtime-boundary", status: "running", containerId: "b".repeat(64), containerName: "bairui-runtime-a", imageRef: "runtime:test", version: "0.4.0", cpuPercent: 2.2, memoryUsedBytes: 67108864, memoryLimitBytes: 2147483648, writableBytes: 2048, startedAt: "2026-07-16T06:01:00.000Z" }] };
+  const resource = { agentId: context.agent.id, runtimeId: context.runtime.id, deploymentId: command.deployment_id, sequence: 10, status: "running", cpuPercent: 5.3, memoryUsedBytes: 201326592, memoryLimitBytes: 2147483648, agentStorageUsedBytes: 10485760, hostStorageUsedBytes: 53687091200, hostStorageLimitBytes: 107374182400, osType: "linux", architecture: "amd64", operatingSystem: "Test Linux", dockerVersion: "27.1.0", cpuCount: 8, startedAt: "2026-07-16T06:00:00.000Z", uptimeSeconds: 3600, observedAt: "2026-07-16T07:00:00.000Z", containers: [{ role: "hermes", status: "running", containerId: "a".repeat(64), containerName: "bairui-hermes-a", imageRef: "hermes:test", version: "1.2.3", cpuPercent: 3.1, memoryUsedBytes: 134217728, memoryLimitBytes: 2147483648, writableBytes: 1024, startedAt: "2026-07-16T06:00:00.000Z" }, { role: "runtime-boundary", status: "running", containerId: "b".repeat(64), containerName: "bairui-runtime-a", imageRef: "runtime:test", version: "0.4.0", cpuPercent: 2.2, memoryUsedBytes: 67108864, memoryLimitBytes: 2147483648, writableBytes: 2048, startedAt: "2026-07-16T06:01:00.000Z" }] };
+  const taintedResource = { ...resource, prompt: "must-not-be-stored", containers: [{ ...resource.containers[0], secret: "must-not-be-stored" }, resource.containers[1]] };
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [taintedResource] } })).status, 400);
   const resourceResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [resource] } });
   assert.equal(resourceResponse.status, 202);
   const fleet = await (await fetch(`${context.baseUrl}/api/admin/agents`, { headers: { cookie: rootCookie } })).json();

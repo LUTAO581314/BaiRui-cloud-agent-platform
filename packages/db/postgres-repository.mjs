@@ -51,6 +51,18 @@ export class PostgresPlatformRepository {
 
   async close() { await this.pool.end(); }
 
+  async readiness(options = {}) {
+    try {
+      await this.pool.query("SELECT 1");
+      if (!options.requiredMigration) return { ready: true, status: "ready", backend: "postgresql", migration: null };
+      const { rows } = await this.pool.query("SELECT name FROM schema_migrations WHERE name=$1", [options.requiredMigration]);
+      const ready = rows[0]?.name === options.requiredMigration;
+      return { ready, status: ready ? "ready" : "migration_pending", backend: "postgresql", migration: rows[0]?.name ?? null, requiredMigration: options.requiredMigration };
+    } catch {
+      return { ready: false, status: "database_unavailable", backend: "postgresql", migration: null, requiredMigration: options.requiredMigration ?? null };
+    }
+  }
+
   async createOrganization(input) {
     const id = input.id ?? randomUUID();
     const { rows } = await this.pool.query("INSERT INTO organizations (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING *", [id, input.name]);

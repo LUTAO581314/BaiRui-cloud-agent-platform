@@ -181,7 +181,8 @@ Machine requests bind method, path, timestamp, nonce, and SHA-256 body hash.
 The platform persists nonces and rejects replay, clock skew, revoked identity,
 wrong machine ownership, invalid state transitions, and duplicate sequence.
 
-The Control Plane action allowlist is defined in
+The Control Plane action allowlist is defined in the pinned
+`@bairui/contracts` package and re-exported by
 `packages/server-protocol/control-plane.mjs`. It contains deployment, probe,
 contract test, configuration, backup, release, restart, and credential actions.
 It must never contain prompt, conversation, task, model, tool, skill, memory,

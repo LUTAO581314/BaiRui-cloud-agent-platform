@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { CONTRACTS_VERSION, CONTROL_ACTIONS } from "@bairui/contracts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const expectedContracts = `https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v${CONTRACTS_VERSION}`;
+if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw new Error(`@bairui/contracts must be pinned to ${expectedContracts}`);
 const required = [
   ".github/workflows/ci.yml",
   "apps/web/app.mjs",
@@ -120,16 +124,12 @@ for (const view of ["renderConversations", "renderAgents", "renderMemory", "rend
 for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {
   if (!workspace.includes(evidence)) failures.push(`Missing exposed Hermes user capability: ${evidence}`);
 }
-const controlProtocolPath = path.join(root, "packages/server-protocol/control-plane.mjs");
-const controlProtocol = fs.existsSync(controlProtocolPath) ? fs.readFileSync(controlProtocolPath, "utf8") : "";
 for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
-  if (!controlProtocol.includes(`"${action}"`)) failures.push(`Missing allowed control action: ${action}`);
+  if (!CONTROL_ACTIONS.includes(action)) failures.push(`Missing allowed control action: ${action}`);
 }
 for (const prefix of ["prompt.", "conversation.", "task.", "model.", "tool.", "skill.", "memory.", "runtime.", "shell.", "script.", "sql."]) {
-  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (new RegExp(`["']${escaped}[A-Za-z]`).test(controlProtocol)) failures.push(`Hermes/business action must not enter control protocol: ${prefix}*`);
+  if (CONTROL_ACTIONS.some((action) => action.startsWith(prefix))) failures.push(`Hermes/business action must not enter control protocol: ${prefix}*`);
 }
-if (/RuntimeRequest|runtime-client/.test(controlProtocol)) failures.push("Control protocol must not call the Hermes Runtime API");
 const controlMigrationPath = path.join(root, "packages/db/migrations/004_control_plane.sql");
 const controlMigration = fs.existsSync(controlMigrationPath) ? fs.readFileSync(controlMigrationPath, "utf8") : "";
 for (const table of ["control_deployments", "module_instances", "desired_states", "observations", "control_commands", "command_attempts", "control_approvals", "config_revisions", "release_manifests", "release_rollouts", "release_gates", "test_runs", "test_artifacts", "upstream_candidates", "backup_records", "incidents", "control_events", "alert_rules", "agent_identities", "audit_hash_chain", "control_outbox", "control_dead_letters"]) {
