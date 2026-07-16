@@ -71,8 +71,13 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.locator("#msg-input").fill("Reply from the Hermes remote fixture");
   const sendGeometry = await page.locator("#send-btn").evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    return { top: rect.top, bottom: rect.bottom, viewport: innerHeight };
+    const area = document.querySelector("#chat-area");
+    const areaRect = area.getBoundingClientRect();
+    const rowRect = document.querySelector("#input-row").getBoundingClientRect();
+    const style = getComputedStyle(area);
+    return { top: rect.top, bottom: rect.bottom, viewport: innerHeight, rowTop: rowRect.top, rowBottom: rowRect.bottom, areaTop: areaRect.top, areaBottom: areaRect.bottom, areaHeight: areaRect.height, display: style.display, gridTemplateRows: style.gridTemplateRows };
   });
+  process.stdout.write(`Desktop composer geometry: ${JSON.stringify(sendGeometry)}\n`);
   assert.ok(sendGeometry.top >= 0 && sendGeometry.bottom <= sendGeometry.viewport, `send button is outside viewport: ${JSON.stringify(sendGeometry)}`);
   await page.locator("#send-btn").click();
   await page.getByText("Remote acceptance reply", { exact: false }).waitFor({ timeout: 15_000 });

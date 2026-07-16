@@ -470,7 +470,11 @@
         top: `${top}px`,
         bottom: "auto",
         height: `calc(100dvh - ${top + bottom}px)`,
-        maxHeight: `calc(100dvh - ${top + bottom}px)`
+        maxHeight: `calc(100dvh - ${top + bottom}px)`,
+        boxSizing: "border-box",
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr) auto auto",
+        overflow: "hidden"
       });
     };
     applyViewportLayout();
@@ -493,6 +497,14 @@
     live.textContent = "Session";
     header.append(identity, live);
     chatArea.prepend(header);
+
+    const history = chatArea.querySelector("#chat-history");
+    const messages = chatArea.querySelector("#chat-messages");
+    const attachments = chatArea.querySelector("#paste-attachments");
+    if (history) Object.assign(history.style, { gridRow: "2", width: "100%", height: "100%", minHeight: "0", maxHeight: "none", overflow: "hidden" });
+    if (messages) Object.assign(messages.style, { width: "100%", height: "100%", minHeight: "0", maxHeight: "none", overflowY: "auto" });
+    if (attachments) attachments.style.gridRow = "3";
+    inputRow.style.gridRow = "4";
 
     const picker = document.createElement("input");
     picker.type = "file";
