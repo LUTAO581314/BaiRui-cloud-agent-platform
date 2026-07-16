@@ -455,6 +455,52 @@
     return button;
   }
 
+  function mountHermesChatSurface(agent) {
+    const chatArea = document.querySelector("#chat-area");
+    const inputRow = document.querySelector("#input-row");
+    const messageInput = document.querySelector("#msg-input");
+    if (!chatArea || !inputRow || !messageInput || chatArea.querySelector(".bairui-chat-header")) return;
+
+    const header = document.createElement("header");
+    header.className = "bairui-chat-header";
+    const identity = document.createElement("div");
+    identity.className = "bairui-chat-identity";
+    const icon = document.createElement("img");
+    icon.src = "/assets/bairui-agent-icon.png";
+    icon.alt = "";
+    const name = document.createElement("strong");
+    name.textContent = agent.name;
+    const runtime = document.createElement("span");
+    runtime.textContent = `Hermes · ${initializationLabel(agent)}`;
+    identity.append(icon, name, runtime);
+    const live = document.createElement("span");
+    live.className = "bairui-chat-live";
+    live.textContent = "Session";
+    header.append(identity, live);
+    chatArea.prepend(header);
+
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "image/png,image/jpeg,image/webp,image/gif";
+    picker.multiple = true;
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    const attach = iconButton("添加图片", "+");
+    attach.className = "bairui-attach-button";
+    attach.dataset.action = "attach-image";
+    attach.addEventListener("click", () => picker.click());
+    picker.addEventListener("change", () => {
+      if (!picker.files?.length) return;
+      const transfer = new DataTransfer();
+      for (const file of picker.files) if (file.type.startsWith("image/")) transfer.items.add(file);
+      if (transfer.files.length) messageInput.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+      picker.value = "";
+      messageInput.focus();
+    });
+    inputRow.insertBefore(attach, inputRow.firstChild);
+    inputRow.appendChild(picker);
+  }
+
   function prefillChat(text) {
     const input = document.querySelector("#msg-input");
     if (!input) return;
@@ -592,6 +638,7 @@
     });
     tools.appendChild(logout);
     document.documentElement.appendChild(tools);
+    mountHermesChatSurface(agent);
     mountOperationalSurface(agent);
 
     document.querySelector("#send-btn")?.addEventListener("click", (event) => {

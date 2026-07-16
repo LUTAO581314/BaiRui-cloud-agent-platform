@@ -34,6 +34,13 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.locator("#graph").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.querySelectorAll("#graph circle").length >= 3);
   await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
+  await page.locator(".bairui-chat-header").waitFor({ state: "visible" });
+  assert.equal(await page.locator('.bairui-attach-button[data-action="attach-image"]').count(), 1);
+  const chatGeometry = await page.locator("#chat-area").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight };
+  });
+  assert.ok(chatGeometry.top < 100 && chatGeometry.bottom > chatGeometry.viewport - 40 && chatGeometry.height > chatGeometry.viewport * 0.75, `chat column is not viewport anchored: ${JSON.stringify(chatGeometry)}`);
   assert.equal(await page.locator('a[href="/admin"]').count(), 0, "ordinary users must not receive an admin link");
   assert.equal((await page.request.get(`${baseUrl}/api/admin/overview`)).status(), 403);
   assert.equal((await page.request.get(`${baseUrl}/admin`)).status(), 404);
