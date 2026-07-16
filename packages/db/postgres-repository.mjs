@@ -453,7 +453,8 @@ export class PostgresPlatformRepository {
       if (!serverRows[0]) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
       const { rows: revisionRows } = await client.query("SELECT COALESCE(MAX(revision),0)+1 AS next_revision FROM config_revisions WHERE organization_id=$1", [agent.organizationId]);
       const configId = randomUUID();
-      const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model } };
+      const disabledSkills = (input.skills ?? []).filter((item) => item.enabled === false).map((item) => item.skillId).sort();
+      const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model }, skills: { disabled: disabledSkills } };
       const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
       await client.query("INSERT INTO config_revisions (id, organization_id, agent_id, revision, config_document, secret_envelope, content_hash, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved',$8)", [configId, agent.organizationId, agent.id, Number(revisionRows[0].next_revision), configDocument, input.secretEnvelope, contentHash, input.requestedBy]);
       await client.query("UPDATE agent_runtime_credentials SET status='revoked', revoked_at=now() WHERE runtime_id=$1 AND status='active'", [runtime.id]);
@@ -475,6 +476,54 @@ export class PostgresPlatformRepository {
       await client.query("ROLLBACK");
       throw error;
     } finally { client.release(); }
+  }
+
+  async requestAgentSkillConfiguration(input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: identityRows } = await client.query(
+        `SELECT agent.*, runtime.id AS runtime_id, runtime.deployment_id, runtime.config_revision_id
+         FROM agents agent JOIN agent_runtimes runtime ON runtime.agent_id=agent.id
+         WHERE agent.id=$1 AND agent.organization_id=$2 AND agent.owner_user_id=$3
+         FOR UPDATE OF agent, runtime`,
+        [input.agentId, input.organizationId, input.userId]
+      );
+      const identity = identityRows[0];
+      if (!identity) { await client.query("ROLLBACK"); return null; }
+      if (!identity.deployment_id || !identity.config_revision_id) { await client.query("COMMIT"); return { revision: null, command: null }; }
+      const { rows: configRows } = await client.query("SELECT * FROM config_revisions WHERE id=$1 AND agent_id=$2 FOR SHARE", [identity.config_revision_id, input.agentId]);
+      const current = configRows[0];
+      const { rows: deploymentRows } = await client.query("SELECT * FROM control_deployments WHERE id=$1 AND status<>'revoked' FOR UPDATE", [identity.deployment_id]);
+      const deployment = deploymentRows[0];
+      if (!current || !deployment) throw Object.assign(new Error("Agent configuration is unavailable"), { code: "agent_configuration_unavailable", statusCode: 409 });
+      const { rows: revisionRows } = await client.query("SELECT COALESCE(MAX(revision),0)+1 AS next_revision FROM config_revisions WHERE organization_id=$1", [input.organizationId]);
+      const revision = Number(revisionRows[0].next_revision);
+      const { rows: preferenceRows } = await client.query("SELECT skill_id,enabled FROM agent_skill_preferences WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 ORDER BY skill_id", [input.organizationId, input.userId, input.agentId]);
+      const disabled = preferenceRows.filter((item) => item.enabled === false).map((item) => item.skill_id);
+      const configDocument = { ...current.config_document, owner_change: { scope: "skills", generation: revision }, skills: { disabled } };
+      const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
+      const configId = randomUUID();
+      const { rows: insertedConfigs } = await client.query(
+        "INSERT INTO config_revisions (id, organization_id, agent_id, revision, config_document, secret_envelope, content_hash, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved',$8) RETURNING *",
+        [configId, input.organizationId, input.agentId, revision, configDocument, current.secret_envelope, contentHash, input.requestedBy]
+      );
+      const { rows: superseded } = await client.query(
+        "UPDATE control_commands SET state='cancelled', updated_at=now() WHERE deployment_id=$1 AND action='config.apply-user' AND state='queued' RETURNING arguments->>'config_revision_id' AS config_id",
+        [deployment.id]
+      );
+      if (superseded.length) await client.query("UPDATE config_revisions SET status='superseded' WHERE id=ANY($1::text[]) AND status='approved'", [superseded.map((item) => item.config_id)]);
+      const commandId = randomUUID();
+      const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+      const idempotencyKey = `${deployment.id}/config.apply-user/${configId}`;
+      await client.query(
+        `INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, expected_observation_version, state, priority, expires_at, requested_by)
+         VALUES ($1,$2,$3,'config.apply-user','bairui.supervisor',$4,$5,$6,'queued',200,$7,$8)`,
+        [commandId, deployment.id, idempotencyKey, input.agentId, { config_revision_id: configId }, Number(deployment.observed_state_version), expiresAt, input.requestedBy]
+      );
+      await client.query("COMMIT");
+      return { revision: mapConfigRevision(insertedConfigs[0]), command: { id: commandId, organizationId: input.organizationId, deploymentId: deployment.id, agentId: input.agentId, idempotencyKey, action: "config.apply-user", arguments: { config_revision_id: configId }, approvalId: null, state: "queued", priority: 200, requestedBy: input.requestedBy, expiresAt } };
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
   async requestAgentLifecycle(input) {
@@ -535,7 +584,7 @@ export class PostgresPlatformRepository {
       const { rows: deploymentRows } = await client.query("SELECT deployment.* FROM control_deployments deployment JOIN agents agent ON agent.id=deployment.agent_id WHERE deployment.agent_id=$1 AND deployment.organization_id=$2 AND deployment.status<>'revoked' ORDER BY deployment.created_at DESC LIMIT 1 FOR UPDATE OF deployment", [input.agentId, input.organizationId]);
       const deployment = deploymentRows[0];
       if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
-      if (["config.stage", "config.apply"].includes(input.action)) {
+      if (["config.stage", "config.apply", "config.apply-user"].includes(input.action)) {
         const { rowCount } = await client.query("SELECT id FROM config_revisions WHERE id=$1 AND organization_id=$2 AND agent_id=$3", [input.arguments.config_revision_id, input.organizationId, input.agentId]);
         if (rowCount !== 1) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
       }
@@ -716,7 +765,7 @@ export class PostgresPlatformRepository {
           expected_observation_version: Number(row.expected_observation_version), created_at: row.created_at.toISOString(), expires_at: row.expires_at.toISOString(),
           attempt, lease_expires_at: leaseExpiresAt,
           placement: { server_id: row.server_id, agent_id: row.agent_id, runtime_id: row.runtime_id, organization_id: row.organization_id, user_id: row.owner_user_id, workspace_ref: row.workspace_ref },
-          config: row.config_document ? { document: row.config_document, secret_envelope: row.secret_envelope } : null,
+          config: row.config_document ? { document: row.config_document, ...(row.action === "config.apply-user" ? {} : { secret_envelope: row.secret_envelope }) } : null,
           ...(row.release_manifest_id ? { release: { id: row.release_manifest_id, version: row.release_version, hermes_image: row.release_compatibility?.hermes_image, runtime_image: row.release_compatibility?.runtime_image } } : {}),
           ...(row.rollback_manifest_id ? { rollback_release: { id: row.rollback_manifest_id, version: row.rollback_version, hermes_image: row.rollback_compatibility?.hermes_image, runtime_image: row.rollback_compatibility?.runtime_image } } : {})
         });
@@ -750,6 +799,18 @@ export class PostgresPlatformRepository {
         if (!input.runtimeEndpointRef) throw Object.assign(new Error("Provision receipt requires runtimeEndpointRef"), { statusCode: 400, code: "runtime_endpoint_required" });
         await client.query("UPDATE agent_runtimes runtime SET endpoint_ref=$2, route_updated_at=now(), status='starting', updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, input.runtimeEndpointRef]);
         await client.query("UPDATE control_deployments SET status='active', updated_at=now() WHERE id=$1", [command.deployment_id]);
+        await client.query("UPDATE config_revisions SET status='applied' WHERE id=$1", [command.arguments.config_revision_id]);
+        await client.query(
+          `UPDATE agent_skill_preferences preference
+           SET apply_status='applied', last_error_code=NULL, updated_at=now()
+           FROM config_revisions revision
+           WHERE revision.id=$1 AND preference.agent_id=revision.agent_id
+             AND preference.enabled = (NOT EXISTS (
+               SELECT 1 FROM jsonb_array_elements_text(COALESCE(revision.config_document->'skills'->'disabled','[]'::jsonb)) disabled(skill_id)
+               WHERE disabled.skill_id=preference.skill_id
+             ))`,
+          [command.arguments.config_revision_id]
+        );
       }
       if (input.state === "succeeded" && ["deployment.start", "deployment.resume"].includes(command.action)) {
         await client.query("UPDATE agent_runtimes runtime SET status='starting', last_error_code=NULL, last_error_detail=NULL, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id]);
@@ -778,12 +839,25 @@ export class PostgresPlatformRepository {
         await client.query("UPDATE agents agent SET status='degraded', initialization_status=CASE WHEN $4='deployment.delete' THEN 'failed' ELSE agent.initialization_status END, last_error_code=$2, last_error_detail=$3, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND agent.id=deployment.agent_id", [command.deployment_id, input.errorCode ?? "command_failed", input.errorSummary ?? "Control command failed", command.action]);
         await client.query("UPDATE control_deployments SET status='degraded', updated_at=now() WHERE id=$1", [command.deployment_id]);
       }
-      if (["config.stage", "config.apply"].includes(command.action)) {
+      if (["config.stage", "config.apply", "config.apply-user"].includes(command.action)) {
         const configId = command.arguments.config_revision_id;
-        if (input.state === "running" && command.action === "config.apply") await client.query("UPDATE config_revisions SET status='applying' WHERE id=$1", [configId]);
+        if (input.state === "running" && ["config.apply", "config.apply-user"].includes(command.action)) await client.query("UPDATE config_revisions SET status='applying' WHERE id=$1", [configId]);
         if (input.state === "succeeded") await client.query("UPDATE config_revisions SET status=$2 WHERE id=$1", [configId, command.action === "config.stage" ? "staged" : "applied"]);
         if (input.state === "failed") await client.query("UPDATE config_revisions SET status='failed' WHERE id=$1", [configId]);
-        if (input.state === "succeeded" && command.action === "config.apply") await client.query("UPDATE agent_runtimes runtime SET config_revision_id=$2, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, configId]);
+        if (input.state === "succeeded" && ["config.apply", "config.apply-user"].includes(command.action)) await client.query("UPDATE agent_runtimes runtime SET config_revision_id=$2, updated_at=now() FROM control_deployments deployment WHERE deployment.id=$1 AND runtime.agent_id=deployment.agent_id", [command.deployment_id, configId]);
+        if (command.action === "config.apply-user" && ["succeeded", "failed"].includes(input.state)) {
+          await client.query(
+            `UPDATE agent_skill_preferences preference
+             SET apply_status=$2, last_error_code=$3, updated_at=now()
+             FROM config_revisions revision
+             WHERE revision.id=$1 AND preference.agent_id=revision.agent_id
+               AND preference.enabled = (NOT EXISTS (
+                 SELECT 1 FROM jsonb_array_elements_text(COALESCE(revision.config_document->'skills'->'disabled','[]'::jsonb)) disabled(skill_id)
+                 WHERE disabled.skill_id=preference.skill_id
+               ))`,
+            [configId, input.state === "succeeded" ? "applied" : "failed", input.state === "failed" ? input.errorCode ?? "config_apply_failed" : null]
+          );
+        }
       }
       if (input.state === "succeeded" && ["deployment.provision", "config.apply"].includes(command.action)) {
         const configId = command.arguments.config_revision_id;

@@ -58,3 +58,13 @@ test("backup expiration accepts an identifier but no host path", () => {
   assert.equal(validateControlCommand(value).action, "backup.expire");
   assert.throws(() => validateControlCommand({ ...value, arguments: { backup_id: "backup_a", path: "/var/lib/bairui/backups/backup_a.brb" } }), /not allowed/);
 });
+
+test("owner configuration accepts only an opaque revision reference", () => {
+  const value = base();
+  value.action = "config.apply-user";
+  value.arguments = { config_revision_id: "config_user_a" };
+  delete value.approval_id;
+  assert.equal(validateControlCommand(value).action, "config.apply-user");
+  assert.throws(() => validateControlCommand({ ...value, arguments: { ...value.arguments, skill: "browser" } }), /not allowed/);
+  assert.throws(() => validateControlCommand({ ...value, arguments: { ...value.arguments, prompt: "hello" } }), /not allowed/);
+});

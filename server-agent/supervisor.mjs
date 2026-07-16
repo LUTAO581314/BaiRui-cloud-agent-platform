@@ -3,10 +3,12 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isMap, parseDocument } from "yaml";
 import { collectAgentResourceSamples } from "./resource-collector.mjs";
 
 const execFile = promisify(execFileCallback);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const IMAGE_DIGEST = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
 const TEST_SUITES = Object.freeze({
   probe: new Set(["runtime.health", "hermes.health"]),
@@ -60,6 +62,36 @@ function envFile(values) {
   return `${Object.entries(values).map(([key, value]) => `${key}=${envValue(value, key)}`).join("\n")}\n`;
 }
 
+function disabledSkills(configDocument, ownerScoped = false) {
+  if (!configDocument || typeof configDocument !== "object" || Array.isArray(configDocument)) throw Object.assign(new Error("Skill configuration document is invalid"), { code: "invalid_user_config_scope" });
+  if (ownerScoped) {
+    const change = configDocument.owner_change;
+    if (!change || change.scope !== "skills" || !Number.isSafeInteger(change.generation) || change.generation < 1 || Object.keys(change).some((key) => !["scope", "generation"].includes(key))) throw Object.assign(new Error("Owner configuration scope is invalid"), { code: "invalid_user_config_scope" });
+  }
+  const skills = configDocument.skills ?? { disabled: [] };
+  if (!skills || typeof skills !== "object" || Array.isArray(skills) || Object.keys(skills).some((key) => key !== "disabled") || !Array.isArray(skills.disabled) || skills.disabled.length > 500) throw Object.assign(new Error("Skill preference structure is invalid"), { code: "invalid_user_config_scope" });
+  const values = [...new Set(skills.disabled)];
+  if (values.some((value) => typeof value !== "string" || !SKILL_ID.test(value))) throw Object.assign(new Error("Skill identifier is invalid"), { code: "invalid_user_config_scope" });
+  return values.sort();
+}
+
+function mergeSkillConfiguration(configPath, disabled) {
+  let document;
+  try {
+    document = parseDocument(fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "{}\n", { strict: true, uniqueKeys: true });
+  } catch (error) {
+    throw Object.assign(new Error("Hermes configuration cannot be parsed"), { code: "invalid_hermes_config", cause: error });
+  }
+  if (document.errors.length) throw Object.assign(new Error("Hermes configuration contains YAML errors"), { code: "invalid_hermes_config" });
+  const skillsNode = document.get("skills", true);
+  if (skillsNode !== undefined && skillsNode !== null && !isMap(skillsNode)) throw Object.assign(new Error("Hermes skills configuration is not a map"), { code: "invalid_hermes_config" });
+  document.setIn(["skills", "disabled"], disabled);
+  const temporary = `${configPath}.bairui-${process.pid}-${randomBytes(6).toString("hex")}`;
+  fs.writeFileSync(temporary, String(document), { mode: 0o600 });
+  fs.renameSync(temporary, configPath);
+  fs.chmodSync(configPath, 0o600);
+}
+
 export class AgentSupervisor {
   constructor(options = {}) {
     this.instancesRoot = path.resolve(options.instancesRoot ?? "/var/lib/bairui/agents");
@@ -92,6 +124,13 @@ export class AgentSupervisor {
 
   async exists(kind, name) {
     try { await this.docker([kind, "inspect", name], { timeoutMs: 15_000 }); return true; } catch { return false; }
+  }
+
+  async containerStatus(name) {
+    try {
+      const { stdout } = await this.docker(["container", "inspect", "--format", "{{.State.Status}}", name], { timeoutMs: 15_000 });
+      return stdout.trim();
+    } catch { return null; }
   }
 
   allocatePort(agentId) {
@@ -151,8 +190,18 @@ export class AgentSupervisor {
   async runContainers(metadata, files, images = metadata.images) {
     const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
     if (!await this.exists("network", metadata.names.network)) await this.docker(["network", "create", metadata.names.network]);
-    await this.replaceContainer(metadata.names.hermes, ["--network", metadata.names.network, "--env-file", files.hermesEnv, "--volume", `${dataPath}:/opt/data`, images.hermes, "gateway", "run"]);
+    await this.runHermesContainer(metadata, files.hermesEnv, images.hermes);
     await this.replaceContainer(metadata.names.runtime, ["--network", metadata.names.network, "--env-file", files.runtimeEnv, "--publish", `127.0.0.1:${metadata.runtimePort}:8787`, images.runtime]);
+  }
+
+  async runHermesContainer(metadata, hermesEnv, image = metadata.images?.hermes ?? this.hermesImage) {
+    const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
+    await this.replaceContainer(metadata.names.hermes, ["--network", metadata.names.network, "--env-file", hermesEnv, "--volume", `${dataPath}:/opt/data`, image, "gateway", "run"]);
+  }
+
+  async restoreHermesLifecycle(name, previousStatus) {
+    if (previousStatus === "paused") await this.docker(["container", "pause", name]);
+    if (["created", "exited", "dead"].includes(previousStatus)) await this.docker(["container", "stop", name]);
   }
 
   writeMetadata(agentId, metadata) {
@@ -184,6 +233,7 @@ export class AgentSupervisor {
     fs.writeFileSync(hermesEnvPath, envFile({ API_SERVER_ENABLED: "true", API_SERVER_HOST: "0.0.0.0", API_SERVER_KEY: hermesApiKey, OPENAI_API_KEY: secrets.provider_api_key, OPENAI_BASE_URL: provider.base_url, MODEL: provider.model }), { mode: 0o600 });
     fs.writeFileSync(runtimeEnvPath, envFile({ HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: agentId, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" }), { mode: 0o600 });
     fs.writeFileSync(path.join(dataPath, "SOUL.md"), String(command.config.document.agent?.soul_markdown ?? ""), { mode: 0o600 });
+    mergeSkillConfiguration(path.join(dataPath, "config.yaml"), disabledSkills(command.config.document));
     fs.writeFileSync(path.join(instancePath, "agent-control.token"), agentControlToken, { mode: 0o600 });
 
     if (!await this.exists("network", names.network)) await this.docker(["network", "create", names.network]);
@@ -285,6 +335,39 @@ export class AgentSupervisor {
       throw error;
     }
     return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { files: 4, containers: 2, applied: 1 }, evidenceRefs: [`config:${revisionId}:applied`, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
+  }
+
+  async applyUserConfiguration(command) {
+    const agentId = this.commandAgentId(command);
+    const metadata = this.readMetadata(agentId);
+    const revisionId = identifier(command.arguments?.config_revision_id, "config_revision_id");
+    const disabled = disabledSkills(command.config?.document, true);
+    const instancePath = this.instancePath(agentId);
+    const configPath = path.join(instancePath, "hermes-data", "config.yaml");
+    const rollbackPath = path.join(instancePath, "config-history", metadata.configRevisionId ?? `before-${revisionId}`);
+    const rollbackConfig = path.join(rollbackPath, "config.yaml");
+    const hermesEnv = path.join(instancePath, "hermes.env");
+    const hadConfig = fs.existsSync(configPath);
+    const previousStatus = await this.containerStatus(metadata.names.hermes);
+    let configurationChanged = false;
+    fs.mkdirSync(rollbackPath, { recursive: true, mode: 0o700 });
+    if (hadConfig) copyFileSecure(configPath, rollbackConfig);
+    try {
+      mergeSkillConfiguration(configPath, disabled);
+      configurationChanged = true;
+      await this.runHermesContainer(metadata, hermesEnv);
+      await this.restoreHermesLifecycle(metadata.names.hermes, previousStatus);
+      this.writeMetadata(agentId, { ...metadata, configRevisionId: revisionId, idempotencyKey: command.idempotency_key });
+    } catch (error) {
+      if (configurationChanged) {
+        if (hadConfig && fs.existsSync(rollbackConfig)) copyFileSecure(rollbackConfig, configPath);
+        else fs.rmSync(configPath, { force: true });
+        await this.runHermesContainer(metadata, hermesEnv).then(() => this.restoreHermesLifecycle(metadata.names.hermes, previousStatus)).catch(() => {});
+      }
+      throw error;
+    }
+    const digest = createHash("sha256").update(JSON.stringify(disabled)).digest("hex");
+    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { skills: disabled.length, containers: 1, applied: 1 }, evidenceRefs: [`config:${revisionId}:applied`, `skills-sha256:${digest}`, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
   }
 
   backupPath(backupId) {
@@ -497,6 +580,7 @@ export class AgentSupervisor {
     if (command.action === "smoke.test") return this.runControlCheck(command, "smoke");
     if (command.action === "config.stage") return this.stageConfiguration(command);
     if (command.action === "config.apply") return this.applyConfiguration(command);
+    if (command.action === "config.apply-user") return this.applyUserConfiguration(command);
     if (command.action === "backup.create") return this.createBackup(command);
     if (command.action === "backup.verify") return this.verifyBackup(command);
     if (command.action === "backup.restore") return this.restoreBackup(command);

@@ -11,6 +11,7 @@ Allowed actions:
 - `upstream.check`
 - `config.stage`
 - `config.apply`
+- `config.apply-user`
 - `backup.create`
 - `backup.verify`
 - `backup.restore`
@@ -48,6 +49,12 @@ sequence. A command that expired before execution is never started.
 A credential from one protocol cannot authenticate to another. Control command
 arguments contain revision/release/backup/probe/service identifiers, never raw
 secret values, user content, or executable text.
+
+`config.apply-user` is limited to an opaque configuration revision generated
+from allowlisted Agent-owner preferences. It carries no approval id or secret
+envelope. The Supervisor currently accepts only the `skills` scope and merges
+only `skills.disabled` into Hermes `config.yaml`; all other scopes fail closed.
+The general `config.apply` path remains platform-administrator approval-gated.
 
 ## Closed-loop result
 

@@ -41,6 +41,7 @@ const ADMIN_CONTROL_ACTIONS = new Set(["snapshot.collect", "probe.run", "contrac
 const PLATFORM_CONTROL_ACTIONS = new Set(["upstream.check", "config.stage", "config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const APPROVAL_CONTROL_ACTIONS = new Set(["config.apply", "backup.restore", "release.apply", "release.rollback", "service.restart", "credential.revoke"]);
 const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f0-9]{64}$/;
+const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const AGENT_RUN_STATUSES = new Set(["started", "queued", "running", "waiting_for_approval", "stopping", "completed", "failed", "cancelled", "unknown"]);
 const TERMINAL_AGENT_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
@@ -372,7 +373,7 @@ export function createPlatformApp(options) {
     const monthlyCostUsd = rollups.filter((item) => Date.parse(item.bucketStart) >= monthStart).reduce((sum, item) => sum + item.estimatedCostUsd, 0);
     const quotaExhausted = (models.dailyTokenLimit !== null && dailyTokens >= models.dailyTokenLimit) || (models.monthlyBudgetUsd !== null && monthlyCostUsd >= models.monthlyBudgetUsd);
     const runtimeOffline = agent.desiredRuntimeState === "running" && ["ready", "degraded", "starting"].includes(runtime?.status) && (!runtime.lastHeartbeatAt || now - Date.parse(runtime.lastHeartbeatAt) > runtimeStaleAfterMs);
-    const activeChange = commands.find((item) => item.agentId === agent.id && ["config.apply", "backup.restore", "release.stage", "release.apply", "release.rollback"].includes(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state)) ?? null;
+    const activeChange = commands.find((item) => item.agentId === agent.id && ["config.apply", "config.apply-user", "backup.restore", "release.stage", "release.apply", "release.rollback"].includes(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state)) ?? null;
     let code = "ready";
     if (["deleted", "deleting"].includes(agent.status) || ["deleted", "deleting"].includes(runtime?.status)) code = runtime?.status ?? agent.status;
     else if (!runtime || runtime.status === "uninitialized" || agent.initializationStatus === "uninitialized") code = "uninitialized";
@@ -445,6 +446,7 @@ export function createPlatformApp(options) {
   }
 
   function revealLease(command) {
+    if (command.action === "config.apply-user") return { ...command, config: command.config ? { document: command.config.document } : null };
     if (!command.config?.secret_envelope) return { ...command, config: command.config ? { document: command.config.document } : null };
     if (!providerVault) throw Object.assign(new Error("Secret storage is unavailable"), { statusCode: 503, code: "secret_storage_unavailable" });
     const envelope = command.config.secret_envelope;
@@ -691,6 +693,7 @@ export function createPlatformApp(options) {
           agentId: agent.id,
           requestedBy: principal.userId,
           provider,
+          skills: await repository.listAgentSkillPreferences(principal.organizationId, principal.userId, agent.id),
           agentCredentialHash: agentCredential.keyHash,
           agentCredentialHint: agentCredential.keyHint,
           secretEnvelope: {
@@ -925,9 +928,12 @@ export function createPlatformApp(options) {
         const body = await readJson(request);
         if (typeof body.enabled !== "boolean") return json(response, 400, { error: "invalid_skill_preference" });
         const skillId = decodeURIComponent(skillsMatch[2]).slice(0, 200);
+        if (!SKILL_ID.test(skillId)) return json(response, 400, { error: "invalid_skill_id" });
         const preference = await repository.upsertAgentSkillPreference({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, skillId, enabled: body.enabled, applyStatus: "pending" });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.skill.preference.update", targetType: "agent", targetId: agent.id, metadata: { skillId, enabled: body.enabled, applyStatus: "pending" } });
-        return json(response, 202, { preference });
+        const application = await repository.requestAgentSkillConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId });
+        const applicationView = application?.command ? { state: application.command.state, commandId: application.command.id, configRevisionId: application.revision.id } : { state: "pending_initialization", commandId: null, configRevisionId: null };
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.skill.preference.update", targetType: "agent", targetId: agent.id, metadata: { skillId, enabled: body.enabled, applyStatus: "pending", application: applicationView } });
+        return json(response, 202, { preference, application: applicationView });
       }
 
       const channelsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/channels(?:\/([^/]+))?$/);

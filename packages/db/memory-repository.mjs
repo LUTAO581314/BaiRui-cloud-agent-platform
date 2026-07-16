@@ -338,7 +338,8 @@ export class MemoryPlatformRepository {
     const server = this.#servers.find((item) => item.organizationId === agent.organizationId && ["active", "healthy"].includes(item.status));
     if (!server) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
     const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
-    const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model } };
+    const disabledSkills = (input.skills ?? []).filter((item) => item.enabled === false).map((item) => item.skillId).sort();
+    const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model }, skills: { disabled: disabledSkills } };
     const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: input.secretEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
     this.#configRevisions.push(config);
     for (const credential of this.#agentRuntimeCredentials) if (credential.runtimeId === runtime.id && credential.status === "active") credential.status = "revoked";
@@ -350,6 +351,29 @@ export class MemoryPlatformRepository {
     Object.assign(runtime, { deploymentId: deployment.id, configRevisionId: config.id, status: "provisioning", updatedAt: new Date().toISOString() });
     Object.assign(agent, { initializationStatus: "provisioning", desiredRuntimeState: "running", status: "provisioning", updatedAt: new Date().toISOString() });
     return { agent, runtime, deployment, command };
+  }
+
+  async requestAgentSkillConfiguration(input) {
+    const agent = this.#agents.get(input.agentId);
+    const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === input.agentId);
+    if (!agent || !runtime || agent.organizationId !== input.organizationId || agent.ownerUserId !== input.userId) return null;
+    if (!runtime.deploymentId || !runtime.configRevisionId) return { revision: null, command: null };
+    const current = this.#configRevisions.find((item) => item.id === runtime.configRevisionId && item.agentId === agent.id);
+    const deployment = this.#controlDeployments.find((item) => item.id === runtime.deploymentId && item.status !== "revoked");
+    if (!current || !deployment) throw Object.assign(new Error("Agent configuration is unavailable"), { code: "agent_configuration_unavailable", statusCode: 409 });
+    const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
+    const disabled = this.#agentSkillPreferences.filter((item) => item.agentId === agent.id && item.enabled === false).map((item) => item.skillId).sort();
+    const configDocument = { ...current.configDocument, owner_change: { scope: "skills", generation: revision }, skills: { disabled } };
+    const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: current.secretEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
+    this.#configRevisions.push(config);
+    for (const command of this.#controlCommands.filter((item) => item.agentId === agent.id && item.action === "config.apply-user" && item.state === "queued")) {
+      command.state = "cancelled";
+      const previous = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      if (previous) previous.status = "superseded";
+    }
+    const command = { id: randomUUID(), organizationId: agent.organizationId, deploymentId: deployment.id, agentId: agent.id, idempotencyKey: `${deployment.id}/config.apply-user/${config.id}`, action: "config.apply-user", target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { config_revision_id: config.id }, approvalId: null, expectedObservationVersion: deployment.observedStateVersion ?? 0, state: "queued", priority: 200, attempt: 0, requestedBy: input.requestedBy, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), createdAt: new Date().toISOString() };
+    this.#controlCommands.push(command);
+    return { revision: config, command };
   }
 
   async requestAgentLifecycle(input) {
@@ -384,7 +408,7 @@ export class MemoryPlatformRepository {
   async requestControlOperation(input) {
     const deployment = this.#controlDeployments.findLast((item) => item.agentId === input.agentId && item.organizationId === input.organizationId && item.status !== "revoked");
     if (!deployment) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
-    if (["config.stage", "config.apply"].includes(input.action) && !this.#configRevisions.some((item) => item.id === input.arguments.config_revision_id && item.organizationId === input.organizationId && item.agentId === input.agentId)) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
+    if (["config.stage", "config.apply", "config.apply-user"].includes(input.action) && !this.#configRevisions.some((item) => item.id === input.arguments.config_revision_id && item.organizationId === input.organizationId && item.agentId === input.agentId)) throw Object.assign(new Error("Configuration revision does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
     if (input.action === "backup.verify" && !this.#backupRecords.some((item) => item.id === input.arguments.backup_id && item.deploymentId === deployment.id)) throw Object.assign(new Error("Backup does not belong to this Agent"), { code: "invalid_control_reference", statusCode: 400 });
     if (input.action === "backup.restore" && !this.#backupRecords.some((item) => item.id === input.arguments.backup_id && item.deploymentId === deployment.id && item.status === "verified")) throw Object.assign(new Error("Verified backup is unavailable for this Agent"), { code: "invalid_control_reference", statusCode: 400 });
     if (["release.stage", "release.apply"].includes(input.action) && !this.#releaseManifests.some((item) => item.id === input.arguments.release_id && ["candidate", "approved", "released"].includes(item.status))) throw Object.assign(new Error("Release manifest is unavailable"), { code: "invalid_control_reference", statusCode: 400 });
@@ -508,7 +532,7 @@ export class MemoryPlatformRepository {
         expected_observation_version: command.expectedObservationVersion, created_at: command.createdAt, expires_at: command.expiresAt,
         attempt: command.attempt, lease_expires_at: command.leaseExpiresAt,
         placement: { server_id: deployment.serverId, agent_id: deployment.agentId, runtime_id: runtime.id, organization_id: deployment.organizationId, user_id: runtime.ownerUserId, workspace_ref: runtime.workspaceRef },
-        config: config ? { document: config.configDocument, secret_envelope: config.secretEnvelope } : null,
+        config: config ? { document: config.configDocument, ...(command.action === "config.apply-user" ? {} : { secret_envelope: config.secretEnvelope }) } : null,
         ...(release ? { release: { id: release.id, version: release.version, hermes_image: release.compatibility?.hermes_image, runtime_image: release.compatibility?.runtime_image } } : {}),
         ...(rollback ? { rollback_release: { id: rollback.id, version: rollback.version, hermes_image: rollback.compatibility?.hermes_image, runtime_image: rollback.compatibility?.runtime_image } } : {})
       });
@@ -530,6 +554,10 @@ export class MemoryPlatformRepository {
       const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
       Object.assign(runtime, { endpointRef: input.runtimeEndpointRef, status: "starting", updatedAt: new Date().toISOString() });
       deployment.status = "active";
+      const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
+      if (config) config.status = "applied";
+      const disabled = new Set(config?.configDocument?.skills?.disabled ?? []);
+      for (const preference of this.#agentSkillPreferences.filter((item) => item.agentId === deployment.agentId && item.enabled === !disabled.has(item.skillId))) Object.assign(preference, { applyStatus: "applied", lastErrorCode: null, updatedAt: new Date().toISOString() });
     }
     if (input.state === "succeeded" && ["deployment.start", "deployment.resume"].includes(command.action)) {
       const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
@@ -569,15 +597,21 @@ export class MemoryPlatformRepository {
       Object.assign(agent, { status: "degraded", ...(command.action === "deployment.delete" ? { initializationStatus: "failed" } : {}), lastErrorCode: input.errorCode, lastErrorDetail: input.errorSummary, updatedAt: new Date().toISOString() });
       deployment.status = "degraded";
     }
-    if (["config.stage", "config.apply"].includes(command.action)) {
+    if (["config.stage", "config.apply", "config.apply-user"].includes(command.action)) {
       const config = this.#configRevisions.find((item) => item.id === command.arguments.config_revision_id);
-      if (config && input.state === "running" && command.action === "config.apply") config.status = "applying";
+      if (config && input.state === "running" && ["config.apply", "config.apply-user"].includes(command.action)) config.status = "applying";
       if (config && input.state === "succeeded") config.status = command.action === "config.stage" ? "staged" : "applied";
       if (config && input.state === "failed") config.status = "failed";
-      if (config && input.state === "succeeded" && command.action === "config.apply") {
+      if (config && input.state === "succeeded" && ["config.apply", "config.apply-user"].includes(command.action)) {
         const deployment = this.#controlDeployments.find((item) => item.id === command.deploymentId);
         const runtime = [...this.#agentRuntimes.values()].find((item) => item.agentId === deployment.agentId);
         runtime.configRevisionId = config.id;
+      }
+      if (config && command.action === "config.apply-user" && ["succeeded", "failed"].includes(input.state)) {
+        const disabled = new Set(config.configDocument?.skills?.disabled ?? []);
+        for (const preference of this.#agentSkillPreferences.filter((item) => item.agentId === config.agentId && item.enabled === !disabled.has(item.skillId))) {
+          Object.assign(preference, { applyStatus: input.state === "succeeded" ? "applied" : "failed", lastErrorCode: input.state === "failed" ? input.errorCode ?? "config_apply_failed" : null, updatedAt: new Date().toISOString() });
+        }
       }
     }
     if (input.state === "succeeded" && ["deployment.provision", "config.apply"].includes(command.action)) {

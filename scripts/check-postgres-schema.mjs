@@ -40,7 +40,7 @@ try {
   for (const column of requiredBackupColumns) if (!backupColumns.has(column)) throw new Error(`Missing backup_records column: ${column}`);
   const { rows: actionRows } = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='control_commands_action_check'");
   const actionConstraint = actionRows[0]?.definition ?? "";
-  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "backup.restore", "backup.expire"]) {
+  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "config.apply-user", "backup.restore", "backup.expire"]) {
     if (!actionConstraint.includes(action)) throw new Error(`Missing control action in PostgreSQL constraint: ${action}`);
   }
   console.log("PostgreSQL schema check passed.");
