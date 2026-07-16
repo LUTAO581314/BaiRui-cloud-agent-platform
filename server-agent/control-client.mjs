@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateResourceReport } from "@bairui/contracts";
 import { signMachineRequest } from "../packages/security/machine-request.mjs";
 import { validateControlCommand } from "../packages/server-protocol/control-plane.mjs";
 
@@ -57,11 +58,12 @@ export async function sendCommandReceipt(options) {
 }
 
 export async function sendResourceSamples(options) {
+  const payload = validateResourceReport({ serverId: options.serverId, samples: options.samples ?? [] });
   const response = await signedMachinePost({
     ...options,
     machineId: options.serverId,
     path: "/api/internal/control-plane/resources",
-    payload: { serverId: options.serverId, samples: options.samples ?? [] }
+    payload
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error("Resource telemetry upload failed"), { code: body.error ?? "resource_upload_failed", statusCode: response.status });

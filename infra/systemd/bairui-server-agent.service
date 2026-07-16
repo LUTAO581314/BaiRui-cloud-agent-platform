@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/bairui/agents
+ReadWritePaths=/var/lib/bairui/agents /var/lib/bairui/backups
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 

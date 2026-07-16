@@ -4,6 +4,7 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 
 const requiredTables = [
+  "schema_migrations",
   "agents", "agent_memberships", "agent_runtimes", "agent_components",
   "heartbeats", "telemetry_events", "usage_rollups", "alerts",
   "secret_references", "control_deployments", "control_commands",

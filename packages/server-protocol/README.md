@@ -51,7 +51,7 @@ keys, connector tokens, passwords, private keys, or unrestricted logs.
 
 ## Control Protocol 1.0
 
-`control-plane.mjs` validates the complete allow-list and action-specific
+The pinned `@bairui/contracts` package validates the complete allow-list and action-specific
 identifier arguments for deployment operations. It rejects extra payload
 fields and all Hermes data-plane actions before a command can be queued or
 leased. See `docs/11-control-plane-protocol.md`.

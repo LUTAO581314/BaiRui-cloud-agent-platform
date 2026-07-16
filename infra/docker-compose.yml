@@ -42,6 +42,11 @@ services:
     command: ["sh", "-c", "node packages/db/bin/migrate.mjs && node apps/web/server.mjs"]
     ports:
       - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [backend]

@@ -7,6 +7,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v1.0.0",
     "pg": "^8.16.0",
     "png-chunk-text": "^1.0.0",
     "png-chunks-extract": "^1.0.0",

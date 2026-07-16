@@ -45,6 +45,41 @@ test("runtime client signs service integration requests", async () => {
   assert.ok(captured.headers["x-bairui-signature"]);
 });
 
+test("runtime client routes Agent integrations and passes only the authorization reference", async () => {
+  let captured;
+  const client = new BairuiRuntimeClient({
+    sharedSecret: secret,
+    resolveRuntime: async (agent) => ({ baseUrl: `https://${agent.id}.runtime.test`, sharedSecret: `secret-for-${agent.id}-that-is-longer-than-32` }),
+    fetch: async (url, options) => {
+      captured = { url, body: JSON.parse(options.body) };
+      return Response.json({ status: "completed", output: { markdown: "ok" } });
+    }
+  });
+  const principal = { userId: "user_a", organizationId: "org_a", role: "user" };
+  const agent = { id: "agent_a", ownerUserId: "user_a", organizationId: "org_a" };
+  await client.invokeIntegration({ principal, agent, integrationId: "firecrawl", capability: "scrape", input: { url: "https://example.test" }, authorizationId: "authorization_1" });
+  assert.equal(captured.url, "https://agent_a.runtime.test/v1/integrations/requests");
+  assert.deepEqual(captured.body.request.options, { authorization_id: "authorization_1" });
+  assert.doesNotMatch(JSON.stringify(captured), /secret-for-agent_a/);
+});
+
+test("runtime client rejects cross-user integration requests before resolving Runtime", async () => {
+  let called = false;
+  const client = new BairuiRuntimeClient({
+    sharedSecret: secret,
+    resolveRuntime: async () => { called = true; return null; },
+    fetch: async () => { called = true; return Response.json({}); }
+  });
+  await assert.rejects(() => client.invokeIntegration({
+    principal: { userId: "user_a", organizationId: "org_a", role: "user" },
+    agent: { id: "agent_b", ownerUserId: "user_b", organizationId: "org_a" },
+    integrationId: "firecrawl",
+    capability: "scrape",
+    authorizationId: "authorization_1"
+  }), { code: "agent_ownership_mismatch", statusCode: 403 });
+  assert.equal(called, false);
+});
+
 test("runtime client resolves an Agent-specific Runtime for operations and native streams", async () => {
   const calls = [];
   const fetch = async (url, options) => {

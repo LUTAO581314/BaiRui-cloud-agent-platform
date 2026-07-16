@@ -67,6 +67,10 @@ export class MemoryPlatformRepository {
   #machineNonces = new Set();
   #commandReceipts = [];
 
+  async readiness() {
+    return { ready: true, status: "ready", backend: "memory", migration: "in-memory" };
+  }
+
   async createOrganization(input) {
     const organization = { id: input.id ?? randomUUID(), name: input.name, createdAt: new Date().toISOString() };
     this.#organizations.set(organization.id, organization);

@@ -13,6 +13,8 @@ import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, "..", "..");
+const migrationsDir = path.join(repoRoot, "packages", "db", "migrations");
+const requiredMigration = fs.readdirSync(migrationsDir).filter((name) => name.endsWith(".sql")).sort().at(-1);
 const production = process.env.NODE_ENV === "production";
 const sessionSecret = process.env.BAIRUI_SESSION_SECRET;
 if (production && (!sessionSecret || sessionSecret.length < 32)) throw new Error("BAIRUI_SESSION_SECRET must contain at least 32 characters in production");
@@ -47,6 +49,7 @@ const server = createPlatformServer({
   runtimeRouteHosts: (process.env.BAIRUI_RUNTIME_ROUTE_HOSTS ?? "").split(",").map((item) => item.trim()).filter(Boolean),
   runtimeStaleAfterMs: Math.max(30_000, Number(process.env.BAIRUI_RUNTIME_STALE_AFTER_MS) || 120_000),
   resourceStaleAfterMs: Math.max(30_000, Number(process.env.BAIRUI_RESOURCE_STALE_AFTER_MS) || 120_000),
+  requiredMigration,
   allowRegistration: process.env.BAIRUI_ALLOW_REGISTRATION === "1",
   agentIngestToken: process.env.BAIRUI_AGENT_INGEST_TOKEN,
   runtimeClient: process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({

@@ -2,6 +2,10 @@
 
 Protocol version `1.0` is operational control traffic only.
 
+`@bairui/contracts` is the canonical schema, generated type, and runtime
+validation source. Platform pins an immutable contracts tag and
+`packages/server-protocol/control-plane.mjs` only re-exports that implementation.
+
 Allowed actions:
 
 - `snapshot.collect`
@@ -22,7 +26,7 @@ Allowed actions:
 - `service.restart`
 
 There is no generic command and no prompt, conversation, task, model, tool,
-skill, runtime-memory, or Runtime API action. `packages/server-protocol/control-plane.mjs`
+skill, runtime-memory, or Runtime API action. The shared contracts validator
 enforces the allow-list and action-specific identifier arguments.
 
 ## State machine

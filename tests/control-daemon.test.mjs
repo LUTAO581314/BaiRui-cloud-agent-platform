@@ -18,7 +18,14 @@ test("control daemon reports fixed resource samples with the server identity", a
     if (url.endsWith("/resources")) return Response.json({ accepted: 1 }, { status: 202 });
     throw new Error(`Unexpected request: ${url}`);
   };
-  const sample = { agentId: "agent_a", runtimeId: "runtime_a", deploymentId: "deployment_a", sequence: 1, status: "running", observedAt: "2026-07-16T07:00:00.000Z", containers: [] };
+  const sample = {
+    agentId: "agent_a", runtimeId: "runtime_a", deploymentId: "deployment_a", sequence: 1, status: "running",
+    cpuPercent: 2.5, memoryUsedBytes: 1024, memoryLimitBytes: 4096, agentStorageUsedBytes: 2048,
+    hostStorageUsedBytes: 8192, hostStorageLimitBytes: 16384, osType: "linux", architecture: "amd64",
+    operatingSystem: "Test Linux", dockerVersion: "27.1.0", cpuCount: 4, uptimeSeconds: 60,
+    observedAt: "2026-07-16T07:00:00.000Z",
+    containers: [{ role: "hermes", status: "running", containerId: "container_a", containerName: "bairui-hermes-a", imageRef: "hermes:test", cpuPercent: 2.5, memoryUsedBytes: 1024, memoryLimitBytes: 4096, writableBytes: 256 }]
+  };
   await runControlDaemon({
     once: true,
     env: { BAIRUI_PLATFORM_URL: "https://platform.example.test", BAIRUI_SERVER_ID: "server_a", BAIRUI_SERVER_AGENT_TOKEN: "server-token-that-is-longer-than-thirty-two-characters" },
