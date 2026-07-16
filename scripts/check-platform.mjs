@@ -11,6 +11,10 @@ if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw ne
 const required = [
   ".github/workflows/ci.yml",
   "apps/web/app.mjs",
+  "apps/web/http.mjs",
+  "apps/web/routes/auth.mjs",
+  "apps/web/routes/user-runtime.mjs",
+  "apps/web/routes/admin-control.mjs",
   "apps/web/server.mjs",
   "apps/web/views.mjs",
   "apps/web/public/styles.css",
@@ -41,6 +45,7 @@ const required = [
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
+  "docs/22-platform-route-boundaries.md",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/bailongma-ui/brain-app-transform.mjs",
@@ -63,6 +68,7 @@ const required = [
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "tests/memory-projection-worker.test.mjs",
+  "tests/http-routing.test.mjs",
   "tests/browser/fixture-server.mjs",
   "tests/browser/remote-acceptance.mjs",
   "tests/helpers/bailongma-ui.mjs",
@@ -119,8 +125,21 @@ for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBE
 for (const legacy of ['url.pathname === "/message"', 'url.pathname === "/events"', "createBailongmaEventHub", "toBailongmaConversations"]) {
   if (server.includes(legacy)) failures.push(`Legacy or synthesized BaiLongma transport is forbidden: ${legacy}`);
 }
+const routeSources = ["auth.mjs", "user-runtime.mjs", "admin-control.mjs"].map((file) => fs.readFileSync(path.join(root, "apps", "web", "routes", file), "utf8"));
+const runtimeSurface = server + routeSources.join("\n");
 for (const evidence of ["sessions.chat.stream", "runs.events", "runtimeClient.streamOperation", "ownerUserId !== principal.userId"]) {
-  if (!server.includes(evidence)) failures.push(`Missing multi-tenant Runtime evidence: ${evidence}`);
+  if (!runtimeSurface.includes(evidence)) failures.push(`Missing multi-tenant Runtime evidence: ${evidence}`);
+}
+for (const evidence of ["createAuthRoutes", "createUserRuntimeRoutes", "createAdminControlRoutes", "routeAuth", "routeUserRuntime", "routeAdminControl"]) {
+  if (!server.includes(evidence)) failures.push("Missing Platform route composition evidence: " + evidence);
+}
+for (const forbidden of ["/api/auth/login", "/runtime/discovery", "/sessions/", "/runs/", "/jobs", "/api/admin/control-commands", "/api/admin/control-approvals", "/api/admin/release-manifests"]) {
+  if (server.includes(forbidden)) failures.push("Extracted route must not be reintroduced into app.mjs: " + forbidden);
+}
+if (server.split(/\r?\n/).length > 1500) failures.push("apps/web/app.mjs exceeded the route-modularization size gate");
+const routeBoundaryDocument = fs.readFileSync(path.join(root, "docs/22-platform-route-boundaries.md"), "utf8");
+for (const evidence of ["Handler contract", "routes/auth.mjs", "routes/user-runtime.mjs", "routes/admin-control.mjs", "Prohibited regressions"]) {
+  if (!routeBoundaryDocument.includes(evidence)) failures.push("Missing Platform route boundary guidance: " + evidence);
 }
 const overlayPath = path.join(root, "apps/web/public/bairui-bailongma.js");
 const overlay = fs.existsSync(overlayPath) ? fs.readFileSync(overlayPath, "utf8") : "";
@@ -236,7 +255,7 @@ const retentionMigrationPath = path.join(root, "packages/db/migrations/011_reten
 const retentionMigration = fs.existsSync(retentionMigrationPath) ? fs.readFileSync(retentionMigrationPath, "utf8") : "";
 if (!retentionMigration.includes("CREATE TABLE IF NOT EXISTS retention_runs")) failures.push("Missing retention execution run table");
 for (const evidence of ["/api/admin/provider-channels", "/api/admin/model-policy", "/api/admin/data-retention", "/api/admin/sensitive-access", "/api/admin/release-gates", "/api/admin/backups", "/api/admin/upstreams", "/api/admin/control-commands", "/api/admin/control-approvals", "/api/admin/release-manifests"]) {
-  if (!server.includes(evidence)) failures.push(`Missing control-plane administration API: ${evidence}`);
+  if (!runtimeSurface.includes(evidence)) failures.push(`Missing control-plane administration API: ${evidence}`);
 }
 const adminViewPath = path.join(root, "apps/web/views.mjs");
 const adminView = fs.existsSync(adminViewPath) ? fs.readFileSync(adminViewPath, "utf8") : "";
