@@ -82,6 +82,9 @@
 .console {
   top: 72px !important;
   bottom: 18px !important;
+  height: calc(100vh - 90px) !important;
+  height: calc(100dvh - 90px) !important;
+  max-height: calc(100dvh - 90px) !important;
   min-height: 0;
   overflow: hidden;
   border-radius: 8px !important;
@@ -744,6 +747,9 @@ body.bairui-streaming #send-btn {
     right: 10px !important;
     bottom: 10px !important;
     left: 10px !important;
+    height: calc(100vh - 72px) !important;
+    height: calc(100dvh - 72px) !important;
+    max-height: calc(100dvh - 72px) !important;
   }
 
   .bairui-chat-header { min-height: 48px; padding: 7px 10px; }
