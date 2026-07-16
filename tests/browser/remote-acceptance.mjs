@@ -25,6 +25,15 @@ async function assertNoHorizontalOverflow(page) {
   assert.ok(metrics.documentWidth <= metrics.viewportWidth + 1, `horizontal overflow: ${metrics.documentWidth}px > ${metrics.viewportWidth}px`);
 }
 
+async function waitForWorkspaceText(page, value) {
+  await Promise.race([
+    page.getByText(value, { exact: true }).waitFor(),
+    page.locator(".bw-error").waitFor().then(async () => {
+      throw new Error(`workspace render failed: ${await page.locator(".bw-error").innerText()}`);
+    })
+  ]);
+}
+
 async function ordinaryDesktop(browser, baseUrl) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -78,7 +87,7 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.screenshot({ path: path.join(artifacts, "user-desktop-memory.png"), fullPage: true });
 
   await page.locator('.bw-nav [data-view="skills"]').click();
-  await page.getByText("Runtime Capabilities", { exact: true }).waitFor();
+  await waitForWorkspaceText(page, "Runtime Capabilities");
   await page.getByText("Web tools", { exact: true }).waitFor();
   await page.getByText("fixture-hermes-1.0.0", { exact: true }).waitFor();
   await page.getByText("approval events", { exact: true }).waitFor();
@@ -155,7 +164,7 @@ async function ordinaryMobile(browser, baseUrl) {
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });
   await page.locator('.bw-nav [data-view="skills"]').click();
-  await page.getByText("Runtime Capabilities", { exact: true }).waitFor();
+  await waitForWorkspaceText(page, "Runtime Capabilities");
   await page.getByText("Web tools", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-runtime-capabilities.png"), fullPage: true });
