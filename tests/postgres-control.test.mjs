@@ -53,6 +53,17 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     const skill = await repository.upsertAgentSkillPreference({ organizationId, userId, agentId, skillId: "browser/use", enabled: true, applyStatus: "pending" });
     assert.equal(skill.applyStatus, "pending");
     assert.equal((await repository.listAgentSkillPreferences(organizationId, userId, agentId)).length, 1);
+    const skillApplication = await repository.requestAgentSkillConfiguration({ organizationId, userId, agentId, requestedBy: userId });
+    assert.equal(skillApplication.command.action, "config.apply-user");
+    const [skillCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
+    assert.equal(skillCommand.approval_id, undefined);
+    assert.equal(skillCommand.config.secret_envelope, undefined);
+    assert.equal(skillCommand.config.document.owner_change.scope, "skills");
+    const skillReceipt = { commandId: skillCommand.command_id, serverId, attempt: skillCommand.attempt };
+    await repository.recordCommandReceipt({ ...skillReceipt, state: "accepted" });
+    await repository.recordCommandReceipt({ ...skillReceipt, state: "running" });
+    await repository.recordCommandReceipt({ ...skillReceipt, state: "succeeded" });
+    assert.equal((await repository.listAgentSkillPreferences(organizationId, userId, agentId))[0].applyStatus, "applied");
 
     const channel = await repository.upsertAgentChannelBinding({ organizationId, userId, agentId, channel: "feishu", displayName: "Postgres Feishu", status: "pending", credentialEnvelope: { encrypted: true }, credentialHint: "test" });
     assert.deepEqual(channel.credentialEnvelope, { encrypted: true });

@@ -12,6 +12,12 @@ configuration surface -> restart if required -> probe -> mark applied or roll
 back. Saving Provider settings alone never means they are active, and the
 control plane never selects a Provider for an individual Agent run.
 
+Agent owners use a narrower loop for skill preferences: save preference ->
+build a server-side `skills` revision -> lease `config.apply-user` -> merge
+structured YAML -> restart only Hermes -> receipt -> mark the matching
+preference applied or failed. This path cannot alter provider credentials,
+runtime settings, channels, prompts, memory, or container commands.
+
 ## Release loop
 
 CI builds immutable GHCR images and emits digest, SBOM, provenance, and

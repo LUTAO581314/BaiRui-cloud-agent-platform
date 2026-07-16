@@ -90,6 +90,34 @@ test("Supervisor stages and applies a trusted configuration with rollback files"
   assert.equal(fs.existsSync(path.join(supervisor.instancePath("agent_a"), "config-history", "config_a", "hermes.env")), true);
 });
 
+test("Supervisor applies only owner-scoped skill YAML and rolls back invalid input", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-supervisor-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const calls = [];
+  const execFile = async (file, args) => { calls.push(args); if (args[1] === "inspect") throw new Error("missing"); return { stdout: "", stderr: "" }; };
+  const supervisor = new AgentSupervisor({ instancesRoot: root, platformUrl: "https://platform.example.test", execFile, portStart: 19100, portEnd: 19110 });
+  await supervisor.execute(provisionCommand());
+  const instancePath = supervisor.instancePath("agent_a");
+  const hermesConfig = path.join(instancePath, "hermes-data", "config.yaml");
+  fs.writeFileSync(hermesConfig, "display:\n  tool_progress: verbose\nskills:\n  disabled: []\n");
+  const beforeCalls = calls.length;
+  const command = { action: "config.apply-user", command_id: "cmd_skills", idempotency_key: "dep_a/config.apply-user/config_skills", arguments: { config_revision_id: "config_skills" }, placement: { agent_id: "agent_a" }, config: { document: { owner_change: { scope: "skills", generation: 2 }, skills: { disabled: ["browser/use"] } } } };
+  const result = await supervisor.execute(command);
+  assert.equal(result.summary.applied, 1);
+  const applied = fs.readFileSync(hermesConfig, "utf8");
+  assert.match(applied, /tool_progress: verbose/);
+  assert.match(applied, /browser\/use/);
+  assert.ok(calls.slice(beforeCalls).some((args) => args.includes("bairui-hermes-" + supervisor.names("agent_a").key)));
+  assert.ok(calls.slice(beforeCalls).every((args) => !args.includes(supervisor.names("agent_a").runtime)));
+
+  const unchanged = fs.readFileSync(hermesConfig, "utf8");
+  await assert.rejects(() => supervisor.execute({ ...command, arguments: { config_revision_id: "config_bad_scope" }, config: { document: { owner_change: { scope: "provider", generation: 3 }, skills: { disabled: [] } } } }), { code: "invalid_user_config_scope" });
+  assert.equal(fs.readFileSync(hermesConfig, "utf8"), unchanged);
+  fs.writeFileSync(hermesConfig, "skills: [\n");
+  await assert.rejects(() => supervisor.execute({ ...command, arguments: { config_revision_id: "config_bad_yaml" }, config: { document: { owner_change: { scope: "skills", generation: 4 }, skills: { disabled: [] } } } }), { code: "invalid_hermes_config" });
+  assert.equal(fs.readFileSync(hermesConfig, "utf8"), "skills: [\n");
+});
+
 test("Supervisor encrypts, verifies, and restores Agent backups with rollback history", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-supervisor-"));
   const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bairui-backups-"));

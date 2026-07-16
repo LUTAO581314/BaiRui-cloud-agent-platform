@@ -30,6 +30,7 @@ const required = [
   "packages/db/migrations/011_retention_enforcement.sql",
   "packages/db/migrations/012_agent_resource_telemetry.sql",
   "packages/db/migrations/013_user_runtime_history.sql",
+  "packages/db/migrations/014_user_configuration_apply.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -99,7 +100,7 @@ for (const view of ["renderConversations", "renderAgents", "renderMemory", "rend
 }
 const controlProtocolPath = path.join(root, "packages/server-protocol/control-plane.mjs");
 const controlProtocol = fs.existsSync(controlProtocolPath) ? fs.readFileSync(controlProtocolPath, "utf8") : "";
-for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
+for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!controlProtocol.includes(`"${action}"`)) failures.push(`Missing allowed control action: ${action}`);
 }
 for (const prefix of ["prompt.", "conversation.", "task.", "model.", "tool.", "skill.", "memory.", "runtime.", "shell.", "script.", "sql."]) {
@@ -153,6 +154,8 @@ const runtimeHistoryMigration = fs.readFileSync(path.join(root, "packages/db/mig
 for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_runs", "agent_runs_owner_fkey", "parent_run_id", "input_text"]) {
   if (!runtimeHistoryMigration.includes(fragment)) throw new Error(`Runtime history migration is missing ${fragment}`);
 }
+const userConfigurationMigration = fs.readFileSync(path.join(root, "packages/db/migrations/014_user_configuration_apply.sql"), "utf8");
+if (!userConfigurationMigration.includes("'config.apply-user'")) failures.push("Missing owner-scoped configuration control action");
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }
