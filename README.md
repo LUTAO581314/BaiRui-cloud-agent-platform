@@ -16,6 +16,10 @@ This repository does not own the Hermes runtime. It owns the cloud platform,
 customer delivery, license, deployment, server-agent, and platform-to-control
 plane contracts.
 
+The cross-team implementation contract is documented in
+`docs/20-platform-agent-integration-guide.md`. Platform work must preserve its
+identity, data-plane, control-plane, memory, and administrator boundaries.
+
 ## Product Role
 
 `BaiRui-cloud-agent-platform` owns:

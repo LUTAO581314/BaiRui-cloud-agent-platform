@@ -455,6 +455,82 @@
     return button;
   }
 
+  function mountHermesChatSurface(agent) {
+    const chatArea = document.querySelector("#chat-area");
+    const inputRow = document.querySelector("#input-row");
+    const messageInput = document.querySelector("#msg-input");
+    if (!chatArea || !inputRow || !messageInput || chatArea.querySelector(".bairui-chat-header")) return;
+
+    const applyViewportLayout = () => {
+      const mobile = window.matchMedia("(max-width: 900px)").matches;
+      const top = mobile ? 62 : 72;
+      const bottom = mobile ? 10 : 18;
+      const zoom = Number.parseFloat(document.documentElement.style.zoom) || Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      const height = Math.max(320, window.innerHeight - top - bottom);
+      Object.assign(chatArea.style, {
+        position: "fixed",
+        top: `${top / zoom}px`,
+        bottom: "auto",
+        height: `${height / zoom}px`,
+        maxHeight: `${height / zoom}px`,
+        boxSizing: "border-box",
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr) auto auto",
+        overflow: "hidden"
+      });
+    };
+    applyViewportLayout();
+    window.addEventListener("resize", applyViewportLayout, { passive: true });
+    window.addEventListener("bairui:chat-layout", applyViewportLayout);
+
+    const header = document.createElement("header");
+    header.className = "bairui-chat-header";
+    const identity = document.createElement("div");
+    identity.className = "bairui-chat-identity";
+    const icon = document.createElement("img");
+    icon.src = "/assets/bairui-agent-icon.png";
+    icon.alt = "";
+    const name = document.createElement("strong");
+    name.textContent = agent.name;
+    const runtime = document.createElement("span");
+    runtime.textContent = `Hermes · ${initializationLabel(agent)}`;
+    identity.append(icon, name, runtime);
+    const live = document.createElement("span");
+    live.className = "bairui-chat-live";
+    live.textContent = "Session";
+    header.append(identity, live);
+    chatArea.prepend(header);
+
+    const history = chatArea.querySelector("#chat-history");
+    const messages = chatArea.querySelector("#chat-messages");
+    const attachments = chatArea.querySelector("#paste-attachments");
+    if (history) Object.assign(history.style, { gridRow: "2", width: "100%", height: "100%", minHeight: "0", maxHeight: "none", overflow: "hidden" });
+    if (messages) Object.assign(messages.style, { width: "100%", height: "100%", minHeight: "0", maxHeight: "none", overflowY: "auto" });
+    if (attachments) attachments.style.gridRow = "3";
+    inputRow.style.gridRow = "4";
+
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "image/png,image/jpeg,image/webp,image/gif";
+    picker.multiple = true;
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    const attach = iconButton("添加图片", "+");
+    attach.className = "bairui-attach-button";
+    attach.dataset.action = "attach-image";
+    attach.addEventListener("click", () => picker.click());
+    picker.addEventListener("change", () => {
+      if (!picker.files?.length) return;
+      const transfer = new DataTransfer();
+      for (const file of picker.files) if (file.type.startsWith("image/")) transfer.items.add(file);
+      if (transfer.files.length) messageInput.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+      picker.value = "";
+      messageInput.focus();
+    });
+    inputRow.insertBefore(attach, inputRow.firstChild);
+    inputRow.appendChild(picker);
+  }
+
   function prefillChat(text) {
     const input = document.querySelector("#msg-input");
     if (!input) return;
@@ -591,7 +667,9 @@
       location.href = "/login";
     });
     tools.appendChild(logout);
+    Object.assign(tools.style, { position: "fixed", zIndex: "2147483000", pointerEvents: "auto" });
     document.body.appendChild(tools);
+    mountHermesChatSurface(agent);
     mountOperationalSurface(agent);
 
     document.querySelector("#send-btn")?.addEventListener("click", (event) => {

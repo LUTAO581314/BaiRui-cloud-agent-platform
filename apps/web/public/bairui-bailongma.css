@@ -6,7 +6,7 @@
 
 .bairui-platform-tools {
   position: fixed;
-  z-index: 1200;
+  z-index: 2147483000 !important;
   top: 22px;
   left: 50%;
   display: flex;
@@ -21,6 +21,14 @@
   font: 500 12px/1 Inter, "Segoe UI", sans-serif;
   transform: translateX(-50%);
   backdrop-filter: blur(12px);
+  isolation: isolate;
+  pointer-events: auto !important;
+}
+
+.bairui-platform-tools > * {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
 }
 
 .bairui-platform-tools img {
@@ -67,6 +75,198 @@
 .bairui-runtime-status.status-suspended,
 .bairui-runtime-status.status-stopped {
   color: #efc36b;
+}
+
+/* BaiLongma remains the visual upstream; this turns its console into a stable
+   Hermes session column using the interaction density of mature chat clients. */
+.console {
+  top: 72px;
+  bottom: auto;
+  height: calc(100vh - 90px);
+  height: calc(100dvh - 90px);
+  max-height: calc(100dvh - 90px);
+  min-height: 0;
+  box-sizing: border-box;
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--bg0, #0b121c) 94%, transparent) !important;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.025) !important;
+}
+
+.bairui-chat-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 54px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line, rgba(126, 153, 181, 0.2));
+  background: color-mix(in srgb, var(--bg1, #101923) 88%, transparent);
+}
+
+.bairui-chat-identity {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+}
+
+.bairui-chat-identity img {
+  grid-row: 1 / 3;
+  width: 32px;
+  height: 32px;
+  align-self: center;
+  object-fit: contain;
+}
+
+.bairui-chat-identity strong,
+.bairui-chat-identity span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.bairui-chat-identity strong { color: var(--ink, #f3f7fb); font-size: 13px; }
+.bairui-chat-identity span { color: var(--dim, #8294a8); font-size: 10px; }
+
+.bairui-chat-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #58d195;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.bairui-chat-live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+#chat-history,
+#chat-history.open {
+  grid-row: 2;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  max-height: none !important;
+  display: flex;
+  overflow: hidden !important;
+}
+
+#chat-messages {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none !important;
+  gap: 0 !important;
+  padding: 0 !important;
+  scroll-padding-bottom: 18px;
+}
+
+#chat-messages .msg {
+  width: 100%;
+  max-width: none;
+  align-self: stretch;
+  padding: 14px 18px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line, #304050) 70%, transparent);
+  border-radius: 0;
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+#chat-messages .msg-user {
+  background: color-mix(in srgb, var(--panel-raised, #162331) 54%, transparent);
+}
+
+#chat-messages .msg-jarvis {
+  background: color-mix(in srgb, var(--bg1, #101923) 38%, transparent);
+}
+
+#chat-messages .msg-label {
+  margin-bottom: 7px;
+  color: var(--dim, #8294a8);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 1;
+}
+
+#input-row {
+  grid-row: 4;
+  margin: 10px;
+  padding: 7px 8px !important;
+  gap: 8px !important;
+  border: 1px solid var(--line-strong, rgba(126, 153, 181, 0.34)) !important;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-deep, #071019) 82%, transparent);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+#input-row:focus-within {
+  border-color: color-mix(in srgb, var(--cool, #72c6ff) 62%, transparent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cool, #72c6ff) 24%, transparent);
+}
+
+#input-row .prompt-mark { display: none; }
+
+#msg-input {
+  min-height: 36px;
+  padding: 7px 4px !important;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.bairui-attach-button,
+#send-btn {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 !important;
+  border: 0;
+  border-radius: 6px !important;
+  font-size: 0 !important;
+  letter-spacing: 0 !important;
+  cursor: pointer;
+}
+
+.bairui-attach-button {
+  background: transparent;
+  color: var(--ink2, #b7c8dc);
+}
+
+.bairui-attach-button::before { content: "+"; font-size: 22px; font-weight: 400; }
+.bairui-attach-button:hover { background: var(--line, rgba(126, 153, 181, 0.14)); color: var(--ink, #f3f7fb); }
+
+#send-btn {
+  background: var(--cool, #4a9fd5) !important;
+  color: #071019 !important;
+  box-shadow: none !important;
+}
+
+#send-btn::before { content: "\2191"; font-size: 20px; font-weight: 800; line-height: 1; }
+.bairui-streaming #send-btn::before { content: "\25A0"; font-size: 14px; }
+#send-btn:hover { transform: none !important; filter: brightness(1.08); box-shadow: none !important; }
+
+.paste-attachments {
+  grid-row: 3;
+  margin: 0 10px !important;
+  padding: 9px 10px 0 !important;
+  border-top: 0 !important;
 }
 
 .bairui-operational-blocker {
@@ -547,11 +747,36 @@ body.bairui-streaming #send-btn {
     display: none;
   }
 
+  .bairui-platform-tools > img {
+    display: none;
+  }
+
+  .bairui-runtime-status {
+    max-width: 78px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .bairui-platform-tools select {
     width: 124px;
   }
 
-  .bairui-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 54px; }
+  .console {
+    top: 62px;
+    right: 10px !important;
+    bottom: auto;
+    left: 10px !important;
+    height: calc(100vh - 72px);
+    height: calc(100dvh - 72px);
+    max-height: calc(100dvh - 72px);
+  }
+
+  .bairui-chat-header { min-height: 48px; padding: 7px 10px; }
+  .bairui-chat-identity img { width: 28px; height: 28px; }
+  #chat-messages .msg { padding: 12px 13px; }
+  #input-row { margin: 7px; }
+
+  .bairui-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 54px; box-sizing: border-box; padding-top: 56px; }
   .bairui-workspace > main { grid-row: 1; grid-template-rows: 58px minmax(0, 1fr); }
   .bw-nav { grid-row: 2; border-top: 1px solid #253443; border-right: 0; }
   .bw-nav header { display: none; }

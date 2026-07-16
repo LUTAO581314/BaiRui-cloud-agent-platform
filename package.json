@@ -13,6 +13,7 @@
   "scripts": {
     "test": "node --test \"tests/*.test.mjs\"",
     "verify": "node --test \"tests/*.test.mjs\" && node scripts/check-platform.mjs",
+    "test:browser:remote": "node tests/browser/remote-acceptance.mjs",
     "deploy:check": "node scripts/check-platform.mjs",
     "db:migrate": "node packages/db/bin/migrate.mjs",
     "db:schema:check": "node scripts/check-postgres-schema.mjs",
@@ -30,5 +31,8 @@
     "operations:backup": "node scripts/operations/backup-postgres.mjs",
     "operations:restore": "node scripts/operations/restore-postgres.mjs",
     "operations:rollback": "node scripts/operations/rollback-compose.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.1"
   }
 }
