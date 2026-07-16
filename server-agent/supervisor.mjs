@@ -402,6 +402,17 @@ export class AgentSupervisor {
     }
   }
 
+  expireBackup(command) {
+    const agentId = this.commandAgentId(command);
+    this.readMetadata(agentId);
+    const backupId = identifier(command.arguments?.backup_id, "backup_id");
+    const backupPath = this.backupPath(backupId);
+    if (!fs.existsSync(backupPath)) return { summary: { expired: 1, already_absent: 1 }, evidenceRefs: [`backup:${backupId}:expired`] };
+    this.readBackup(backupId, agentId);
+    fs.rmSync(backupPath, { force: true });
+    return { summary: { expired: 1, files_deleted: 1 }, evidenceRefs: [`backup:${backupId}:expired`] };
+  }
+
   releaseDescriptor(command, idField = "release_id") {
     const releaseId = identifier(command.arguments?.[idField], idField);
     const release = command.release;
@@ -480,6 +491,7 @@ export class AgentSupervisor {
     if (command.action === "backup.create") return this.createBackup(command);
     if (command.action === "backup.verify") return this.verifyBackup(command);
     if (command.action === "backup.restore") return this.restoreBackup(command);
+    if (command.action === "backup.expire") return this.expireBackup(command);
     if (command.action === "release.stage") return this.stageRelease(command);
     if (command.action === "release.apply") return this.applyRelease(command);
     if (command.action === "release.rollback") return this.applyRelease({ ...command, release: command.rollback_release }, "rollback_release_id");

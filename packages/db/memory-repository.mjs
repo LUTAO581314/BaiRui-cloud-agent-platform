@@ -6,6 +6,19 @@ function publicUser(user) {
   return safe;
 }
 
+const DEFAULT_RETENTION = Object.freeze({ telemetryDays: 30, usageDays: 400, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30 });
+
+function retentionCutoffs(policy, now) {
+  const day = 24 * 60 * 60_000;
+  return {
+    telemetry: new Date(now - policy.telemetryDays * day).toISOString(),
+    usage: new Date(now - policy.usageDays * day).toISOString(),
+    audit: new Date(now - policy.auditDays * day).toISOString(),
+    sensitiveAccess: new Date(now - policy.sensitiveAccessEventDays * day).toISOString(),
+    backup: new Date(now - policy.backupDays * day).toISOString()
+  };
+}
+
 export class MemoryPlatformRepository {
   #organizations = new Map();
   #users = new Map();
@@ -32,6 +45,7 @@ export class MemoryPlatformRepository {
   #sensitiveAccessEvents = [];
   #backupRecords = [];
   #backupRestoreRuns = [];
+  #retentionRuns = [];
   #releaseGates = [];
   #upstreamCandidates = [];
   #agentComponents = new Map();
@@ -334,7 +348,11 @@ export class MemoryPlatformRepository {
       this.#controlApprovals.push(approval);
     }
     if (["probe.run", "contract.test", "smoke.test"].includes(input.action) && input.arguments.test_run_id) this.#testRuns.push({ id: input.arguments.test_run_id, deploymentId: deployment.id, suiteId: input.arguments.suite_id ?? input.arguments.probe_ids.join(","), testType: input.action === "probe.run" ? "probe" : input.action === "contract.test" ? "contract" : "smoke", status: "queued", createdAt: new Date().toISOString() });
-    if (input.action === "backup.create" && input.arguments.backup_id) this.#backupRecords.push({ id: input.arguments.backup_id, deploymentId: deployment.id, policyId: input.arguments.backup_policy_id, backupType: "runtime-files", status: "creating", encrypted: true, createdAt: new Date().toISOString() });
+    if (input.action === "backup.create" && input.arguments.backup_id) {
+      const createdAt = new Date().toISOString();
+      const backupDays = this.#retentionPolicies.get(input.organizationId)?.backupDays ?? DEFAULT_RETENTION.backupDays;
+      this.#backupRecords.push({ id: input.arguments.backup_id, deploymentId: deployment.id, policyId: input.arguments.backup_policy_id, backupType: "runtime-files", status: "creating", encrypted: true, createdAt, expiresAt: new Date(Date.parse(createdAt) + backupDays * 24 * 60 * 60_000).toISOString() });
+    }
     if (input.action === "backup.restore") this.#backupRestoreRuns.push({ id: input.arguments.restore_id, backupId: input.arguments.backup_id, deploymentId: deployment.id, commandId: command.id, status: "requested", requestedBy: input.requestedBy, reason: input.reason, evidenceRefs: [], errorCode: null, errorSummary: null, startedAt: null, completedAt: null, createdAt: new Date().toISOString() });
     return { command, approval };
   }
@@ -407,6 +425,10 @@ export class MemoryPlatformRepository {
         if (command.action === "backup.restore") {
           const restore = this.#backupRestoreRuns.find((item) => item.commandId === command.id && item.status === "requested");
           if (restore) Object.assign(restore, { status: "cancelled", errorCode: "command_expired", errorSummary: "Backup restore command expired", completedAt: new Date().toISOString() });
+        }
+        if (command.action === "backup.expire") {
+          const backup = this.#backupRecords.find((item) => item.id === command.arguments.backup_id && item.status === "expiring");
+          if (backup) backup.status = "failed";
         }
       }
       if (command.state !== "queued") continue;
@@ -533,6 +555,11 @@ export class MemoryPlatformRepository {
       if (restore && input.state === "succeeded") Object.assign(restore, { status: "succeeded", evidenceRefs: input.evidenceRefs ?? [], completedAt: new Date().toISOString() });
       if (restore && input.state === "failed") Object.assign(restore, { status: "failed", errorCode: input.errorCode ?? "restore_failed", errorSummary: input.errorSummary ?? "Backup restore failed", completedAt: new Date().toISOString() });
       if (restore && input.state === "cancelled") Object.assign(restore, { status: "cancelled", errorCode: input.errorCode ?? "restore_cancelled", errorSummary: input.errorSummary ?? "Backup restore was cancelled", completedAt: new Date().toISOString() });
+    }
+    if (command.action === "backup.expire") {
+      const backup = this.#backupRecords.find((item) => item.id === command.arguments.backup_id);
+      if (backup && input.state === "succeeded") Object.assign(backup, { status: "expired", storageUri: null, expiredAt: new Date().toISOString() });
+      if (backup && input.state === "failed") backup.status = "failed";
     }
     if (["release.stage", "release.apply", "release.rollback"].includes(command.action)) {
       const current = this.#releaseManifests.find((item) => item.id === command.arguments.release_id);
@@ -818,6 +845,45 @@ export class MemoryPlatformRepository {
     const value = { organizationId: input.organizationId, telemetryDays: input.telemetryDays, usageDays: input.usageDays, auditDays: input.auditDays, sensitiveAccessEventDays: input.sensitiveAccessEventDays, backupDays: input.backupDays, updatedBy: input.updatedBy, updatedAt: new Date().toISOString() };
     this.#retentionPolicies.set(input.organizationId, value);
     return value;
+  }
+
+  async enforceRetentionPolicies({ organizationId, now = Date.now(), actorUserId = null, reason = "Scheduled retention enforcement" } = {}) {
+    const organizations = [...this.#organizations.keys()].filter((id) => !organizationId || id === organizationId);
+    const runs = [];
+    const recent = (value, cutoff) => !Number.isFinite(Date.parse(value)) || Date.parse(value) >= Date.parse(cutoff);
+    for (const id of organizations) {
+      const policy = { ...DEFAULT_RETENTION, ...(this.#retentionPolicies.get(id) ?? {}) };
+      const cutoffs = retentionCutoffs(policy, now);
+      const run = { id: randomUUID(), organizationId: id, status: "running", cutoffs, deletedCounts: {}, backupExpirationCommands: 0, errorCode: null, startedAt: new Date(now).toISOString(), completedAt: null, createdAt: new Date(now).toISOString() };
+      this.#retentionRuns.push(run);
+      const purge = (field, source, predicate) => {
+        const before = source.length;
+        const kept = source.filter((item) => !predicate(item));
+        source.splice(0, source.length, ...kept);
+        run.deletedCounts[field] = before - kept.length;
+      };
+      purge("heartbeats", this.#heartbeats, (item) => item.organizationId === id && !recent(item.receivedAt, cutoffs.telemetry));
+      purge("telemetryEvents", this.#telemetryEvents, (item) => item.organizationId === id && !recent(item.occurredAt ?? item.receivedAt, cutoffs.telemetry));
+      purge("usageRollups", this.#usageRollups, (item) => item.organizationId === id && !recent(item.bucketStart, cutoffs.usage));
+      purge("sensitiveAccessEvents", this.#sensitiveAccessEvents, (item) => item.organizationId === id && !recent(item.createdAt, cutoffs.sensitiveAccess));
+      purge("auditEvents", this.#audit, (item) => item.organizationId === id && !recent(item.createdAt, cutoffs.audit));
+      for (const backup of this.#backupRecords) {
+        const deployment = this.#controlDeployments.find((item) => item.id === backup.deploymentId && item.organizationId === id);
+        const restoring = this.#backupRestoreRuns.some((item) => item.backupId === backup.id && ["requested", "running"].includes(item.status));
+        if (!deployment || restoring || !["created", "verified", "failed"].includes(backup.status) || recent(backup.createdAt, cutoffs.backup)) continue;
+        this.#controlCommands.push({ id: randomUUID(), organizationId: id, deploymentId: deployment.id, agentId: deployment.agentId, idempotencyKey: `${deployment.id}/backup.expire/${backup.id}/${run.id}`, action: "backup.expire", target: { module_id: "bairui.supervisor", instance_id: deployment.agentId }, arguments: { backup_id: backup.id }, approvalId: null, expectedObservationVersion: deployment.observedStateVersion ?? 0, state: "queued", priority: 200, attempt: 0, requestedBy: policy.updatedBy ?? null, expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(), createdAt: new Date(now).toISOString() });
+        backup.status = "expiring";
+        run.backupExpirationCommands += 1;
+      }
+      Object.assign(run, { status: "succeeded", completedAt: new Date(now).toISOString() });
+      this.#audit.push({ id: randomUUID(), organizationId: id, actorUserId, action: "retention.enforced", targetType: "retention_run", targetId: run.id, metadata: { reason, deletedCounts: run.deletedCounts, backupExpirationCommands: run.backupExpirationCommands, cutoffs }, createdAt: new Date(now).toISOString() });
+      runs.push({ ...run });
+    }
+    return runs;
+  }
+
+  async listRetentionRuns(organizationId, limit = 100) {
+    return this.#retentionRuns.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 100, 500)));
   }
 
   async listSensitiveAccessGrants(organizationId) {

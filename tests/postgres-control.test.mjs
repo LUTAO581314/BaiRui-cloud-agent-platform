@@ -115,6 +115,24 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: restoreCommand.command_id, serverId, attempt: restoreCommand.attempt, state, evidenceRefs: state === "succeeded" ? [`restore:${restoreId}:succeeded`] : [] });
     assert.equal((await repository.listBackupRestoreRuns(organizationId))[0].status, "succeeded");
 
+    await repository.recordAudit({ organizationId, actorUserId: userId, action: "retention.test.seed", targetType: "organization", targetId: organizationId });
+    const retentionRuns = await repository.enforceRetentionPolicies({ organizationId, now: Date.now() + 500 * 24 * 60 * 60_000 });
+    assert.equal(retentionRuns[0].status, "succeeded");
+    assert.ok(retentionRuns[0].deletedCounts.heartbeats > 0);
+    assert.ok(retentionRuns[0].deletedCounts.usageRollups > 0);
+    assert.ok(retentionRuns[0].deletedCounts.sensitiveAccessEvents > 0);
+    assert.ok(retentionRuns[0].deletedCounts.auditEvents > 0);
+    assert.equal((await repository.listUsageRollups(organizationId, userId, agentId)).length, 0);
+    assert.equal((await repository.listSensitiveAccessEvents(organizationId)).length, 0);
+    assert.equal((await repository.listAudit(organizationId))[0].action, "retention.enforced");
+    const expirationCommand = (await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 })).find((item) => item.action === "backup.expire");
+    assert.equal(expirationCommand.arguments.backup_id, backupId);
+    for (const state of ["accepted", "running", "succeeded"]) await repository.recordCommandReceipt({ commandId: expirationCommand.command_id, serverId, attempt: expirationCommand.attempt, state });
+    assert.equal((await repository.listBackupRecords(organizationId))[0].status, "expired");
+    const chain = await repository.pool.query("SELECT audit_event_id FROM audit_hash_chain WHERE organization_id=$1 ORDER BY sequence", [organizationId]);
+    assert.ok(chain.rows.some((row) => row.audit_event_id === null));
+    assert.ok(chain.rows.some((row) => row.audit_event_id !== null));
+
     const manifest = await repository.createReleaseManifest({ id: `manifest_${suffix}`, version: `1.0.${suffix}`, agentCommit: "a".repeat(40), imageDigest: `ghcr.io/bairui/bundle@sha256:${"a".repeat(64)}`, sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64), compatibility: { hermes_image: `ghcr.io/bairui/hermes@sha256:${"b".repeat(64)}`, runtime_image: `ghcr.io/bairui/runtime@sha256:${"c".repeat(64)}` }, createdBy: userId });
     assert.equal((await repository.listReleaseManifests())[0].id, manifest.id);
 

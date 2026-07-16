@@ -12,11 +12,12 @@ const requiredTables = [
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
   "provider_channels", "model_policies", "data_retention_policies",
-  "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs"
+  "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs"
 ];
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
 const requiredObsidianColumns = ["agent_id"];
+const requiredBackupColumns = ["expired_at"];
 const client = new pg.Client({ connectionString });
 await client.connect();
 try {
@@ -32,9 +33,12 @@ try {
   const { rows: obsidianColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='obsidian_notes'");
   const obsidianColumns = new Set(obsidianColumnRows.map((row) => row.column_name));
   for (const column of requiredObsidianColumns) if (!obsidianColumns.has(column)) throw new Error(`Missing obsidian_notes column: ${column}`);
+  const { rows: backupColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='backup_records'");
+  const backupColumns = new Set(backupColumnRows.map((row) => row.column_name));
+  for (const column of requiredBackupColumns) if (!backupColumns.has(column)) throw new Error(`Missing backup_records column: ${column}`);
   const { rows: actionRows } = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='control_commands_action_check'");
   const actionConstraint = actionRows[0]?.definition ?? "";
-  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "backup.restore"]) {
+  for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "backup.restore", "backup.expire"]) {
     if (!actionConstraint.includes(action)) throw new Error(`Missing control action in PostgreSQL constraint: ${action}`);
   }
   console.log("PostgreSQL schema check passed.");

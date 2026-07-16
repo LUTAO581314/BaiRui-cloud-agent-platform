@@ -15,6 +15,7 @@ Responsibilities:
 - report Bairui Runtime Boundary readiness where available;
 - report backup status;
 - create, verify, and approval-gate restore of encrypted Agent backups;
+- expire encrypted Agent backups through policy-generated identifier commands;
 - collect diagnostic bundles after customer action;
 - execute white-listed maintenance actions.
 

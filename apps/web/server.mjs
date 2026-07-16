@@ -87,6 +87,23 @@ await evaluateControlPlaneHealth();
 const healthEvaluationTimer = setInterval(evaluateControlPlaneHealth, healthEvaluationIntervalMs);
 healthEvaluationTimer.unref();
 
+const retentionIntervalMs = Math.max(15 * 60_000, Number(process.env.BAIRUI_RETENTION_INTERVAL_MS) || 6 * 60 * 60_000);
+let retentionRunning = false;
+async function enforceRetention() {
+  if (retentionRunning) return;
+  retentionRunning = true;
+  try {
+    await repository.enforceRetentionPolicies();
+  } catch (error) {
+    console.error("Control-plane retention enforcement failed", error);
+  } finally {
+    retentionRunning = false;
+  }
+}
+await enforceRetention();
+const retentionTimer = setInterval(enforceRetention, retentionIntervalMs);
+retentionTimer.unref();
+
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1", () => {
   console.log(`bairui-agent platform listening on port ${port}`);

@@ -49,3 +49,12 @@ test("backup restore is a fixed approval-gated operation", () => {
   assert.throws(() => validateControlCommand(value), /approval_id/);
   assert.throws(() => validateControlCommand({ ...base(), action: "backup.restore", arguments: { backup_id: "backup_a", restore_id: "restore_a", path: "/tmp/archive" } }), /not allowed/);
 });
+
+test("backup expiration accepts an identifier but no host path", () => {
+  const value = base();
+  value.action = "backup.expire";
+  value.arguments = { backup_id: "backup_a" };
+  delete value.approval_id;
+  assert.equal(validateControlCommand(value).action, "backup.expire");
+  assert.throws(() => validateControlCommand({ ...value, arguments: { backup_id: "backup_a", path: "/var/lib/bairui/backups/backup_a.brb" } }), /not allowed/);
+});

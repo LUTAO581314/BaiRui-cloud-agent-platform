@@ -127,6 +127,11 @@ test("Supervisor encrypts, verifies, and restores Agent backups with rollback hi
   await assert.rejects(() => supervisor.execute({ ...restore, approval_id: undefined, arguments: { backup_id: "backup_a", restore_id: "restore_without_approval" } }), { code: "approval_required" });
   unsafeArchive = true;
   await assert.rejects(() => supervisor.execute({ ...restore, arguments: { backup_id: "backup_a", restore_id: "restore_unsafe" } }), { code: "unsafe_backup_content" });
+  unsafeArchive = false;
+  const expired = await supervisor.execute({ action: "backup.expire", arguments: { backup_id: "backup_a" }, placement: { agent_id: "agent_a" } });
+  assert.equal(expired.summary.files_deleted, 1);
+  assert.equal(fs.existsSync(path.join(backupRoot, "backup_a.brb")), false);
+  assert.equal((await supervisor.execute({ action: "backup.expire", arguments: { backup_id: "backup_a" }, placement: { agent_id: "agent_a" } })).summary.already_absent, 1);
 });
 
 test("Supervisor accepts release images only from trusted immutable manifests", async (t) => {
