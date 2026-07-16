@@ -133,6 +133,7 @@
   function closeWorkspace() {
     root.hidden = true;
     document.body.classList.remove("bairui-workspace-open");
+    window.dispatchEvent(new CustomEvent("bairui:chat-layout"));
   }
 
   async function render(view) {

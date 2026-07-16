@@ -479,6 +479,7 @@
     };
     applyViewportLayout();
     window.addEventListener("resize", applyViewportLayout, { passive: true });
+    window.addEventListener("bairui:chat-layout", applyViewportLayout);
 
     const header = document.createElement("header");
     header.className = "bairui-chat-header";
