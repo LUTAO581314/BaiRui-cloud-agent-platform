@@ -49,6 +49,7 @@ async function login(baseUrl, email) {
 
 async function makeAgentReady(context, { observedAt = new Date().toISOString(), usage } = {}) {
   await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { ciphertext: "encrypted-provider-key" }, keyHint: "test", updatedBy: "root" });
+  await context.repository.updateAgent(context.agent.id, { desiredRuntimeState: "running" });
   await context.repository.saveAgentHeartbeat({ organizationId: "org_a", userId: context.users.user.id, agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", observedAt, components: [], ...(usage ? { usage } : {}) });
 }
 
