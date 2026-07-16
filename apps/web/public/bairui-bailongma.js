@@ -465,7 +465,7 @@
       const mobile = window.matchMedia("(max-width: 900px)").matches;
       const top = mobile ? 62 : 72;
       const bottom = mobile ? 10 : 18;
-      const zoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      const zoom = Number.parseFloat(document.documentElement.style.zoom) || Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
       const height = Math.max(320, window.innerHeight - top - bottom);
       Object.assign(chatArea.style, {
         position: "fixed",

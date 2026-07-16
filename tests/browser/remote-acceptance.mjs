@@ -41,7 +41,7 @@ async function ordinaryDesktop(browser, baseUrl) {
   const chatGeometry = await page.locator("#chat-area").evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
-    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, position: style.position, styleHeight: style.height };
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, position: style.position, styleHeight: style.height, rootZoom: document.documentElement.style.zoom };
   });
   assert.ok(chatGeometry.top < 100 && chatGeometry.bottom > chatGeometry.viewport - 40 && chatGeometry.height > chatGeometry.viewport * 0.75, `chat column is not viewport anchored: ${JSON.stringify(chatGeometry)}`);
   assert.equal(await page.locator('a[href="/admin"]').count(), 0, "ordinary users must not receive an admin link");
@@ -75,7 +75,7 @@ async function ordinaryDesktop(browser, baseUrl) {
     const areaRect = area.getBoundingClientRect();
     const rowRect = document.querySelector("#input-row").getBoundingClientRect();
     const style = getComputedStyle(area);
-    return { top: rect.top, bottom: rect.bottom, viewport: innerHeight, rowTop: rowRect.top, rowBottom: rowRect.bottom, areaTop: areaRect.top, areaBottom: areaRect.bottom, areaHeight: areaRect.height, display: style.display, gridTemplateRows: style.gridTemplateRows };
+    return { top: rect.top, bottom: rect.bottom, viewport: innerHeight, rowTop: rowRect.top, rowBottom: rowRect.bottom, areaTop: areaRect.top, areaBottom: areaRect.bottom, areaHeight: areaRect.height, display: style.display, gridTemplateRows: style.gridTemplateRows, inlineHeight: area.style.height, rootZoom: document.documentElement.style.zoom };
   });
   process.stdout.write(`Desktop composer geometry: ${JSON.stringify(sendGeometry)}\n`);
   assert.ok(sendGeometry.top >= 0 && sendGeometry.bottom <= sendGeometry.viewport, `send button is outside viewport: ${JSON.stringify(sendGeometry)}`);
