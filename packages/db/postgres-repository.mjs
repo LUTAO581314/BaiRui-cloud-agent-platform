@@ -1112,7 +1112,7 @@ export class PostgresPlatformRepository {
        ON CONFLICT (organization_id, user_id, agent_id, slug) WHERE agent_id IS NOT NULL
        DO UPDATE SET title=EXCLUDED.title, markdown=EXCLUDED.markdown, frontmatter=EXCLUDED.frontmatter, wikilinks=EXCLUDED.wikilinks, memory_kind=EXCLUDED.memory_kind, importance=EXCLUDED.importance, hermes_target=EXCLUDED.hermes_target, source_ref=EXCLUDED.source_ref, revision=obsidian_notes.revision+1, hermes_sync_status='pending', updated_at=now()
        RETURNING *`,
-      [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind, input.importance, input.hermesTarget, input.sourceRef]
+      [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? "knowledge", input.importance ?? 3, input.hermesTarget ?? "auto", input.sourceRef ?? "bairui-user"]
     );
     return mapObsidianNote(rows[0]);
   }
@@ -1135,9 +1135,9 @@ export class PostgresPlatformRepository {
 
   async updateObsidianNote(input) {
     const { rows } = await this.pool.query(
-      `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, memory_kind=$10, importance=$11, hermes_target=$12, source_ref=$13, revision=revision+1, hermes_sync_status='pending', updated_at=now()
+      `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, memory_kind=COALESCE($10,memory_kind), importance=COALESCE($11,importance), hermes_target=COALESCE($12,hermes_target), source_ref=COALESCE($13,source_ref), revision=revision+1, hermes_sync_status='pending', updated_at=now()
        WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *`,
-      [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind, input.importance, input.hermesTarget, input.sourceRef]
+      [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind ?? null, input.importance ?? null, input.hermesTarget ?? null, input.sourceRef ?? null]
     );
     return mapObsidianNote(rows[0]);
   }

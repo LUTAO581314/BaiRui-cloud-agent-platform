@@ -800,13 +800,14 @@ export class MemoryPlatformRepository {
   }
 
   async createObsidianNote(input) {
+    const normalized = { ...input, memoryKind: input.memoryKind ?? "knowledge", importance: input.importance ?? 3, hermesTarget: input.hermesTarget ?? "auto", sourceRef: input.sourceRef ?? "bairui-user" };
     const duplicate = this.#obsidianNotes.find((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId && item.slug === input.slug);
     const now = new Date().toISOString();
     if (duplicate) {
-      Object.assign(duplicate, input, { revision: (duplicate.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: now });
+      Object.assign(duplicate, normalized, { revision: (duplicate.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: now });
       return duplicate;
     }
-    const note = { id: input.id ?? randomUUID(), revision: 1, hermesSyncStatus: "pending", hermesSyncedRevision: null, hermesSyncedAt: null, ...input, createdAt: now, updatedAt: now };
+    const note = { id: input.id ?? randomUUID(), revision: 1, hermesSyncStatus: "pending", hermesSyncedRevision: null, hermesSyncedAt: null, ...normalized, createdAt: now, updatedAt: now };
     this.#obsidianNotes.push(note);
     return note;
   }
