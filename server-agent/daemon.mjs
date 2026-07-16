@@ -16,6 +16,8 @@ export function supervisorFromEnv(env = process.env, options = {}) {
     hermesImage: env.HERMES_IMAGE ?? "hermes-agent:local",
     runtimeImage: env.BAIRUI_RUNTIME_IMAGE ?? "bairui-runtime:local",
     runtimeAdvertiseHost: env.BAIRUI_RUNTIME_ADVERTISE_HOST ?? "host.docker.internal",
+    backupRoot: env.BAIRUI_BACKUP_ROOT ?? "/var/lib/bairui/backups",
+    backupEncryptionKey: env.BAIRUI_BACKUP_ENCRYPTION_KEY,
     portStart: Number(env.BAIRUI_RUNTIME_PORT_START ?? 19000),
     portEnd: Number(env.BAIRUI_RUNTIME_PORT_END ?? 19999),
     execFile: options.execFile

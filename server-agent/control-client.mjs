@@ -3,7 +3,7 @@ import { signMachineRequest } from "../packages/security/machine-request.mjs";
 import { validateControlCommand } from "../packages/server-protocol/control-plane.mjs";
 
 function commandEnvelope(command) {
-  const allowed = new Set(["schema_version", "command_id", "idempotency_key", "deployment_id", "action", "target", "arguments", "approval_id", "expected_observation_version", "created_at", "expires_at", "attempt", "lease_expires_at", "placement", "config"]);
+  const allowed = new Set(["schema_version", "command_id", "idempotency_key", "deployment_id", "action", "target", "arguments", "approval_id", "expected_observation_version", "created_at", "expires_at", "attempt", "lease_expires_at", "placement", "config", "release", "rollback_release"]);
   for (const field of Object.keys(command)) if (!allowed.has(field)) throw new TypeError(`Unknown control command field: ${field}`);
   return {
     schema_version: command.schema_version,
