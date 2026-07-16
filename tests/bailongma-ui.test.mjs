@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 import { toBailongmaHotspots, toBailongmaMemories } from "../packages/bailongma-ui/compatibility.mjs";
+import { transformBailongmaBrainApp } from "../packages/bailongma-ui/brain-app-transform.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "upstreams", "bailongma");
 
@@ -16,6 +17,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
   assert.match(html, /\/assets\/bairui-workspace\.js/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
+  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
 
@@ -37,13 +39,27 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
   for (const view of ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
-  for (const route of ["/memory-notes", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
+  for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
 });
 
 test("maps Obsidian notes to BaiLongma memory shapes", () => {
-  const memories = toBailongmaMemories([{ id: "n1", title: "Decision", markdown: "# Decision", frontmatter: { tags: ["architecture"] }, createdAt: "2026-01-01", updatedAt: "2026-01-02" }]);
-  assert.equal(memories[0].event_type, "knowledge");
-  assert.equal(memories[0].detail, "# Decision");
+  const memories = toBailongmaMemories([
+    { id: "n1", agentId: "agent_a", title: "Decision", markdown: "# Decision", memoryKind: "project", importance: 5, wikilinks: ["Architecture"], frontmatter: { tags: ["architecture"] }, createdAt: "2026-01-01", updatedAt: "2026-01-02" },
+    { id: "n2", agentId: "agent_a", title: "Architecture", markdown: "# Architecture", memoryKind: "knowledge", importance: 4, wikilinks: [], frontmatter: { tags: [] }, createdAt: "2026-01-01", updatedAt: "2026-01-02" }
+  ], { id: "agent_a", name: "Agent A" });
+  assert.equal(memories[0].event_type, "self");
+  assert.ok(memories[0].entities.includes("agent:jarvis"));
+  assert.equal(memories[1].event_type, "project");
+  assert.deepEqual(memories[1].links, [{ target_id: "n2", relation: "related_to" }]);
+  assert.equal(memories[1].parent_id, "agent:agent_a");
+});
+
+test("transforms BaiLongma graph code to prefer projected semantic edges", () => {
+  const source = fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "app.js"), "utf8");
+  const transformed = transformBailongmaBrainApp(source);
+  assert.match(transformed, /_kind: "semantic"/);
+  assert.ok((transformed.match(/addProjectedMemoryLinks\(linkSet\)/g) || []).length >= 2);
+  assert.throws(() => transformBailongmaBrainApp("function unrelated() {}"), /anchor/);
 });
 
 test("maps real hotspot sources into the four upstream display slots", () => {

@@ -38,7 +38,7 @@ const mapConfigRevision = (row) => row ? ({ id: row.id, organizationId: row.orga
 const mapSensitiveGrant = (row) => row ? ({ id: row.id, organizationId: row.organization_id, granteeUserId: row.grantee_user_id, permission: row.permission, scope: row.scope, targetId: row.target_id, reason: row.reason, grantedBy: row.granted_by, expiresAt: row.expires_at?.toISOString?.() ?? row.expires_at, revokedAt: row.revoked_at?.toISOString?.() ?? row.revoked_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
 const mapIntegrationRun = (row) => ({ id: row.id, organizationId: row.organization_id, integrationId: row.integration_id, capability: row.capability, status: row.status, summary: row.summary, startedAt: row.started_at?.toISOString?.() ?? row.started_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
 const mapHotspot = (row) => ({ id: row.id, runId: row.run_id, externalId: row.external_id, sourceId: row.source_id, sourceName: row.source_name, rank: row.rank, title: row.title, url: row.url, mobileUrl: row.mobile_url, heat: row.heat, category: row.category, fetchedAt: row.fetched_at?.toISOString?.() ?? row.fetched_at });
-const mapObsidianNote = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, slug: row.slug, markdown: row.markdown, frontmatter: row.frontmatter, wikilinks: row.wikilinks, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapObsidianNote = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, slug: row.slug, markdown: row.markdown, frontmatter: row.frontmatter, wikilinks: row.wikilinks, memoryKind: row.memory_kind, importance: row.importance, hermesTarget: row.hermes_target, sourceRef: row.source_ref, revision: row.revision, hermesSyncStatus: row.hermes_sync_status, hermesSyncedRevision: row.hermes_synced_revision, hermesSyncedAt: row.hermes_synced_at?.toISOString?.() ?? row.hermes_synced_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapSkillPreference = (row) => row ? ({ agentId: row.agent_id, organizationId: row.organization_id, userId: row.user_id, skillId: row.skill_id, enabled: row.enabled, applyStatus: row.apply_status, lastErrorCode: row.last_error_code, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapChannelBinding = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, channel: row.channel, displayName: row.display_name, status: row.status, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, lastErrorCode: row.last_error_code, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapUsageRollup = (row) => ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, bucketStart: row.bucket_start?.toISOString?.() ?? row.bucket_start, bucketSeconds: row.bucket_seconds, model: row.model, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), runCount: Number(row.run_count), failedRunCount: Number(row.failed_run_count), latencySumMs: Number(row.latency_sum_ms) });
@@ -1107,12 +1107,12 @@ export class PostgresPlatformRepository {
   async createObsidianNote(input) {
     const id = input.id ?? randomUUID();
     const { rows } = await this.pool.query(
-      `INSERT INTO obsidian_notes (id, organization_id, user_id, agent_id, title, slug, markdown, frontmatter, wikilinks)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO obsidian_notes (id, organization_id, user_id, agent_id, title, slug, markdown, frontmatter, wikilinks, memory_kind, importance, hermes_target, source_ref)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (organization_id, user_id, agent_id, slug) WHERE agent_id IS NOT NULL
-       DO UPDATE SET title=EXCLUDED.title, markdown=EXCLUDED.markdown, frontmatter=EXCLUDED.frontmatter, wikilinks=EXCLUDED.wikilinks, updated_at=now()
+       DO UPDATE SET title=EXCLUDED.title, markdown=EXCLUDED.markdown, frontmatter=EXCLUDED.frontmatter, wikilinks=EXCLUDED.wikilinks, memory_kind=EXCLUDED.memory_kind, importance=EXCLUDED.importance, hermes_target=EXCLUDED.hermes_target, source_ref=EXCLUDED.source_ref, revision=obsidian_notes.revision+1, hermes_sync_status='pending', updated_at=now()
        RETURNING *`,
-      [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks]
+      [id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind, input.importance, input.hermesTarget, input.sourceRef]
     );
     return mapObsidianNote(rows[0]);
   }
@@ -1135,9 +1135,9 @@ export class PostgresPlatformRepository {
 
   async updateObsidianNote(input) {
     const { rows } = await this.pool.query(
-      `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, updated_at=now()
+      `UPDATE obsidian_notes SET title=$5, slug=$6, markdown=$7, frontmatter=$8, wikilinks=$9, memory_kind=$10, importance=$11, hermes_target=$12, source_ref=$13, revision=revision+1, hermes_sync_status='pending', updated_at=now()
        WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4 RETURNING *`,
-      [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks]
+      [input.id, input.organizationId, input.userId, input.agentId, input.title, input.slug, input.markdown, input.frontmatter, input.wikilinks, input.memoryKind, input.importance, input.hermesTarget, input.sourceRef]
     );
     return mapObsidianNote(rows[0]);
   }
@@ -1145,6 +1145,17 @@ export class PostgresPlatformRepository {
   async deleteObsidianNote(organizationId, userId, agentId, noteId) {
     const { rowCount } = await this.pool.query("DELETE FROM obsidian_notes WHERE id=$1 AND organization_id=$2 AND user_id=$3 AND agent_id=$4", [noteId, organizationId, userId, agentId]);
     return rowCount === 1;
+  }
+
+  async markObsidianProjection(input) {
+    await this.pool.query(
+      `UPDATE obsidian_notes SET
+         hermes_sync_status = CASE WHEN id=ANY($4::text[]) THEN 'conflict' WHEN id=ANY($5::text[]) THEN 'materialized' ELSE 'excluded' END,
+         hermes_synced_revision = CASE WHEN id=ANY($5::text[]) THEN revision ELSE hermes_synced_revision END,
+         hermes_synced_at = CASE WHEN id=ANY($5::text[]) THEN now() ELSE hermes_synced_at END
+       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3`,
+      [input.organizationId, input.userId, input.agentId, input.conflictNoteIds ?? [], input.includedNoteIds ?? []]
+    );
   }
 
   async listAgentSkillPreferences(organizationId, userId, agentId) {

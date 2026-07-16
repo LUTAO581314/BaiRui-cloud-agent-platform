@@ -803,10 +803,10 @@ export class MemoryPlatformRepository {
     const duplicate = this.#obsidianNotes.find((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId && item.slug === input.slug);
     const now = new Date().toISOString();
     if (duplicate) {
-      Object.assign(duplicate, input, { updatedAt: now });
+      Object.assign(duplicate, input, { revision: (duplicate.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: now });
       return duplicate;
     }
-    const note = { id: input.id ?? randomUUID(), ...input, createdAt: now, updatedAt: now };
+    const note = { id: input.id ?? randomUUID(), revision: 1, hermesSyncStatus: "pending", hermesSyncedRevision: null, hermesSyncedAt: null, ...input, createdAt: now, updatedAt: now };
     this.#obsidianNotes.push(note);
     return note;
   }
@@ -825,8 +825,19 @@ export class MemoryPlatformRepository {
   async updateObsidianNote(input) {
     const note = await this.getObsidianNote(input.organizationId, input.userId, input.agentId, input.id);
     if (!note) return null;
-    Object.assign(note, input, { updatedAt: new Date().toISOString() });
+    Object.assign(note, input, { revision: (note.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: new Date().toISOString() });
     return note;
+  }
+
+  async markObsidianProjection(input) {
+    const included = new Set(input.includedNoteIds ?? []);
+    const conflicts = new Set(input.conflictNoteIds ?? []);
+    const now = new Date().toISOString();
+    for (const note of this.#obsidianNotes.filter((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId)) {
+      if (conflicts.has(note.id)) note.hermesSyncStatus = "conflict";
+      else if (included.has(note.id)) { note.hermesSyncStatus = "materialized"; note.hermesSyncedRevision = note.revision; note.hermesSyncedAt = now; }
+      else note.hermesSyncStatus = "excluded";
+    }
   }
 
   async deleteObsidianNote(organizationId, userId, agentId, noteId) {

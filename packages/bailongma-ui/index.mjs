@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { transformBailongmaBrainApp } from "./brain-app-transform.mjs";
 
 const PREFIX = "/bailongma-ui/";
 const ALLOWED_UI_ROOTS = ["src/ui/brain-ui/", "src/ui/scene-shell/"];
@@ -80,6 +81,9 @@ export function createBailongmaUi(options) {
       if (!ALLOWED_UI_ROOTS.some((allowed) => relative.startsWith(allowed))) return null;
       const candidate = path.resolve(root, relative);
       if (!withinRoot(candidate, root) || !fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return null;
+      if (relative === "src/ui/brain-ui/app.js") {
+        return { body: Buffer.from(transformBailongmaBrainApp(fs.readFileSync(candidate, "utf8"))), contentType: CONTENT_TYPES[".js"] };
+      }
       return {
         body: fs.readFileSync(candidate),
         contentType: CONTENT_TYPES[path.extname(candidate).toLowerCase()] ?? "application/octet-stream"

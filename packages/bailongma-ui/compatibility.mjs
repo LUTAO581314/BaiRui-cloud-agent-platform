@@ -1,19 +1,36 @@
 const HOTSPOT_SLOTS = ["douyin", "xiaohongshu", "wechat", "weibo"];
 
-export function toBailongmaMemories(notes) {
-  return notes.map((note) => ({
+export function toBailongmaMemories(notes, agent = {}) {
+  const byTitle = new Map(notes.map((note) => [String(note.title).trim().toLocaleLowerCase(), note.id]));
+  const rootId = `agent:${agent.id || "bairui"}`;
+  const root = {
+    id: rootId, mem_id: rootId, event_type: "self", type: "self",
+    title: agent.name || "bairui-agent", content: agent.name || "bairui-agent",
+    detail: "Hermes Runtime memory projection", salience: 5, importance: 1,
+    entities: ["agent:jarvis", "agent:bairui"], concepts: ["hermes", "obsidian"],
+    tags: ["runtime:hermes", "memory:obsidian"], links: notes.slice(0, 100).map((note) => ({ target_id: note.id, relation: "parent_of" })),
+    source_ref: "bairui-memory-projection", timestamp: agent.updatedAt ?? new Date(0).toISOString(), created_at: agent.createdAt ?? new Date(0).toISOString()
+  };
+  return [root, ...notes.map((note) => ({
     id: note.id,
     mem_id: note.id,
-    event_type: "knowledge",
-    type: "knowledge",
+    event_type: note.memoryKind || "knowledge",
+    type: note.memoryKind || "knowledge",
     content: note.title,
     summary: note.title,
     detail: note.markdown,
-    importance: 0.8,
+    salience: Number(note.importance) || 3,
+    importance: (Number(note.importance) || 3) / 5,
     created_at: note.createdAt,
     updated_at: note.updatedAt,
-    tags: note.frontmatter?.tags ?? []
-  }));
+    timestamp: note.updatedAt,
+    entities: [`agent:${note.agentId || agent.id || "bairui"}`],
+    concepts: note.frontmatter?.tags ?? [],
+    tags: [...(note.frontmatter?.tags ?? []), `sync:${note.hermesSyncStatus || "pending"}`],
+    links: (note.wikilinks ?? []).map((title) => byTitle.get(String(title).trim().toLocaleLowerCase())).filter(Boolean).map((targetId) => ({ target_id: targetId, relation: "related_to" })),
+    parent_id: rootId,
+    source_ref: note.sourceRef || "bairui-user"
+  }))];
 }
 
 function preferredSlot(sourceId) {

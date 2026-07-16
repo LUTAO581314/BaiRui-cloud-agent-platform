@@ -103,8 +103,9 @@ export class AgentSupervisor {
     this.platformUrl = options.platformUrl;
     this.portStart = Number(options.portStart ?? 19000);
     this.portEnd = Number(options.portEnd ?? 19999);
+    this.hermesDataUid = options.hermesDataUid === undefined || options.hermesDataUid === null ? null : Number(options.hermesDataUid);
     this.execFile = options.execFile ?? execFile;
-    if (!path.isAbsolute(this.instancesRoot) || !path.isAbsolute(this.backupRoot) || !this.platformUrl || !/^https:\/\//.test(this.platformUrl) || this.portStart < 1024 || this.portEnd <= this.portStart || this.portEnd > 65535) throw new TypeError("Invalid Supervisor configuration");
+    if (!path.isAbsolute(this.instancesRoot) || !path.isAbsolute(this.backupRoot) || !this.platformUrl || !/^https:\/\//.test(this.platformUrl) || this.portStart < 1024 || this.portEnd <= this.portStart || this.portEnd > 65535 || (this.hermesDataUid !== null && (!Number.isInteger(this.hermesDataUid) || this.hermesDataUid < 1 || this.hermesDataUid > 65534))) throw new TypeError("Invalid Supervisor configuration");
   }
 
   names(agentId) {
@@ -157,6 +158,14 @@ export class AgentSupervisor {
     await this.docker(["run", "--detach", "--name", name, "--restart", "unless-stopped", ...args]);
   }
 
+  prepareHermesMemoryDirectory(dataPath) {
+    const memoryPath = path.join(dataPath, "memories");
+    fs.mkdirSync(memoryPath, { recursive: true, mode: 0o770 });
+    if (this.hermesDataUid !== null) fs.chownSync(memoryPath, this.hermesDataUid, this.hermesDataUid);
+    fs.chmodSync(memoryPath, 0o770);
+    return memoryPath;
+  }
+
   commandAgentId(command) {
     return identifier(command.arguments?.agent_id ?? command.placement?.agent_id, "agent_id");
   }
@@ -170,7 +179,7 @@ export class AgentSupervisor {
     const agentControlToken = machineSecret(secrets.agent_control_token, "agent_control_token");
     return {
       hermes: { API_SERVER_ENABLED: "true", API_SERVER_HOST: "0.0.0.0", API_SERVER_KEY: hermesApiKey, OPENAI_API_KEY: secrets.provider_api_key, OPENAI_BASE_URL: provider.base_url, MODEL: provider.model },
-      runtime: { HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: command.placement.agent_id, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" },
+      runtime: { HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_HERMES_DATA_PATH: "/opt/hermes-data", BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: command.placement.agent_id, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" },
       soul: String(command.config.document.agent?.soul_markdown ?? ""),
       agentControlToken
     };
@@ -189,9 +198,10 @@ export class AgentSupervisor {
 
   async runContainers(metadata, files, images = metadata.images) {
     const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
+    const memoryPath = this.prepareHermesMemoryDirectory(dataPath);
     if (!await this.exists("network", metadata.names.network)) await this.docker(["network", "create", metadata.names.network]);
     await this.runHermesContainer(metadata, files.hermesEnv, images.hermes);
-    await this.replaceContainer(metadata.names.runtime, ["--network", metadata.names.network, "--env-file", files.runtimeEnv, "--publish", `127.0.0.1:${metadata.runtimePort}:8787`, images.runtime]);
+    await this.replaceContainer(metadata.names.runtime, ["--network", metadata.names.network, "--env-file", files.runtimeEnv, "--volume", `${memoryPath}:/opt/hermes-data/memories`, "--publish", `127.0.0.1:${metadata.runtimePort}:8787`, images.runtime]);
   }
 
   async runHermesContainer(metadata, hermesEnv, image = metadata.images?.hermes ?? this.hermesImage) {
@@ -216,6 +226,7 @@ export class AgentSupervisor {
     const instancePath = this.instancePath(agentId);
     const dataPath = path.join(instancePath, "hermes-data");
     fs.mkdirSync(dataPath, { recursive: true, mode: 0o700 });
+    const memoryPath = this.prepareHermesMemoryDirectory(dataPath);
     const runtimePort = this.allocatePort(agentId);
     const secrets = command.config.secrets;
     const provider = command.config.document.provider ?? {};
@@ -231,14 +242,14 @@ export class AgentSupervisor {
     const runtimeSecret = machineSecret(secrets.runtime_shared_secret, "runtime_shared_secret");
     const agentControlToken = machineSecret(secrets.agent_control_token, "agent_control_token");
     fs.writeFileSync(hermesEnvPath, envFile({ API_SERVER_ENABLED: "true", API_SERVER_HOST: "0.0.0.0", API_SERVER_KEY: hermesApiKey, OPENAI_API_KEY: secrets.provider_api_key, OPENAI_BASE_URL: provider.base_url, MODEL: provider.model }), { mode: 0o600 });
-    fs.writeFileSync(runtimeEnvPath, envFile({ HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: agentId, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" }), { mode: 0o600 });
+    fs.writeFileSync(runtimeEnvPath, envFile({ HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_HERMES_DATA_PATH: "/opt/hermes-data", BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: agentId, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" }), { mode: 0o600 });
     fs.writeFileSync(path.join(dataPath, "SOUL.md"), String(command.config.document.agent?.soul_markdown ?? ""), { mode: 0o600 });
     mergeSkillConfiguration(path.join(dataPath, "config.yaml"), disabledSkills(command.config.document));
     fs.writeFileSync(path.join(instancePath, "agent-control.token"), agentControlToken, { mode: 0o600 });
 
     if (!await this.exists("network", names.network)) await this.docker(["network", "create", names.network]);
     await this.replaceContainer(names.hermes, ["--network", names.network, "--env-file", hermesEnvPath, "--volume", `${dataPath}:/opt/data`, this.hermesImage, "gateway", "run"]);
-    await this.replaceContainer(names.runtime, ["--network", names.network, "--env-file", runtimeEnvPath, "--publish", `127.0.0.1:${runtimePort}:8787`, this.runtimeImage]);
+    await this.replaceContainer(names.runtime, ["--network", names.network, "--env-file", runtimeEnvPath, "--volume", `${memoryPath}:/opt/hermes-data/memories`, "--publish", `127.0.0.1:${runtimePort}:8787`, this.runtimeImage]);
     const metadata = { schemaVersion: "1.0", agentId, runtimeId: command.placement.runtime_id, deploymentId: command.deployment_id, runtimePort, names, images: { hermes: this.hermesImage, runtime: this.runtimeImage }, configRevisionId: command.arguments.config_revision_id, idempotencyKey: command.idempotency_key, updatedAt: new Date().toISOString() };
     fs.writeFileSync(path.join(instancePath, "instance.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
     return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${runtimePort}`, summary: { containers: 2, runtime_port: runtimePort }, evidenceRefs: [`docker:${names.hermes}`, `docker:${names.runtime}`] };
