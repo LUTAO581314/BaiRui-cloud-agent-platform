@@ -245,6 +245,7 @@ export function createPlatformApp(options) {
   if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
   const loginAttempts = new Map();
   const runtimeRouteHosts = new Set(["host.docker.internal", "127.0.0.1", "localhost", ...(options.runtimeRouteHosts ?? [])]);
+  const runtimeStaleAfterMs = Math.max(30_000, Number(options.runtimeStaleAfterMs) || 120_000);
   async function principalFor(request) {
     const token = parseCookies(request.headers.cookie)[SESSION_COOKIE];
     const session = verifySessionToken(token, sessionSecret);
@@ -278,6 +279,48 @@ export function createPlatformApp(options) {
       throw error;
     }
     return agent;
+  }
+
+  async function modelAccess(organizationId) {
+    const [policy, legacy, channels] = await Promise.all([repository.getModelPolicy(organizationId), repository.getProviderConfiguration(organizationId), repository.listProviderChannels(organizationId)]);
+    const configuredChannels = channels.filter((item) => item.enabled && item.apiKeyEnvelope && !["failed", "disabled"].includes(item.status));
+    const fallbackModels = [...new Set([legacy?.apiKeyEnvelope ? legacy.model : null, ...configuredChannels.map((item) => item.model)].filter(Boolean))];
+    const allowedModels = policy?.allowedModels?.length ? policy.allowedModels : fallbackModels;
+    const defaultModel = policy?.defaultModel && allowedModels.includes(policy.defaultModel) ? policy.defaultModel : legacy?.model && allowedModels.includes(legacy.model) ? legacy.model : allowedModels[0] ?? null;
+    return { configured: Boolean(legacy?.apiKeyEnvelope || configuredChannels.length), allowedModels, defaultModel, userCustomKeysAllowed: policy?.userCustomKeysAllowed === true, dailyTokenLimit: policy?.dailyTokenLimit ?? null, monthlyBudgetUsd: policy?.monthlyBudgetUsd ?? null };
+  }
+
+  async function agentOperationalView(principal, agent, runtimeInput) {
+    const runtime = runtimeInput ?? await repository.getAgentRuntimeByAgent(agent.id);
+    const [models, rollups, commands] = await Promise.all([modelAccess(agent.organizationId), repository.listUsageRollups(agent.organizationId, agent.ownerUserId, agent.id), repository.listControlCommands(agent.organizationId)]);
+    const now = Date.now();
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const monthStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1).getTime();
+    const dailyTokens = rollups.filter((item) => Date.parse(item.bucketStart) >= dayStart.getTime()).reduce((sum, item) => sum + item.inputTokens + item.outputTokens, 0);
+    const monthlyCostUsd = rollups.filter((item) => Date.parse(item.bucketStart) >= monthStart).reduce((sum, item) => sum + item.estimatedCostUsd, 0);
+    const quotaExhausted = (models.dailyTokenLimit !== null && dailyTokens >= models.dailyTokenLimit) || (models.monthlyBudgetUsd !== null && monthlyCostUsd >= models.monthlyBudgetUsd);
+    const runtimeOffline = agent.desiredRuntimeState === "running" && ["ready", "degraded", "starting"].includes(runtime?.status) && (!runtime.lastHeartbeatAt || now - Date.parse(runtime.lastHeartbeatAt) > runtimeStaleAfterMs);
+    const activeChange = commands.find((item) => item.agentId === agent.id && ["config.apply", "release.stage", "release.apply", "release.rollback"].includes(item.action) && ["queued", "leased", "accepted", "running"].includes(item.state)) ?? null;
+    let code = "ready";
+    if (["deleted", "deleting"].includes(agent.status) || ["deleted", "deleting"].includes(runtime?.status)) code = runtime?.status ?? agent.status;
+    else if (!runtime || runtime.status === "uninitialized" || agent.initializationStatus === "uninitialized") code = "uninitialized";
+    else if (["provisioning", "starting"].includes(runtime.status) || agent.initializationStatus === "provisioning") code = "initializing";
+    else if (activeChange) code = "upgrading";
+    else if (["failed", "suspended", "stopped"].includes(runtime.status)) code = runtime.status;
+    else if (runtimeOffline) code = "offline";
+    else if (!models.configured || !models.defaultModel) code = "model_unconfigured";
+    else if (quotaExhausted) code = "quota_exhausted";
+    else if (runtime.status === "degraded") code = "degraded";
+    return { ...agent, runtime: runtime ? { ...runtime, effectiveStatus: runtimeOffline ? "offline" : runtime.status } : null, operational: { code, runtimeOffline, activeChange: activeChange ? { action: activeChange.action, state: activeChange.state } : null, model: models, quota: { exhausted: quotaExhausted, dailyTokens, dailyTokenLimit: models.dailyTokenLimit, monthlyCostUsd, monthlyBudgetUsd: models.monthlyBudgetUsd } } };
+  }
+
+  async function requireOperationalAgent(principal, agent) {
+    const view = await agentOperationalView(principal, agent);
+    if (view.operational.code === "quota_exhausted") throw Object.assign(new Error("quota_exhausted"), { statusCode: 429, expose: true });
+    if (view.operational.code === "model_unconfigured") throw Object.assign(new Error("model_not_configured"), { statusCode: 409, expose: true });
+    if (view.operational.code === "offline") throw Object.assign(new Error("runtime_offline"), { statusCode: 503, expose: true });
+    if (!["ready", "degraded"].includes(view.operational.code)) throw Object.assign(new Error("agent_not_ready"), { statusCode: 409, expose: true });
+    return view;
   }
 
   async function authenticateMachine(request, url, rawBody, credentialType) {
@@ -459,6 +502,10 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.SELF_READ, { userId: principal.userId, organizationId: principal.organizationId });
         return json(response, 200, { user: principal });
       }
+      if (method === "GET" && url.pathname === "/api/user/bootstrap") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        return json(response, 200, { models: await modelAccess(principal.organizationId), channels: [...USER_CHANNELS], memoryFormat: "obsidian-markdown" });
+      }
 
       if (method === "GET" && url.pathname === "/api/user/agents") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
@@ -467,13 +514,16 @@ export function createPlatformApp(options) {
           repository.listAgentRuntimes(principal.organizationId, principal.userId)
         ]);
         const runtimeByAgent = new Map(runtimes.map((runtime) => [runtime.agentId, runtime]));
-        return json(response, 200, { agents: agents.map((agent) => ({ ...agent, runtime: runtimeByAgent.get(agent.id) ?? null })) });
+        return json(response, 200, { agents: await Promise.all(agents.map((agent) => agentOperationalView(principal, agent, runtimeByAgent.get(agent.id) ?? null))) });
       }
       if (method === "POST" && url.pathname === "/api/user/agents") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_CREATE, { organizationId: principal.organizationId, userId: principal.userId });
         const body = await readJson(request);
         const name = typeof body.name === "string" ? body.name.trim() : "";
         if (!name || name.length > 64) return json(response, 400, { error: "invalid_agent_name" });
+        const models = await modelAccess(principal.organizationId);
+        const preferredModel = typeof body.preferredModel === "string" ? body.preferredModel.trim() : "";
+        if (preferredModel && !models.allowedModels.includes(preferredModel)) return json(response, 400, { error: "model_not_allowed" });
         const agent = await repository.createAgent({
           organizationId: principal.organizationId,
           ownerUserId: principal.userId,
@@ -481,7 +531,7 @@ export function createPlatformApp(options) {
           description: typeof body.description === "string" ? body.description.trim().slice(0, 500) : "",
           avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl.trim().slice(0, 2000) : null,
           soulMarkdown: typeof body.soulMarkdown === "string" ? body.soulMarkdown.slice(0, 50_000) : "",
-          settings: {}
+          settings: { preferredModel: preferredModel || models.defaultModel || null, locale: "zh-CN", notifications: true }
         });
         const runtime = await repository.createAgentRuntime({
           organizationId: principal.organizationId,
@@ -490,14 +540,14 @@ export function createPlatformApp(options) {
           workspaceRef: `hermes:${principal.organizationId}:${principal.userId}:${agent.id}`
         });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.create", targetType: "agent", targetId: agent.id });
-        return json(response, 201, { agent: { ...agent, runtime } });
+        return json(response, 201, { agent: await agentOperationalView(principal, agent, runtime) });
       }
       const userAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)$/);
       if (userAgentMatch && method === "GET") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await repository.getAgent(userAgentMatch[1]);
         if (!agent || agent.organizationId !== principal.organizationId || agent.ownerUserId !== principal.userId) return json(response, 404, { error: "agent_not_found" });
-        return json(response, 200, { agent: { ...agent, runtime: await repository.getAgentRuntimeByAgent(agent.id) } });
+        return json(response, 200, { agent: await agentOperationalView(principal, agent) });
       }
       if (userAgentMatch && method === "PATCH") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
@@ -519,8 +569,8 @@ export function createPlatformApp(options) {
             if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
             const preferredModel = String(body.settings.preferredModel ?? "").trim();
             if (preferredModel) {
-              const provider = await repository.getProviderConfiguration(principal.organizationId);
-              if (provider?.applyStatus !== "applied" || preferredModel !== provider.model) return json(response, 400, { error: "model_not_allowed" });
+              const policy = await modelAccess(principal.organizationId);
+              if (!policy.allowedModels.includes(preferredModel)) return json(response, 400, { error: "model_not_allowed" });
               const discovered = await runtimeClient.operation({ principal, agent, operation: "discovery.models" });
               if (!discoveryIds(discovered, ["models"]).has(preferredModel)) return json(response, 400, { error: "model_not_allowed" });
             }
@@ -581,11 +631,11 @@ export function createPlatformApp(options) {
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, discoveryMatch[1]);
         const names = ["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets"];
-        const [settled, provider] = await Promise.all([Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation }))), repository.getProviderConfiguration(principal.organizationId)]);
+        const [settled, policy] = await Promise.all([Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation }))), modelAccess(principal.organizationId)]);
         return json(response, 200, {
           agentId: agent.id,
           discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])),
-          policy: { allowedModels: provider?.applyStatus === "applied" ? [provider.model] : [], defaultModel: provider?.applyStatus === "applied" ? provider.model : null }
+          policy
         });
       }
 
@@ -594,13 +644,14 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, sessionsMatch[1]);
+        if (method === "POST") await requireOperationalAgent(principal, agent);
         if (method === "GET") {
           return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.list", input: { limit: url.searchParams.get("limit") ?? 50, offset: url.searchParams.get("offset") ?? 0, include_children: url.searchParams.get("include_children") ?? false } }));
         }
         const body = await readJson(request);
-        const provider = await repository.getProviderConfiguration(principal.organizationId);
-        const preferredModel = provider?.applyStatus === "applied" && agent.settings?.preferredModel === provider.model ? agent.settings.preferredModel : undefined;
-        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || (provider?.applyStatus === "applied" ? provider.model : undefined) } } });
+        const policy = await modelAccess(principal.organizationId);
+        const preferredModel = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : undefined;
+        const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || policy.defaultModel || undefined } } });
         return json(response, 201, result);
       }
 
@@ -611,6 +662,7 @@ export function createPlatformApp(options) {
         const agent = await ownedAgent(principal, sessionActionMatch[1]);
         const sessionId = sessionActionMatch[2];
         const action = sessionActionMatch[3];
+        if (method === "POST" && ["fork", "chat", "chat/stream"].includes(action)) await requireOperationalAgent(principal, agent);
         if (action === "messages" && method === "GET") return json(response, 200, await runtimeClient.operation({ principal, agent, operation: "sessions.messages", input: { session_id: sessionId } }));
         if (action === "fork" && method === "POST") {
           const body = await readJson(request);
@@ -652,10 +704,12 @@ export function createPlatformApp(options) {
         requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
         const agent = await ownedAgent(principal, runsMatch[1]);
+        await requireOperationalAgent(principal, agent);
         const body = await readJson(request);
         if (typeof body.input !== "string" || !body.input.trim() || body.input.length > 20_000) return json(response, 400, { error: "invalid_run_input" });
-        const provider = await repository.getProviderConfiguration(principal.organizationId);
-        return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.create", input: { body: { input: body.input.trim(), model: provider?.applyStatus === "applied" ? provider.model : undefined } } }));
+        const policy = await modelAccess(principal.organizationId);
+        const model = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : policy.defaultModel;
+        return json(response, 202, await runtimeClient.operation({ principal, agent, operation: "runs.create", input: { body: { input: body.input.trim(), model: model || undefined } } }));
       }
 
       const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop)$/);
@@ -702,6 +756,7 @@ export function createPlatformApp(options) {
         else if (jobId && method === "GET") { operation = "jobs.get"; input.job_id = jobId; }
         else if (jobId && method === "PATCH") { operation = "jobs.update"; input = { job_id: jobId, body: await readJson(request) }; }
         else if (jobId && method === "DELETE") { operation = "jobs.delete"; input.job_id = jobId; }
+        if (["jobs.create", "jobs.run"].includes(operation)) await requireOperationalAgent(principal, agent);
         if (operation) return json(response, method === "POST" ? 202 : 200, await runtimeClient.operation({ principal, agent, operation, input }));
       }
 
@@ -1295,7 +1350,7 @@ export function createPlatformApp(options) {
     } catch (error) {
       const statusCode = error.statusCode ?? 500;
       if (statusCode >= 500) logger.error?.("Platform request failed", { method, path: url.pathname, error: error.message });
-      return json(response, statusCode, { error: statusCode >= 500 ? "internal_error" : error.message });
+      return json(response, statusCode, { error: error.expose === true || statusCode < 500 ? error.message : "internal_error" });
     }
   };
 }

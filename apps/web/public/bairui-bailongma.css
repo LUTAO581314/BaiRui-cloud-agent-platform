@@ -55,8 +55,93 @@
 }
 
 .bairui-runtime-status.status-degraded,
-.bairui-runtime-status.status-failed {
+.bairui-runtime-status.status-failed,
+.bairui-runtime-status.status-offline,
+.bairui-runtime-status.status-quota_exhausted {
   color: #ff6f61;
+}
+
+.bairui-runtime-status.status-initializing,
+.bairui-runtime-status.status-upgrading,
+.bairui-runtime-status.status-model_unconfigured,
+.bairui-runtime-status.status-suspended,
+.bairui-runtime-status.status-stopped {
+  color: #efc36b;
+}
+
+.bairui-operational-blocker {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 76px 20px 24px;
+  background: rgba(5, 10, 16, 0.94);
+  color: #f3f7fb;
+  font: 500 14px/1.5 Inter, "Segoe UI", sans-serif;
+}
+
+.bairui-operational-blocker section {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid rgba(126, 153, 181, 0.32);
+  border-radius: 8px;
+  background: #101923;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+  text-align: center;
+}
+
+.bairui-operational-blocker img {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+}
+
+.bairui-operational-blocker span {
+  display: block;
+  margin-top: 8px;
+  color: #8ca2b5;
+}
+
+.bairui-operational-blocker h1 {
+  margin: 14px 0 8px;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.bairui-operational-blocker p {
+  margin: 0 auto 22px;
+  max-width: 430px;
+  color: #b7c8dc;
+}
+
+.bairui-operational-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.bairui-operational-actions button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(126, 153, 181, 0.34);
+  border-radius: 4px;
+  background: #152333;
+  color: #d5e4f2;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bairui-operational-actions button.primary {
+  border-color: #4a9fff;
+  background: #267bd4;
+  color: #fff;
+}
+
+.bairui-operational-actions button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .bairui-onboarding {
@@ -102,6 +187,7 @@
 }
 
 .bairui-onboarding-form input,
+.bairui-onboarding-form select,
 .bairui-onboarding-form textarea {
   box-sizing: border-box;
   width: 100%;
@@ -358,8 +444,8 @@ body.bairui-streaming #send-btn {
 }
 
 .bw-status-ready, .bw-status-active, .bw-status-connected, .bw-status-applied, .bw-status-available { border-color: #34795a; color: #62d49a; }
-.bw-status-pending, .bw-status-provisioning, .bw-status-starting { border-color: #927138; color: #efc36b; }
-.bw-status-failed, .bw-status-degraded, .bw-status-unavailable { border-color: #93453f; color: #ff8b80; }
+.bw-status-pending, .bw-status-provisioning, .bw-status-starting, .bw-status-initializing, .bw-status-upgrading, .bw-status-model_unconfigured, .bw-status-suspended, .bw-status-stopped { border-color: #927138; color: #efc36b; }
+.bw-status-failed, .bw-status-degraded, .bw-status-unavailable, .bw-status-offline, .bw-status-quota_exhausted, .bw-status-deleting, .bw-status-deleted { border-color: #93453f; color: #ff8b80; }
 
 .bw-split { display: grid; grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr); gap: 34px; }
 .bw-split > section { min-width: 0; }
