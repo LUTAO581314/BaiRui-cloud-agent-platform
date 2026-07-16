@@ -66,6 +66,25 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     await repository.saveAgentHeartbeat({ organizationId, userId, agentId, runtimeId, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [], usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "example/model", inputTokens: 3, outputTokens: 4, runCount: 1 } });
     const usage = await repository.listUsageRollups(organizationId, userId, agentId);
     assert.equal(usage[0].inputTokens, 3);
+
+    const providerChannel = await repository.upsertProviderChannel({ organizationId, name: "primary", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { encrypted: true }, keyHint: "test", priority: 10, weight: 2, maxConcurrency: 20, monthlyBudgetUsd: 100, enabled: true, updatedBy: userId });
+    assert.equal((await repository.listProviderChannels(organizationId))[0].id, providerChannel.id);
+    const modelPolicy = await repository.upsertModelPolicy({ organizationId, allowedModels: ["example/model"], defaultModel: "example/model", userCustomKeysAllowed: false, dailyTokenLimit: 100000, monthlyBudgetUsd: 500, updatedBy: userId });
+    assert.deepEqual(modelPolicy.allowedModels, ["example/model"]);
+    const retentionPolicy = await repository.upsertRetentionPolicy({ organizationId, telemetryDays: 30, usageDays: 400, auditDays: 365, sensitiveAccessEventDays: 365, backupDays: 30, updatedBy: userId });
+    assert.equal(retentionPolicy.telemetryDays, 30);
+    const grant = await repository.createSensitiveAccessGrant({ organizationId, granteeUserId: userId, scope: "agent", targetId: agentId, reason: "PostgreSQL sensitive access test", grantedBy: userId, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    await repository.recordSensitiveAccessEvent({ grantId: grant.id, organizationId, actorUserId: userId, targetType: "conversation", targetId: "session_test", reason: grant.reason });
+    assert.equal((await repository.listSensitiveAccessEvents(organizationId))[0].grantId, grant.id);
+    assert.ok((await repository.revokeSensitiveAccessGrant(organizationId, grant.id)).revokedAt);
+
+    await repository.updateAgent(agentId, { desiredRuntimeState: "running" });
+    await repository.pool.query("UPDATE agent_runtimes SET status='ready', last_heartbeat_at=now() - interval '10 minutes' WHERE id=$1", [runtimeId]);
+    assert.ok((await repository.evaluateOfflineAlerts({ organizationId, staleAfterMs: 60_000 })).some((item) => item.code === "runtime.offline"));
+    await repository.updateAgent(agentId, { desiredRuntimeState: "stopped" });
+    await repository.evaluateOfflineAlerts({ organizationId, staleAfterMs: 60_000 });
+    assert.equal((await repository.listAlerts(organizationId)).find((item) => item.code === "runtime.offline").status, "resolved");
+
     assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
     const deletion = await repository.requestAgentLifecycle({ agentId, request: "delete", requestedBy: userId, reason: "PostgreSQL integration test" });
     assert.ok(deletion.command.approvalId);

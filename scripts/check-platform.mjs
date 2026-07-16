@@ -25,6 +25,7 @@ const required = [
   "packages/db/migrations/006_agent_fleet_telemetry.sql",
   "packages/db/migrations/007_control_command_delivery.sql",
   "packages/db/migrations/008_user_agent_surfaces.sql",
+  "packages/db/migrations/009_control_plane_admin_domains.sql",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/server-protocol/control-plane.mjs",
@@ -135,6 +136,19 @@ for (const table of ["agent_skill_preferences", "agent_channel_bindings", "agent
 }
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
+}
+const adminDomainsMigrationPath = path.join(root, "packages/db/migrations/009_control_plane_admin_domains.sql");
+const adminDomainsMigration = fs.existsSync(adminDomainsMigrationPath) ? fs.readFileSync(adminDomainsMigrationPath, "utf8") : "";
+for (const table of ["provider_channels", "model_policies", "data_retention_policies", "sensitive_access_grants", "sensitive_access_events"]) {
+  if (!adminDomainsMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing control-plane admin table: ${table}`);
+}
+for (const evidence of ["/api/admin/provider-channels", "/api/admin/model-policy", "/api/admin/data-retention", "/api/admin/sensitive-access", "/api/admin/release-gates", "/api/admin/backups", "/api/admin/upstreams"]) {
+  if (!server.includes(evidence)) failures.push(`Missing control-plane administration API: ${evidence}`);
+}
+const adminViewPath = path.join(root, "apps/web/views.mjs");
+const adminView = fs.existsSync(adminViewPath) ? fs.readFileSync(adminViewPath, "utf8") : "";
+for (const panel of ["overview", "users", "agents", "operations", "providers", "integrations", "channels", "config", "versions", "alerts", "audit", "release", "backups", "retention", "sensitive"]) {
+  if (!adminView.includes(`data-view-panel="${panel}"`)) failures.push(`Missing administrator panel: ${panel}`);
 }
 const supervisorPath = path.join(root, "server-agent/supervisor.mjs");
 const supervisor = fs.existsSync(supervisorPath) ? fs.readFileSync(supervisorPath, "utf8") : "";

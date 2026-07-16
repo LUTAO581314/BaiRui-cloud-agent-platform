@@ -16,6 +16,9 @@ test("ordinary users can use only their own organization resources", () => {
 
 test("organization administrators cannot cross organization boundaries", () => {
   assert.equal(can(orgAdmin, PERMISSIONS.ORG_MEMBERS_MANAGE, { organizationId: "org_a" }), true);
+  assert.equal(can(orgAdmin, PERMISSIONS.CONTROL_PLANE_MANAGE, { organizationId: "org_a" }), true);
+  assert.equal(can(orgAdmin, PERMISSIONS.DATA_GOVERNANCE_MANAGE, { organizationId: "org_a" }), true);
+  assert.equal(can(orgAdmin, PERMISSIONS.SENSITIVE_ACCESS_MANAGE, { organizationId: "org_a" }), false);
   assert.equal(can(orgAdmin, PERMISSIONS.ORG_MEMBERS_MANAGE, { organizationId: "org_b" }), false);
   assert.throws(() => requirePermission(orgAdmin, PERMISSIONS.ORG_AUDIT_READ, { organizationId: "org_b" }), { name: "AuthorizationError" });
 });

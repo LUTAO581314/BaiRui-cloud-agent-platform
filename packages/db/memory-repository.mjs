@@ -25,6 +25,14 @@ export class MemoryPlatformRepository {
   #agentSkillPreferences = [];
   #agentChannelBindings = [];
   #agentHotspotBookmarks = [];
+  #providerChannels = [];
+  #modelPolicies = new Map();
+  #retentionPolicies = new Map();
+  #sensitiveGrants = [];
+  #sensitiveAccessEvents = [];
+  #backupRecords = [];
+  #releaseGates = [];
+  #upstreamCandidates = [];
   #agentComponents = new Map();
   #heartbeats = [];
   #telemetryEvents = [];
@@ -46,6 +54,10 @@ export class MemoryPlatformRepository {
 
   async getOrganization(id) {
     return this.#organizations.get(id) ?? null;
+  }
+
+  async listOrganizations() {
+    return [...this.#organizations.values()];
   }
 
   async createUser(input) {
@@ -160,6 +172,14 @@ export class MemoryPlatformRepository {
     const initializationStatus = input.status === "healthy" ? "ready" : input.status === "unhealthy" ? "failed" : "degraded";
     Object.assign(runtime, { status: runtimeStatus, hermesVersion: input.runtimeVersion ?? runtime.hermesVersion, boundaryVersion: input.boundaryVersion ?? runtime.boundaryVersion, configRevisionId: input.configRevisionId ?? runtime.configRevisionId, lastHeartbeatAt: input.observedAt, updatedAt: receivedAt });
     Object.assign(agent, { status: input.status === "healthy" ? "active" : initializationStatus, initializationStatus, updatedAt: receivedAt });
+    const healthAlert = this.#alerts.find((item) => item.agentId === agent.id && item.code === "runtime.health" && ["open", "acknowledged"].includes(item.status));
+    if (["degraded", "unhealthy"].includes(input.status)) {
+      const alert = healthAlert ?? { id: randomUUID(), organizationId: input.organizationId, agentId: agent.id, runtimeId: runtime.id, code: "runtime.health", status: "open", firstSeenAt: input.observedAt, createdAt: receivedAt };
+      Object.assign(alert, { severity: input.status === "unhealthy" ? "critical" : "medium", title: input.status === "unhealthy" ? "Agent Runtime 不健康" : "Agent Runtime 降级", summary: `Runtime 上报状态：${input.status}`, lastSeenAt: input.observedAt });
+      if (!healthAlert) this.#alerts.push(alert);
+    } else if (input.status === "healthy") {
+      for (const alert of this.#alerts.filter((item) => item.agentId === agent.id && ["runtime.health", "runtime.offline"].includes(item.code) && ["open", "acknowledged"].includes(item.status))) Object.assign(alert, { status: "resolved", resolvedAt: receivedAt });
+    }
     for (const component of input.components ?? []) {
       const key = `${runtime.id}:${component.moduleId}`;
       this.#agentComponents.set(key, { id: this.#agentComponents.get(key)?.id ?? randomUUID(), organizationId: input.organizationId, agentId: agent.id, runtimeId: runtime.id, ...component, updatedAt: receivedAt });
@@ -194,6 +214,37 @@ export class MemoryPlatformRepository {
 
   async listAlerts(organizationId) {
     return this.#alerts.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async updateAlertStatus(input) {
+    const alert = this.#alerts.find((item) => item.id === input.alertId);
+    if (!alert) return null;
+    alert.status = input.status;
+    if (input.status === "acknowledged") alert.acknowledgedBy = input.actorUserId;
+    if (["resolved", "closed"].includes(input.status)) alert.resolvedAt = new Date().toISOString();
+    return alert;
+  }
+
+  async evaluateOfflineAlerts({ organizationId, staleAfterMs = 120_000 } = {}) {
+    const cutoff = Date.now() - staleAfterMs;
+    const results = [];
+    for (const runtime of this.#agentRuntimes.values()) {
+      if (organizationId && runtime.organizationId !== organizationId) continue;
+      const agent = this.#agents.get(runtime.agentId);
+      const existing = this.#alerts.find((item) => item.agentId === runtime.agentId && item.code === "runtime.offline" && ["open", "acknowledged"].includes(item.status));
+      if (!agent || agent.desiredRuntimeState !== "running" || ["uninitialized", "stopped", "suspended", "deleting", "deleted"].includes(runtime.status)) {
+        if (existing) Object.assign(existing, { status: "resolved", resolvedAt: new Date().toISOString() });
+        continue;
+      }
+      const stale = !runtime.lastHeartbeatAt || Date.parse(runtime.lastHeartbeatAt) < cutoff;
+      if (stale) {
+        const alert = existing ?? { id: randomUUID(), organizationId: runtime.organizationId, agentId: runtime.agentId, runtimeId: runtime.id, code: "runtime.offline", severity: "high", status: "open", title: "Agent Runtime 离线", firstSeenAt: new Date().toISOString(), createdAt: new Date().toISOString() };
+        Object.assign(alert, { summary: `超过 ${Math.round(staleAfterMs / 1000)} 秒未收到心跳`, lastSeenAt: new Date().toISOString() });
+        if (!existing) this.#alerts.push(alert);
+        results.push(alert);
+      } else if (existing) Object.assign(existing, { status: "resolved", resolvedAt: new Date().toISOString() });
+    }
+    return results;
   }
 
   async listUsageRollups(organizationId, userId, agentId, limit = 1000) {
@@ -484,7 +535,7 @@ export class MemoryPlatformRepository {
   }
 
   async listIntegrationRuns(organizationId, limit = 20) {
-    return this.#integrationRuns.filter((item) => item.organizationId === organizationId).toReversed().slice(0, limit);
+    return this.#integrationRuns.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, limit);
   }
 
   async listLatestHotspots(organizationId) {
@@ -584,5 +635,90 @@ export class MemoryPlatformRepository {
 
   async listAgentHotspotBookmarkIds(organizationId, userId, agentId) {
     return this.#agentHotspotBookmarks.filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId).map((item) => item.hotspotItemId);
+  }
+
+  async listChannelBindings(organizationId) {
+    return this.#agentChannelBindings.filter((item) => !organizationId || item.organizationId === organizationId);
+  }
+
+  async listConfigRevisions(organizationId, agentId) {
+    return this.#configRevisions.filter((item) => (!organizationId || item.organizationId === organizationId) && (!agentId || item.agentId === agentId)).toReversed();
+  }
+
+  async listTelemetryEvents(organizationId, limit = 500) {
+    return this.#telemetryEvents.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  }
+
+  async listProviderChannels(organizationId) {
+    return this.#providerChannels.filter((item) => item.organizationId === organizationId).sort((left, right) => left.priority - right.priority);
+  }
+
+  async upsertProviderChannel(input) {
+    const previous = this.#providerChannels.find((item) => item.organizationId === input.organizationId && item.name === input.name);
+    const now = new Date().toISOString();
+    const value = { id: previous?.id ?? input.id ?? randomUUID(), organizationId: input.organizationId, name: input.name, provider: input.provider, baseUrl: input.baseUrl, model: input.model, apiKeyEnvelope: input.apiKeyEnvelope ?? previous?.apiKeyEnvelope ?? null, keyHint: input.keyHint ?? previous?.keyHint ?? null, status: "pending", priority: input.priority ?? 100, weight: input.weight ?? 1, maxConcurrency: input.maxConcurrency ?? null, monthlyBudgetUsd: input.monthlyBudgetUsd ?? null, enabled: input.enabled ?? true, lastErrorCode: null, updatedBy: input.updatedBy, createdAt: previous?.createdAt ?? now, updatedAt: now };
+    if (previous) Object.assign(previous, value); else this.#providerChannels.push(value);
+    return previous ?? value;
+  }
+
+  async getModelPolicy(organizationId) {
+    return this.#modelPolicies.get(organizationId) ?? null;
+  }
+
+  async upsertModelPolicy(input) {
+    const value = { organizationId: input.organizationId, allowedModels: input.allowedModels ?? [], defaultModel: input.defaultModel ?? null, userCustomKeysAllowed: Boolean(input.userCustomKeysAllowed), dailyTokenLimit: input.dailyTokenLimit ?? null, monthlyBudgetUsd: input.monthlyBudgetUsd ?? null, updatedBy: input.updatedBy, updatedAt: new Date().toISOString() };
+    this.#modelPolicies.set(input.organizationId, value);
+    return value;
+  }
+
+  async getRetentionPolicy(organizationId) {
+    return this.#retentionPolicies.get(organizationId) ?? null;
+  }
+
+  async upsertRetentionPolicy(input) {
+    const value = { organizationId: input.organizationId, telemetryDays: input.telemetryDays, usageDays: input.usageDays, auditDays: input.auditDays, sensitiveAccessEventDays: input.sensitiveAccessEventDays, backupDays: input.backupDays, updatedBy: input.updatedBy, updatedAt: new Date().toISOString() };
+    this.#retentionPolicies.set(input.organizationId, value);
+    return value;
+  }
+
+  async listSensitiveAccessGrants(organizationId) {
+    return this.#sensitiveGrants.filter((item) => item.organizationId === organizationId).toReversed();
+  }
+
+  async createSensitiveAccessGrant(input) {
+    const grant = { id: input.id ?? randomUUID(), organizationId: input.organizationId, granteeUserId: input.granteeUserId, permission: "conversation_content_read", scope: input.scope, targetId: input.targetId ?? null, reason: input.reason, grantedBy: input.grantedBy, expiresAt: input.expiresAt, revokedAt: null, createdAt: new Date().toISOString() };
+    this.#sensitiveGrants.push(grant);
+    return grant;
+  }
+
+  async revokeSensitiveAccessGrant(organizationId, grantId) {
+    const grant = this.#sensitiveGrants.find((item) => item.id === grantId && item.organizationId === organizationId && !item.revokedAt);
+    if (!grant) return null;
+    grant.revokedAt = new Date().toISOString();
+    return grant;
+  }
+
+  async listSensitiveAccessEvents(organizationId, limit = 500) {
+    return this.#sensitiveAccessEvents.filter((item) => item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  }
+
+  async recordSensitiveAccessEvent(input) {
+    const event = { id: input.id ?? randomUUID(), grantId: input.grantId, organizationId: input.organizationId, actorUserId: input.actorUserId, targetType: input.targetType, targetId: input.targetId, reason: input.reason, createdAt: new Date().toISOString() };
+    this.#sensitiveAccessEvents.push(event);
+    return event;
+  }
+
+  async listBackupRecords(organizationId) {
+    const deployments = new Set(this.#controlDeployments.filter((item) => !organizationId || item.organizationId === organizationId).map((item) => item.id));
+    return this.#backupRecords.filter((item) => deployments.has(item.deploymentId)).toReversed();
+  }
+
+  async listReleaseGates(organizationId) {
+    const deployments = new Set(this.#controlDeployments.filter((item) => !organizationId || item.organizationId === organizationId).map((item) => item.id));
+    return this.#releaseGates.filter((item) => !organizationId || deployments.has(item.deploymentId)).toReversed();
+  }
+
+  async listUpstreamCandidates() {
+    return this.#upstreamCandidates.toReversed();
   }
 }

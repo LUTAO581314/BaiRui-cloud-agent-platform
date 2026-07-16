@@ -152,6 +152,17 @@ function publicProviderConfiguration(configuration) {
   };
 }
 
+function publicProviderChannel(channel) {
+  if (!channel) return null;
+  const { apiKeyEnvelope, ...safe } = channel;
+  return { ...safe, configured: Boolean(apiKeyEnvelope), keyMasked: channel.keyHint ? `****${channel.keyHint}` : null };
+}
+
+function boundedInteger(value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= minimum && number <= maximum ? number : null;
+}
+
 function publicChannelBinding(binding) {
   if (!binding) return null;
   const { credentialEnvelope, ...safe } = binding;
@@ -217,6 +228,13 @@ export function createPlatformApp(options) {
     const user = await repository.getUser(session.userId);
     if (!user || user.status !== "active" || user.organizationId !== session.organizationId) return null;
     return { userId: user.id, organizationId: user.organizationId, role: user.role, email: user.email, displayName: user.displayName };
+  }
+
+  function managedOrganizationId(principal, url) {
+    const requested = url.searchParams.get("organization_id");
+    if (principal.role === ROLES.PLATFORM_ADMIN) return requested || principal.organizationId;
+    if (requested && requested !== principal.organizationId) throw new AuthorizationError();
+    return principal.organizationId;
   }
 
   function requireLogin(principal) {
@@ -830,16 +848,20 @@ export function createPlatformApp(options) {
         requireLogin(principal);
         const permitted = can(principal, PERMISSIONS.PLATFORM_OVERVIEW_READ) || can(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         if (!permitted) throw new AuthorizationError();
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         const [users, agents, runtimes, heartbeats, alerts, snapshots, audit, licenses, servers, releases] = await Promise.all([repository.listUsers(scope), repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAlerts(scope), repository.latestControlPlaneSnapshots(scope), repository.listAudit(scope), repository.listLicenses(scope), repository.listServers(scope), principal.role === ROLES.PLATFORM_ADMIN ? repository.listReleases() : Promise.resolve([])]);
         return json(response, 200, { scope: scope ?? "platform", users: users.length, agents: agents.length, runtimes: runtimes.length, healthyRuntimes: runtimes.filter((runtime) => runtime.status === "ready").length, openAlerts: alerts.filter((alert) => alert.status === "open").length, heartbeats, snapshots, licenses: licenses.length, servers: servers.length, releases: releases.length, recentAudit: audit.slice(0, 20) });
       }
       if (method === "GET" && url.pathname === "/api/admin/users") {
         requireLogin(principal);
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_MEMBERS_MANAGE, { organizationId: principal.organizationId });
         else requirePermission(principal, PERMISSIONS.PLATFORM_USERS_MANAGE);
         return json(response, 200, { users: await repository.listUsers(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/organizations") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_ORGS_MANAGE);
+        return json(response, 200, { organizations: await repository.listOrganizations() });
       }
       const roleMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
       if (roleMatch && method === "PATCH") {
@@ -859,12 +881,12 @@ export function createPlatformApp(options) {
       }
       if (method === "GET" && url.pathname === "/api/admin/control-plane") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         return json(response, 200, { snapshots: await repository.latestControlPlaneSnapshots(scope) });
       }
       if (method === "GET" && url.pathname === "/api/admin/agents") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         const [agents, runtimes, heartbeats, components, users] = await Promise.all([repository.listAgents(scope), repository.listAgentRuntimes(scope), repository.latestAgentHeartbeats(scope), repository.listAgentComponents(scope), repository.listUsers(scope)]);
         const runtimeByAgent = new Map(runtimes.map((runtime) => [runtime.agentId, runtime]));
         const heartbeatByRuntime = new Map(heartbeats.map((heartbeat) => [heartbeat.runtimeId, heartbeat]));
@@ -878,13 +900,142 @@ export function createPlatformApp(options) {
       }
       if (method === "GET" && url.pathname === "/api/admin/alerts") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         return json(response, 200, { alerts: await repository.listAlerts(scope) });
       }
       if (method === "GET" && url.pathname === "/api/admin/usage") {
         requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
-        const scope = principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId;
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
         return json(response, 200, { rollups: await repository.listUsageRollups(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/telemetry") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { events: await repository.listTelemetryEvents(scope, url.searchParams.get("limit")) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/channels") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        const bindings = await repository.listChannelBindings(scope);
+        return json(response, 200, { channels: bindings.map(publicChannelBinding) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/config-revisions") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { revisions: await repository.listConfigRevisions(scope, url.searchParams.get("agent_id") || undefined) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/audit") {
+        requireLogin(principal);
+        if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { events: (await repository.listAudit(scope)).slice(0, 2000) });
+      }
+      const alertStatusMatch = url.pathname.match(/^\/api\/admin\/alerts\/([^/]+)\/status$/);
+      if (alertStatusMatch && method === "PATCH") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_MANAGE, { organizationId: principal.organizationId });
+        const body = await readJson(request);
+        if (!["acknowledged", "resolved"].includes(body.status)) return json(response, 400, { error: "invalid_alert_status" });
+        const before = (await repository.listAlerts(principal.role === ROLES.PLATFORM_ADMIN ? undefined : principal.organizationId)).find((item) => item.id === alertStatusMatch[1]);
+        if (!before) return json(response, 404, { error: "alert_not_found" });
+        if (principal.role !== ROLES.PLATFORM_ADMIN && before.organizationId !== principal.organizationId) throw new AuthorizationError();
+        const alert = await repository.updateAlertStatus({ alertId: before.id, status: body.status, actorUserId: principal.userId });
+        await repository.recordAudit({ organizationId: before.organizationId, actorUserId: principal.userId, action: `alert.${body.status}`, targetType: "alert", targetId: alert.id, metadata: { code: alert.code, agentId: alert.agentId } });
+        return json(response, 200, { alert });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/provider-channels") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
+        const organizationId = managedOrganizationId(principal, url);
+        return json(response, 200, { channels: (await repository.listProviderChannels(organizationId)).map(publicProviderChannel) });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/provider-channels") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
+        if (!providerVault) return json(response, 503, { error: "provider_secret_storage_unavailable" });
+        const organizationId = managedOrganizationId(principal, url);
+        const body = await readJson(request);
+        if (![body.name, body.provider, body.model].every((item) => typeof item === "string" && item.trim())) return json(response, 400, { error: "invalid_provider_channel" });
+        let parsedBaseUrl;
+        try { parsedBaseUrl = new URL(body.baseUrl); } catch { return json(response, 400, { error: "invalid_provider_base_url" }); }
+        if (parsedBaseUrl.protocol !== "https:") return json(response, 400, { error: "provider_base_url_requires_https" });
+        const previous = (await repository.listProviderChannels(organizationId)).find((item) => item.name === body.name.trim());
+        const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+        if (!previous?.apiKeyEnvelope && !apiKey) return json(response, 400, { error: "provider_api_key_required" });
+        const priority = boundedInteger(body.priority, { maximum: 10000 });
+        const weight = boundedInteger(body.weight, { minimum: 1, maximum: 10000 });
+        const maxConcurrency = body.maxConcurrency === null || body.maxConcurrency === "" || body.maxConcurrency === undefined ? null : boundedInteger(body.maxConcurrency, { minimum: 1, maximum: 100000 });
+        const monthlyBudgetUsd = body.monthlyBudgetUsd === null || body.monthlyBudgetUsd === "" || body.monthlyBudgetUsd === undefined ? null : Number(body.monthlyBudgetUsd);
+        if (priority === null || weight === null || (body.maxConcurrency != null && body.maxConcurrency !== "" && maxConcurrency === null) || (monthlyBudgetUsd !== null && (!Number.isFinite(monthlyBudgetUsd) || monthlyBudgetUsd < 0))) return json(response, 400, { error: "invalid_provider_limits" });
+        const channel = await repository.upsertProviderChannel({ organizationId, name: body.name.trim().slice(0, 120), provider: body.provider.trim().slice(0, 80), baseUrl: parsedBaseUrl.toString().replace(/\/$/, ""), model: body.model.trim().slice(0, 200), apiKeyEnvelope: apiKey ? providerVault.seal(apiKey) : null, keyHint: apiKey ? secretHint(apiKey) : null, priority, weight, maxConcurrency, monthlyBudgetUsd, enabled: body.enabled !== false, updatedBy: principal.userId });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "provider.channel.upsert", targetType: "provider_channel", targetId: channel.id, metadata: { provider: channel.provider, model: channel.model, keyChanged: Boolean(apiKey) } });
+        return json(response, previous ? 200 : 201, { channel: publicProviderChannel(channel) });
+      }
+      if (["GET", "PATCH"].includes(method) && url.pathname === "/api/admin/model-policy") {
+        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
+        const organizationId = managedOrganizationId(principal, url);
+        if (method === "GET") return json(response, 200, { policy: await repository.getModelPolicy(organizationId) });
+        const body = await readJson(request);
+        const allowedModels = Array.isArray(body.allowedModels) ? [...new Set(body.allowedModels.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim().slice(0, 200)))].slice(0, 200) : null;
+        const defaultModel = typeof body.defaultModel === "string" && body.defaultModel.trim() ? body.defaultModel.trim().slice(0, 200) : null;
+        if (!allowedModels || (defaultModel && !allowedModels.includes(defaultModel))) return json(response, 400, { error: "invalid_model_policy" });
+        const dailyTokenLimit = body.dailyTokenLimit == null || body.dailyTokenLimit === "" ? null : boundedInteger(body.dailyTokenLimit);
+        const monthlyBudgetUsd = body.monthlyBudgetUsd == null || body.monthlyBudgetUsd === "" ? null : Number(body.monthlyBudgetUsd);
+        if ((body.dailyTokenLimit != null && body.dailyTokenLimit !== "" && dailyTokenLimit === null) || (monthlyBudgetUsd !== null && (!Number.isFinite(monthlyBudgetUsd) || monthlyBudgetUsd < 0))) return json(response, 400, { error: "invalid_model_limits" });
+        const policy = await repository.upsertModelPolicy({ organizationId, allowedModels, defaultModel, userCustomKeysAllowed: body.userCustomKeysAllowed === true, dailyTokenLimit, monthlyBudgetUsd, updatedBy: principal.userId });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "model.policy.update", targetType: "model_policy", targetId: organizationId, metadata: { allowedModelCount: allowedModels.length, defaultModel } });
+        return json(response, 200, { policy });
+      }
+      if (["GET", "PATCH"].includes(method) && url.pathname === "/api/admin/data-retention") {
+        requirePermission(requireLogin(principal), PERMISSIONS.DATA_GOVERNANCE_MANAGE, { organizationId: principal.organizationId });
+        const organizationId = managedOrganizationId(principal, url);
+        if (method === "GET") return json(response, 200, { policy: await repository.getRetentionPolicy(organizationId) });
+        const body = await readJson(request);
+        const values = ["telemetryDays", "usageDays", "auditDays", "sensitiveAccessEventDays", "backupDays"].map((key) => boundedInteger(body[key], { minimum: 1, maximum: 3650 }));
+        if (values.some((item) => item === null)) return json(response, 400, { error: "invalid_retention_policy" });
+        const policy = await repository.upsertRetentionPolicy({ organizationId, telemetryDays: values[0], usageDays: values[1], auditDays: values[2], sensitiveAccessEventDays: values[3], backupDays: values[4], updatedBy: principal.userId });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "retention.policy.update", targetType: "data_retention_policy", targetId: organizationId, metadata: { ...body, updatedBy: undefined } });
+        return json(response, 200, { policy });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/backups") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { backups: await repository.listBackupRecords(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/release-gates") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { gates: await repository.listReleaseGates(scope) });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/upstreams") {
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
+        return json(response, 200, { candidates: await repository.listUpstreamCandidates() });
+      }
+      if (method === "GET" && url.pathname === "/api/admin/sensitive-access") {
+        requirePermission(requireLogin(principal), PERMISSIONS.SENSITIVE_ACCESS_MANAGE);
+        const organizationId = managedOrganizationId(principal, url);
+        const [grants, events] = await Promise.all([repository.listSensitiveAccessGrants(organizationId), repository.listSensitiveAccessEvents(organizationId)]);
+        return json(response, 200, { grants, events });
+      }
+      if (method === "POST" && url.pathname === "/api/admin/sensitive-access/grants") {
+        requirePermission(requireLogin(principal), PERMISSIONS.SENSITIVE_ACCESS_MANAGE);
+        const organizationId = managedOrganizationId(principal, url);
+        const body = await readJson(request);
+        const expiresAt = Date.parse(body.expiresAt);
+        if (!["organization", "user", "agent", "session"].includes(body.scope) || (body.scope !== "organization" && (typeof body.targetId !== "string" || !body.targetId)) || typeof body.reason !== "string" || body.reason.trim().length < 10 || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 24 * 60 * 60_000) return json(response, 400, { error: "invalid_sensitive_access_grant" });
+        const grantee = await repository.getUser(body.granteeUserId);
+        if (!grantee || ![ROLES.ORG_ADMIN, ROLES.PLATFORM_ADMIN].includes(grantee.role) || (grantee.role !== ROLES.PLATFORM_ADMIN && grantee.organizationId !== organizationId)) return json(response, 400, { error: "invalid_sensitive_access_grantee" });
+        const target = body.scope === "user" ? await repository.getUser(body.targetId) : body.scope === "agent" ? await repository.getAgent(body.targetId) : body.scope === "session" ? await repository.getConversation(body.targetId) : { organizationId };
+        if (!target || target.organizationId !== organizationId) return json(response, 400, { error: "invalid_sensitive_access_target" });
+        const grant = await repository.createSensitiveAccessGrant({ organizationId, granteeUserId: grantee.id, scope: body.scope, targetId: body.targetId || null, reason: body.reason.trim().slice(0, 1000), grantedBy: principal.userId, expiresAt: new Date(expiresAt).toISOString() });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "sensitive_access.grant", targetType: "sensitive_access_grant", targetId: grant.id, metadata: { granteeUserId: grant.granteeUserId, scope: grant.scope, targetId: grant.targetId, expiresAt: grant.expiresAt, reason: grant.reason } });
+        return json(response, 201, { grant });
+      }
+      const revokeGrantMatch = url.pathname.match(/^\/api\/admin\/sensitive-access\/grants\/([^/]+)\/revoke$/);
+      if (revokeGrantMatch && method === "POST") {
+        requirePermission(requireLogin(principal), PERMISSIONS.SENSITIVE_ACCESS_MANAGE);
+        const organizationId = managedOrganizationId(principal, url);
+        const grant = await repository.revokeSensitiveAccessGrant(organizationId, revokeGrantMatch[1]);
+        if (!grant) return json(response, 404, { error: "grant_not_found" });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "sensitive_access.revoke", targetType: "sensitive_access_grant", targetId: grant.id, metadata: { reason: grant.reason } });
+        return json(response, 200, { grant });
       }
       if (method === "GET" && url.pathname === "/api/admin/provider-settings") {
         requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE);
@@ -916,17 +1067,19 @@ export function createPlatformApp(options) {
       if (method === "GET" && url.pathname === "/api/admin/integrations") {
         requireLogin(principal);
         if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
-        return json(response, 200, { catalog: INTEGRATION_CATALOG, runs: await repository.listIntegrationRuns(principal.organizationId) });
+        const scope = principal.role === ROLES.PLATFORM_ADMIN && !url.searchParams.get("organization_id") ? undefined : managedOrganizationId(principal, url);
+        return json(response, 200, { catalog: INTEGRATION_CATALOG, runs: await repository.listIntegrationRuns(scope) });
       }
       if (method === "POST" && url.pathname === "/api/admin/hotspots/refresh") {
         requireLogin(principal);
         if (principal.role !== ROLES.PLATFORM_ADMIN) requirePermission(principal, PERMISSIONS.ORG_AUDIT_READ, { organizationId: principal.organizationId });
         if (!runtimeClient) return json(response, 503, { error: "runtime_unavailable" });
+        const organizationId = managedOrganizationId(principal, url);
         const body = await readJson(request);
         const startedAt = new Date().toISOString();
         const result = await runtimeClient.invokeIntegration({ integrationId: "trendradar", capability: "list_hotspots", input: { sources: Array.isArray(body.sources) ? body.sources : undefined } });
-        const run = await repository.saveIntegrationResult({ organizationId: principal.organizationId, integrationId: "trendradar", capability: "list_hotspots", status: result.status, summary: { sources: result.output?.sources ?? [], count: result.output?.items?.length ?? 0 }, items: result.output?.items ?? [], startedAt, completedAt: result.completed_at });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "integration.hotspots.refresh", targetType: "integration_run", targetId: run.id, metadata: { status: run.status, count: result.output?.items?.length ?? 0 } });
+        const run = await repository.saveIntegrationResult({ organizationId, integrationId: "trendradar", capability: "list_hotspots", status: result.status, summary: { sources: result.output?.sources ?? [], count: result.output?.items?.length ?? 0 }, items: result.output?.items ?? [], startedAt, completedAt: result.completed_at });
+        await repository.recordAudit({ organizationId, actorUserId: principal.userId, action: "integration.hotspots.refresh", targetType: "integration_run", targetId: run.id, metadata: { status: run.status, count: result.output?.items?.length ?? 0 } });
         return json(response, 202, { run, count: result.output?.items?.length ?? 0 });
       }
       if (method === "GET" && url.pathname === "/api/admin/licenses") {
@@ -975,7 +1128,7 @@ export function createPlatformApp(options) {
         return json(response, 201, { credential: { id: credential.id, token: issued.token, keyHint: credential.keyHint } });
       }
       if (method === "GET" && url.pathname === "/api/admin/releases") {
-        requirePermission(requireLogin(principal), PERMISSIONS.PLATFORM_RELEASES_MANAGE);
+        requirePermission(requireLogin(principal), PERMISSIONS.CONTROL_PLANE_READ, { organizationId: principal.organizationId });
         return json(response, 200, { releases: await repository.listReleases() });
       }
       if (method === "POST" && url.pathname === "/api/admin/releases") {
