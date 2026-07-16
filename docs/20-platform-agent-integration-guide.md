@@ -113,6 +113,8 @@ Memory follows this one-authority model:
 
 ```text
 PostgreSQL obsidian_notes
+  -> transactional memory_projection_outbox
+  -> background projection worker
   -> BaiLongma graph nodes and [[wikilink]] edges
   -> bounded projection
   -> Hermes memories/MEMORY.md and memories/USER.md
@@ -123,10 +125,17 @@ Platform responsibilities:
 - store tenant, user, and Agent ownership for every Obsidian note;
 - retain Markdown, frontmatter, kind, importance, target, revision, and sync state;
 - build the bounded projection and show excluded/conflict states to the owner;
+- enqueue every note mutation transactionally and process it independently of
+  the browser request;
 - call `memory.snapshot` before `memory.apply`;
 - use the snapshot digest for optimistic conflict protection;
 - import Hermes-native entries as provenance-marked Obsidian notes;
 - never include note bodies in Control Plane or admin telemetry.
+
+The browser can request a manual requeue through `POST
+/api/user/agents/{agent_id}/memory-sync`, which returns `202` and a job status.
+It must not invoke memory synchronization after chat completion or keep a page
+open for queued work to finish.
 
 Runtime responsibilities:
 

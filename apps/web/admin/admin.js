@@ -171,6 +171,8 @@ async function loadOverview() {
   document.querySelector("#metric-alerts").textContent = formatNumber(overview.openAlerts);
   document.querySelector("#metric-servers").textContent = formatNumber(overview.servers);
   document.querySelector("#metric-cost").textContent = formatMoney(cost);
+  document.querySelector("#metric-memory").textContent = formatNumber(overview.memoryProjections?.queued || 0);
+  document.querySelector("#metric-memory-dead").textContent = formatNumber(overview.memoryProjections?.dead || 0);
   const latest = control.snapshots.at(-1);
   const controlStatus = document.querySelector("#control-status");
   controlStatus.replaceChildren(statusNode(latest?.status ?? "waiting"));

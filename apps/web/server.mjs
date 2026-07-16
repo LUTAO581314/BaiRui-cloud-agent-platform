@@ -10,6 +10,7 @@ import { ROLES } from "../../packages/auth/authorization.mjs";
 import { BairuiRuntimeClient } from "../../packages/server-protocol/runtime-client.mjs";
 import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
 import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
+import { MemoryProjectionWorker } from "../../packages/memory/projection-worker.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, "..", "..");
@@ -41,6 +42,19 @@ const admin = await repository.createUser({
 await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, ownerUserId: admin.id, name: "bairui-agent", description: "Hermes runtime boundary" });
 await repository.recordAudit({ organizationId: organization.id, actorUserId: admin.id, action: "platform.bootstrap", targetType: "organization", targetId: organization.id });
 
+const runtimeClient = process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({
+  baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
+  sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET,
+  resolveRuntime: async (agent) => {
+    const route = await repository.getAgentRuntimeRoute(agent.id);
+    if (route?.runtime.endpointRef && route.secretEnvelope?.runtimeSharedSecret) {
+      return { baseUrl: route.runtime.endpointRef, sharedSecret: providerVault.open(route.secretEnvelope.runtimeSharedSecret) };
+    }
+    if (agent.id === "agent_bairui") return { baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787", sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET };
+    throw Object.assign(new Error("Agent Runtime route is unavailable"), { code: "runtime_route_unavailable", statusCode: 503 });
+  }
+}) : undefined;
+
 const server = createPlatformServer({
   repository,
   sessionSecret: sessionSecret ?? "development-session-secret-change-me-32",
@@ -52,18 +66,7 @@ const server = createPlatformServer({
   requiredMigration,
   allowRegistration: process.env.BAIRUI_ALLOW_REGISTRATION === "1",
   agentIngestToken: process.env.BAIRUI_AGENT_INGEST_TOKEN,
-  runtimeClient: process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({
-    baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
-    sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET,
-    resolveRuntime: async (agent) => {
-      const route = await repository.getAgentRuntimeRoute(agent.id);
-      if (route?.runtime.endpointRef && route.secretEnvelope?.runtimeSharedSecret) {
-        return { baseUrl: route.runtime.endpointRef, sharedSecret: providerVault.open(route.secretEnvelope.runtimeSharedSecret) };
-      }
-      if (agent.id === "agent_bairui") return { baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787", sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET };
-      throw Object.assign(new Error("Agent Runtime route is unavailable"), { code: "runtime_route_unavailable", statusCode: 503 });
-    }
-  }) : undefined,
+  runtimeClient,
   providerVault,
   licensePrivateKey: process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n"),
   styles: fs.readFileSync(path.join(appDir, "public", "styles.css"), "utf8"),
@@ -77,6 +80,18 @@ const server = createPlatformServer({
   bairuiWorkspaceScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace.js"), "utf8"),
   bailongmaSceneBootstrap: fs.readFileSync(path.join(appDir, "public", "bairui-scene-bootstrap.js"), "utf8")
 });
+
+const memoryProjectionWorker = runtimeClient ? new MemoryProjectionWorker({
+  repository,
+  runtimeClient,
+  intervalMs: Number(process.env.BAIRUI_MEMORY_WORKER_INTERVAL_MS) || 2_000,
+  batchSize: Number(process.env.BAIRUI_MEMORY_WORKER_BATCH_SIZE) || 4,
+  leaseSeconds: Number(process.env.BAIRUI_MEMORY_WORKER_LEASE_SECONDS) || 90,
+  maxAttempts: Number(process.env.BAIRUI_MEMORY_WORKER_MAX_ATTEMPTS) || 8,
+  baseRetryMs: Number(process.env.BAIRUI_MEMORY_WORKER_BASE_RETRY_MS) || 2_000,
+  maxRetryMs: Number(process.env.BAIRUI_MEMORY_WORKER_MAX_RETRY_MS) || 300_000,
+  logger: console
+}).start() : null;
 
 const healthEvaluationIntervalMs = Math.max(15_000, Number(process.env.BAIRUI_HEALTH_EVALUATION_INTERVAL_MS) || 30_000);
 const runtimeStaleAfterMs = Math.max(30_000, Number(process.env.BAIRUI_RUNTIME_STALE_AFTER_MS) || 120_000);
@@ -107,6 +122,12 @@ async function enforceRetention() {
 await enforceRetention();
 const retentionTimer = setInterval(enforceRetention, retentionIntervalMs);
 retentionTimer.unref();
+
+server.on("close", () => {
+  clearInterval(healthEvaluationTimer);
+  clearInterval(retentionTimer);
+  memoryProjectionWorker?.stop();
+});
 
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1", () => {

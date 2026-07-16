@@ -35,6 +35,7 @@ export class MemoryPlatformRepository {
   #integrationRuns = [];
   #hotspots = new Map();
   #obsidianNotes = [];
+  #memoryProjectionOutbox = [];
   #agentSkillPreferences = [];
   #agentChannelBindings = [];
   #agentAuthorizations = [];
@@ -69,6 +70,20 @@ export class MemoryPlatformRepository {
 
   async readiness() {
     return { ready: true, status: "ready", backend: "memory", migration: "in-memory" };
+  }
+
+  #enqueueMemoryProjection(input) {
+    const reason = String(input.reason ?? "note-write");
+    if (!/^[a-z][a-z0-9._-]{0,63}$/.test(reason)) throw new TypeError("Invalid memory projection reason");
+    const now = new Date().toISOString();
+    const existing = this.#memoryProjectionOutbox.find((item) => item.agentId === input.agentId && ["pending", "retry"].includes(item.state));
+    if (existing) {
+      Object.assign(existing, { reason, state: "pending", attempts: 0, availableAt: now, lastErrorCode: null, resultSummary: {}, updatedAt: now, completedAt: null });
+      return existing;
+    }
+    const job = { id: randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: input.agentId, reason, state: "pending", attempts: 0, availableAt: now, leaseToken: null, leaseExpiresAt: null, lastErrorCode: null, resultSummary: {}, createdAt: now, updatedAt: now, completedAt: null };
+    this.#memoryProjectionOutbox.push(job);
+    return job;
   }
 
   async createOrganization(input) {
@@ -819,10 +834,12 @@ export class MemoryPlatformRepository {
     const now = new Date().toISOString();
     if (duplicate) {
       Object.assign(duplicate, normalized, { revision: (duplicate.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: now });
+      if (input.queueProjection !== false) this.#enqueueMemoryProjection({ ...input, reason: input.projectionReason ?? "note-write" });
       return duplicate;
     }
     const note = { id: input.id ?? randomUUID(), revision: 1, hermesSyncStatus: "pending", hermesSyncedRevision: null, hermesSyncedAt: null, ...normalized, createdAt: now, updatedAt: now };
     this.#obsidianNotes.push(note);
+    if (input.queueProjection !== false) this.#enqueueMemoryProjection({ ...input, reason: input.projectionReason ?? "note-write" });
     return note;
   }
 
@@ -841,6 +858,7 @@ export class MemoryPlatformRepository {
     const note = await this.getObsidianNote(input.organizationId, input.userId, input.agentId, input.id);
     if (!note) return null;
     Object.assign(note, input, { revision: (note.revision ?? 1) + 1, hermesSyncStatus: "pending", updatedAt: new Date().toISOString() });
+    if (input.queueProjection !== false) this.#enqueueMemoryProjection({ ...input, reason: input.projectionReason ?? "note-write" });
     return note;
   }
 
@@ -849,6 +867,7 @@ export class MemoryPlatformRepository {
     const conflicts = new Set(input.conflictNoteIds ?? []);
     const now = new Date().toISOString();
     for (const note of this.#obsidianNotes.filter((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId)) {
+      if (Number(input.noteRevisions?.[note.id]) !== Number(note.revision)) continue;
       if (conflicts.has(note.id)) note.hermesSyncStatus = "conflict";
       else if (included.has(note.id)) { note.hermesSyncStatus = "materialized"; note.hermesSyncedRevision = note.revision; note.hermesSyncedAt = now; }
       else note.hermesSyncStatus = "excluded";
@@ -859,7 +878,69 @@ export class MemoryPlatformRepository {
     const index = this.#obsidianNotes.findIndex((item) => item.id === noteId && item.organizationId === organizationId && item.userId === userId && item.agentId === agentId);
     if (index < 0) return false;
     this.#obsidianNotes.splice(index, 1);
+    this.#enqueueMemoryProjection({ organizationId, userId, agentId, reason: "note-delete" });
     return true;
+  }
+
+  async markObsidianProjectionFailed(input) {
+    if (this.#memoryProjectionOutbox.some((item) => item.agentId === input.agentId && ["pending", "processing", "retry"].includes(item.state))) return;
+    for (const note of this.#obsidianNotes.filter((item) => item.organizationId === input.organizationId && item.userId === input.userId && item.agentId === input.agentId && item.hermesSyncStatus === "pending")) note.hermesSyncStatus = "failed";
+  }
+
+  async enqueueMemoryProjection(input) {
+    return this.#enqueueMemoryProjection(input);
+  }
+
+  async getMemoryProjectionStatus(organizationId, userId, agentId) {
+    return this.#memoryProjectionOutbox
+      .filter((item) => item.organizationId === organizationId && item.userId === userId && item.agentId === agentId)
+      .sort((left, right) => Number(["pending", "processing", "retry"].includes(right.state)) - Number(["pending", "processing", "retry"].includes(left.state)) || Date.parse(right.createdAt) - Date.parse(left.createdAt))[0] ?? null;
+  }
+
+  async listMemoryProjectionJobs(organizationId, limit = 1000) {
+    return this.#memoryProjectionOutbox.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(5000, Number(limit) || 1000)));
+  }
+
+  async leaseMemoryProjectionJobs(input = {}) {
+    const now = Date.now();
+    for (const expired of this.#memoryProjectionOutbox.filter((item) => item.state === "processing" && Date.parse(item.leaseExpiresAt) <= now)) {
+      const newer = this.#memoryProjectionOutbox.some((item) => item.agentId === expired.agentId && item.id !== expired.id && ["pending", "retry"].includes(item.state));
+      Object.assign(expired, newer
+        ? { state: "completed", resultSummary: { status: "superseded" }, completedAt: new Date(now).toISOString() }
+        : { state: "retry", availableAt: new Date(now).toISOString(), completedAt: null },
+      { leaseToken: null, leaseExpiresAt: null, updatedAt: new Date(now).toISOString() });
+    }
+    const limit = Math.max(1, Math.min(20, Number(input.limit) || 1));
+    const leaseSeconds = Math.max(15, Math.min(600, Number(input.leaseSeconds) || 60));
+    const leased = [];
+    const candidates = this.#memoryProjectionOutbox
+      .filter((item) => ["pending", "retry"].includes(item.state) && Date.parse(item.availableAt) <= now)
+      .sort((left, right) => Date.parse(left.availableAt) - Date.parse(right.availableAt) || Date.parse(left.createdAt) - Date.parse(right.createdAt));
+    for (const job of candidates) {
+      if (leased.length >= limit) break;
+      if (this.#memoryProjectionOutbox.some((item) => item.agentId === job.agentId && item.state === "processing")) continue;
+      Object.assign(job, { state: "processing", attempts: job.attempts + 1, leaseToken: randomUUID(), leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
+      leased.push(job);
+    }
+    return leased;
+  }
+
+  async completeMemoryProjectionJob(input) {
+    const job = this.#memoryProjectionOutbox.find((item) => item.id === input.id && item.state === "processing" && item.leaseToken === input.leaseToken);
+    if (!job) return null;
+    Object.assign(job, { state: "completed", leaseToken: null, leaseExpiresAt: null, lastErrorCode: null, resultSummary: input.resultSummary ?? {}, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    return job;
+  }
+
+  async retryMemoryProjectionJob(input) {
+    const job = this.#memoryProjectionOutbox.find((item) => item.id === input.id && item.state === "processing" && item.leaseToken === input.leaseToken);
+    if (!job) return null;
+    const newer = this.#memoryProjectionOutbox.some((item) => item.agentId === job.agentId && item.id !== job.id && ["pending", "retry"].includes(item.state));
+    const dead = job.attempts >= Math.max(1, Number(input.maxAttempts) || 8);
+    const state = newer ? "completed" : dead ? "dead" : "retry";
+    const now = Date.now();
+    Object.assign(job, { state, leaseToken: null, leaseExpiresAt: null, lastErrorCode: input.errorCode, resultSummary: newer ? { status: "superseded" } : {}, availableAt: state === "retry" ? new Date(now + Math.max(0, Number(input.delayMs) || 0)).toISOString() : job.availableAt, completedAt: ["completed", "dead"].includes(state) ? new Date(now).toISOString() : null, updatedAt: new Date(now).toISOString() });
+    return job;
   }
 
   async listAgentSkillPreferences(organizationId, userId, agentId) {

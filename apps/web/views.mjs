@@ -77,6 +77,7 @@ export function adminPage(principal) {
         <div><span>用户</span><strong id="metric-users">-</strong></div><div><span>Agent</span><strong id="metric-agents">-</strong></div>
         <div><span>健康 Runtime</span><strong id="metric-runtimes">-</strong></div><div><span>开放告警</span><strong id="metric-alerts">-</strong></div>
         <div><span>服务器</span><strong id="metric-servers">-</strong></div><div><span>本月成本</span><strong id="metric-cost">-</strong></div>
+        <div><span>记忆队列</span><strong id="metric-memory">-</strong></div><div><span>记忆失败</span><strong id="metric-memory-dead">-</strong></div>
       </div>
       <div class="control-grid two"><section class="control-section"><div class="section-heading"><h2>最近 Agent 状态</h2><button class="text-command" data-goto="agents" type="button">查看全部</button></div>${table("overview-agent-rows", ["Agent", "所有者", "Runtime", "版本", "最后心跳"])}</section>
       <section class="control-section"><div class="section-heading"><h2>需要处理</h2><button class="text-command" data-goto="alerts" type="button">进入告警</button></div>${table("overview-alert-rows", ["级别", "告警", "Agent", "时间"])}</section></div>

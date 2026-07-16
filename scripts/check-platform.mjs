@@ -37,6 +37,7 @@ const required = [
   "packages/db/migrations/014_user_configuration_apply.sql",
   "packages/db/migrations/015_hermes_obsidian_memory.sql",
   "packages/db/migrations/016_agent_authorizations.sql",
+  "packages/db/migrations/017_memory_projection_outbox.sql",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
@@ -49,6 +50,8 @@ const required = [
   "packages/bailongma-ui/compatibility.mjs",
   "packages/security/secret-envelope.mjs",
   "packages/memory/obsidian-note.mjs",
+  "packages/memory/projection-coordinator.mjs",
+  "packages/memory/projection-worker.mjs",
   "packages/license/license.mjs",
   "packages/deployment/bundle.mjs",
   "tests/authorization.test.mjs",
@@ -57,6 +60,7 @@ const required = [
   "tests/resource-collector.test.mjs",
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
+  "tests/memory-projection-worker.test.mjs",
   "tests/browser/fixture-server.mjs",
   "tests/browser/remote-acceptance.mjs",
   "server-agent/index.mjs",
@@ -116,6 +120,7 @@ const overlay = fs.existsSync(overlayPath) ? fs.readFileSync(overlayPath, "utf8"
 for (const evidence of ["assistant.delta", "assistant.completed", "sessions/${encodeURIComponent", "chat/stream", "AbortController", "attachments", "operationalFailure", "bairui-operational-blocker", "/api/user/bootstrap"]) {
   if (!overlay.includes(evidence)) failures.push(`Missing BaiLongma native Hermes adapter evidence: ${evidence}`);
 }
+if (overlay.includes("memory-sync")) failures.push("Browser chat adapter must not own reliable memory synchronization");
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
@@ -188,6 +193,11 @@ const userConfigurationMigration = fs.readFileSync(path.join(root, "packages/db/
 if (!userConfigurationMigration.includes("'config.apply-user'")) failures.push("Missing owner-scoped configuration control action");
 const memoryProjectionMigration = fs.readFileSync(path.join(root, "packages/db/migrations/015_hermes_obsidian_memory.sql"), "utf8");
 for (const fragment of ["memory_kind", "hermes_target", "hermes_sync_status"]) if (!memoryProjectionMigration.includes(fragment)) failures.push(`Memory projection migration is missing ${fragment}`);
+const memoryOutboxMigration = fs.readFileSync(path.join(root, "packages/db/migrations/017_memory_projection_outbox.sql"), "utf8");
+for (const fragment of ["CREATE TABLE IF NOT EXISTS memory_projection_outbox", "memory_projection_outbox_pending_agent_idx", "memory_projection_outbox_processing_agent_idx"]) if (!memoryOutboxMigration.includes(fragment)) failures.push(`Memory outbox migration is missing ${fragment}`);
+const platformStartup = fs.readFileSync(path.join(root, "apps/web/server.mjs"), "utf8");
+for (const evidence of ["MemoryProjectionWorker", ".start()", "memoryProjectionWorker?.stop()"] ) if (!platformStartup.includes(evidence)) failures.push(`Memory projection worker lifecycle is missing ${evidence}`);
+for (const evidence of ["memory_projection_outbox", "background projection worker", "browser"] ) if (!integrationGuide.includes(evidence)) failures.push(`Memory reliability guidance is missing ${evidence}`);
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }

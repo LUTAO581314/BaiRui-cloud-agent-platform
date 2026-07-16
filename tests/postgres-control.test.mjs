@@ -46,9 +46,15 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
 
     const note = await repository.createObsidianNote({ id: `note_${suffix}`, organizationId, userId, agentId, title: "PostgreSQL note", slug: "postgresql-note", markdown: "# PostgreSQL note", frontmatter: { tags: [] }, wikilinks: [] });
     assert.equal(note.agentId, agentId);
+    const queuedProjection = await repository.getMemoryProjectionStatus(organizationId, userId, agentId);
+    assert.equal(queuedProjection.state, "pending");
     assert.equal((await repository.listObsidianNotes(organizationId, userId, agentId, "PostgreSQL")).length, 1);
     await repository.updateObsidianNote({ ...note, markdown: "# PostgreSQL note\n\nUpdated" });
     assert.match((await repository.getObsidianNote(organizationId, userId, agentId, note.id)).markdown, /Updated/);
+    assert.equal((await repository.getMemoryProjectionStatus(organizationId, userId, agentId)).id, queuedProjection.id);
+    const [projectionLease] = await repository.leaseMemoryProjectionJobs({ limit: 1, leaseSeconds: 30 });
+    assert.equal(projectionLease.agentId, agentId);
+    assert.equal((await repository.completeMemoryProjectionJob({ id: projectionLease.id, leaseToken: projectionLease.leaseToken, resultSummary: { status: "materialized" } })).state, "completed");
 
     const skill = await repository.upsertAgentSkillPreference({ organizationId, userId, agentId, skillId: "browser/use", enabled: true, applyStatus: "pending" });
     assert.equal(skill.applyStatus, "pending");
@@ -164,6 +170,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.equal((await repository.listReleaseManifests())[0].id, manifest.id);
 
     assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
+    assert.equal((await repository.getMemoryProjectionStatus(organizationId, userId, agentId)).state, "pending");
     const deletion = await repository.requestAgentLifecycle({ agentId, request: "delete", requestedBy: userId, reason: "PostgreSQL integration test" });
     assert.ok(deletion.command.approvalId);
     const [deleteCommand] = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
