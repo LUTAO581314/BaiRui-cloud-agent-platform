@@ -69,6 +69,11 @@ async function ordinaryDesktop(browser, baseUrl) {
 
   await page.locator(".bw-header [data-close]").click();
   await page.locator("#msg-input").fill("Reply from the Hermes remote fixture");
+  const sendGeometry = await page.locator("#send-btn").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, viewport: innerHeight };
+  });
+  assert.ok(sendGeometry.top >= 0 && sendGeometry.bottom <= sendGeometry.viewport, `send button is outside viewport: ${JSON.stringify(sendGeometry)}`);
   await page.locator("#send-btn").click();
   await page.getByText("Remote acceptance reply", { exact: false }).waitFor({ timeout: 15_000 });
   await page.screenshot({ path: path.join(artifacts, "user-desktop-chat.png"), fullPage: true });

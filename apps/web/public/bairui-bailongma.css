@@ -81,7 +81,7 @@
    Hermes session column using the interaction density of mature chat clients. */
 .console {
   top: 72px !important;
-  bottom: 18px !important;
+  bottom: auto !important;
   height: calc(100vh - 90px) !important;
   height: calc(100dvh - 90px) !important;
   max-height: calc(100dvh - 90px) !important;
@@ -745,7 +745,7 @@ body.bairui-streaming #send-btn {
   .console {
     top: 62px !important;
     right: 10px !important;
-    bottom: 10px !important;
+    bottom: auto !important;
     left: 10px !important;
     height: calc(100vh - 72px) !important;
     height: calc(100dvh - 72px) !important;

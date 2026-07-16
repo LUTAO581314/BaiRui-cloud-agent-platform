@@ -468,7 +468,7 @@
       Object.assign(chatArea.style, {
         position: "fixed",
         top: `${top}px`,
-        bottom: `${bottom}px`,
+        bottom: "auto",
         height: `calc(100dvh - ${top + bottom}px)`,
         maxHeight: `calc(100dvh - ${top + bottom}px)`
       });
