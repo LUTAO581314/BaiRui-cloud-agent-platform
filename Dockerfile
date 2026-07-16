@@ -3,6 +3,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+FROM node:24-alpine AS bailongma-ui
+WORKDIR /app
+COPY packages/bailongma-ui ./packages/bailongma-ui
+COPY scripts/build-bailongma-ui.mjs ./scripts/build-bailongma-ui.mjs
+COPY upstreams/bailongma ./upstreams/bailongma
+RUN node scripts/build-bailongma-ui.mjs
+
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
@@ -12,8 +19,7 @@ COPY package.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY server-agent ./server-agent
-COPY upstreams/bailongma/brain-ui.html upstreams/bailongma/LICENSE upstreams/bailongma/package.json ./upstreams/bailongma/
-COPY upstreams/bailongma/src/ui ./upstreams/bailongma/src/ui
+COPY --from=bailongma-ui /app/build/bailongma-ui ./build/bailongma-ui
 USER bairui
 EXPOSE 3000
 CMD ["node", "apps/web/server.mjs"]

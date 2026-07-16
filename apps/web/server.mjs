@@ -74,7 +74,7 @@ const server = createPlatformServer({
   icon: fs.readFileSync(path.join(appDir, "public", "bairui-agent-icon.png")),
   loginScript: fs.readFileSync(path.join(appDir, "public", "login.js"), "utf8"),
   adminScript: fs.readFileSync(path.join(appDir, "admin", "admin.js"), "utf8"),
-  bailongmaUi: createBailongmaUi({ root: path.join(repoRoot, "upstreams", "bailongma") }),
+  bailongmaUi: createBailongmaUi({ root: process.env.BAIRUI_BAILONGMA_UI_ROOT ?? path.join(repoRoot, "build", "bailongma-ui") }),
   bailongmaOverlayCss: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.css"), "utf8"),
   bailongmaOverlayScript: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.js"), "utf8"),
   bairuiWorkspaceScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace.js"), "utf8"),

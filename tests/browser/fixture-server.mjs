@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createPlatformServer } from "../../apps/web/app.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
 import { hashPassword } from "../../packages/auth/password.mjs";
-import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
+import { createTestBailongmaUi } from "../helpers/bailongma-ui.mjs";
 import { MemoryPlatformRepository } from "../../packages/db/memory-repository.mjs";
 import { createObsidianNote } from "../../packages/memory/obsidian-note.mjs";
 import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
@@ -37,8 +37,49 @@ function createRuntimeFixture() {
   const jobs = [{ id: "job_remote", name: "Daily research", schedule: "0 9 * * *", prompt: "Summarize project updates", deliver: "local", enabled: true, repeat: null, skills: ["browser/use"], next_run_at: now }];
   let projection = { memory: [], user: [] };
   let digest = sha256(JSON.stringify(projection));
+  const operations = [];
+  const pendingRuns = new Map();
+  const encoder = new TextEncoder();
+
+  const emitRunEvent = (runId, event, data) => {
+    const pending = pendingRuns.get(runId);
+    if (!pending) return false;
+    try {
+      const frame = ["event: ", event, "\ndata: ", JSON.stringify(data), "\n\n"].join("");
+      pending.controller.enqueue(encoder.encode(frame));
+      return true;
+    } catch {
+      pendingRuns.delete(runId);
+      return false;
+    }
+  };
+
+  const closeRun = (runId) => {
+    const pending = pendingRuns.get(runId);
+    pendingRuns.delete(runId);
+    try { pending?.controller.close(); } catch {}
+  };
 
   const operation = async ({ operation: name, input = {} }) => {
+    operations.push({ operation: name, input: structuredClone(input) });
+    if (name === "runs.approve") {
+      const runId = input.run_id;
+      if (input.choice === "deny") {
+        emitRunEvent(runId, "run.cancelled", { run_id: runId, reason: "approval_denied" });
+      } else {
+        emitRunEvent(runId, "assistant.delta", { delta: "Approved fixture reply" });
+        emitRunEvent(runId, "assistant.completed", { message_id: "message_approval_remote", content: "Approved fixture reply" });
+        emitRunEvent(runId, "run.completed", { run_id: runId, usage: { input_tokens: 4, output_tokens: 4 } });
+      }
+      closeRun(runId);
+      return { run_id: runId, status: input.choice === "deny" ? "cancelled" : "running", choice: input.choice };
+    }
+    if (name === "runs.stop") {
+      const runId = input.run_id;
+      emitRunEvent(runId, "run.cancelled", { run_id: runId, reason: "user_requested" });
+      closeRun(runId);
+      return { run_id: runId, status: "stopping" };
+    }
     if (name === "health.detailed") return { status: "healthy", runtime: "hermes", version: "fixture-hermes-1.0.0", gateway_state: "running", active_agents: 1 };
     if (name === "discovery.models") return { object: "list", data: [{ id: "fixture/hermes", name: "Hermes Fixture" }] };
     if (name === "discovery.capabilities") return { object: "hermes.api_server.capabilities", features: { session_resources: true, run_events_sse: true, approval_events: true, skills_api: true, audio_api: false } };
@@ -119,9 +160,47 @@ function createRuntimeFixture() {
   };
 
   return {
+    operations,
     operation,
     async streamOperation({ operation: name, input = {} }) {
+      operations.push({ operation: name, input: structuredClone(input) });
       if (name !== "sessions.chat.stream") return new Response("", { headers: { "content-type": "text/event-stream" } });
+      const messageText = typeof input.body?.message === "string" ? input.body.message : JSON.stringify(input.body?.message ?? "");
+      if (messageText.includes("Approval fixture request")) {
+        const runId = "run_approval_remote";
+        const body = new ReadableStream({
+          start(controller) {
+            pendingRuns.set(runId, { controller });
+            emitRunEvent(runId, "run.started", { run_id: runId, user_message: { content: input.body?.message } });
+            emitRunEvent(runId, "message.started", { message_id: "message_approval_remote" });
+            emitRunEvent(runId, "approval.request", {
+              run_id: runId,
+              command: "echo approval-fixture",
+              description: "The browser fixture requests a protected operation.",
+              allow_permanent: false,
+              choices: ["once", "session", "always", "deny"]
+            });
+          },
+          cancel() { pendingRuns.delete(runId); }
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
+      }
+      if (messageText.includes("Stop fixture request")) {
+        const runId = "run_stop_remote";
+        const body = new ReadableStream({
+          start(controller) {
+            pendingRuns.set(runId, { controller });
+            setTimeout(() => {
+              if (!pendingRuns.has(runId)) return;
+              emitRunEvent(runId, "run.started", { run_id: runId, user_message: { content: input.body?.message } });
+              emitRunEvent(runId, "message.started", { message_id: "message_stop_remote" });
+              emitRunEvent(runId, "assistant.delta", { delta: "Long running fixture" });
+            }, 250);
+          },
+          cancel() { pendingRuns.delete(runId); }
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
+      }
       const sessionMessages = messages.get(input.session_id) ?? [];
       sessionMessages.push({ id: "message_user_remote", role: "user", content: input.body?.message, timestamp: now });
       sessionMessages.push({ id: "message_assistant_remote", role: "assistant", content: "Remote acceptance reply", timestamp: now });
@@ -164,9 +243,10 @@ export async function startBrowserFixture() {
   await repository.createObsidianNote({ id: "note_boundary", ...linked, organizationId: organization.id, userId: owner.id, agentId: ownerAgent.id });
 
   const { privateKey } = generateKeyPairSync("ed25519");
+  const runtimeFixture = createRuntimeFixture();
   const server = createPlatformServer({
     repository,
-    runtimeClient: createRuntimeFixture(),
+    runtimeClient: runtimeFixture,
     sessionSecret: "remote-browser-session-secret-at-least-32-characters",
     secureCookies: false,
     providerVault,
@@ -176,7 +256,7 @@ export async function startBrowserFixture() {
     icon: fs.readFileSync(path.join(publicRoot, "bairui-agent-icon.png")),
     loginScript: fs.readFileSync(path.join(publicRoot, "login.js"), "utf8"),
     adminScript: fs.readFileSync(path.join(adminRoot, "admin.js"), "utf8"),
-    bailongmaUi: createBailongmaUi({ root: path.join(root, "upstreams", "bailongma") }),
+    bailongmaUi: createTestBailongmaUi(),
     bailongmaOverlayCss: fs.readFileSync(path.join(publicRoot, "bairui-bailongma.css"), "utf8"),
     bailongmaOverlayScript: fs.readFileSync(path.join(publicRoot, "bairui-bailongma.js"), "utf8"),
     bairuiWorkspaceScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace.js"), "utf8"),
@@ -188,6 +268,7 @@ export async function startBrowserFixture() {
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}`,
     repository,
+    runtimeOperations: runtimeFixture.operations,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }

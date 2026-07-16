@@ -1,10 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { transformBailongmaBrainApp } from "./brain-app-transform.mjs";
-import { transformBailongmaAppShell } from "./app-shell-transform.mjs";
 
 const PREFIX = "/bailongma-ui/";
 const ALLOWED_UI_ROOTS = ["src/ui/brain-ui/", "src/ui/scene-shell/"];
+const BUILD_INTEGRITY_FILES = Object.freeze([
+  "brain-ui.html",
+  "src/ui/brain-ui/app.js",
+  "src/ui/brain-ui/app-shell.js",
+  "src/ui/brain-ui/chat.js",
+  "src/ui/brain-ui/voice-wake.js"
+]);
 const CONTENT_TYPES = Object.freeze({
   ".css": "text/css; charset=utf-8",
   ".gif": "image/gif",
@@ -27,25 +33,8 @@ function withinRoot(candidate, root) {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-function transformEntryHtml(source) {
-  return source
-    .replace(/<title>[\s\S]*?<\/title>/i, "<title>bairui-agent · Cognitive Surface</title>")
-    .replace(
-      "</head>",
-      `<link rel="icon" type="image/png" href="/assets/bairui-agent-icon.png">
-<link rel="stylesheet" data-bairui-overlay href="/assets/bairui-bailongma.css">
-</head>`
-    )
-    .replace(/\s*<link rel="preconnect"[^>]*>/gi, "")
-    .replace(/\s*<link href="https:\/\/fonts\.googleapis\.com[^>]*>/gi, "")
-    .replace("./src/ui/brain-ui/styles.css", `${PREFIX}src/ui/brain-ui/styles.css`)
-    .replace("/vendor/d3/d3.min.js", `${PREFIX}vendor/d3/d3.min.js`)
-    .replace(
-      '<script type="module" src="./src/ui/brain-ui/app.js"></script>',
-      `<script src="/assets/bairui-bailongma.js" defer></script>
-<script src="/assets/bairui-workspace.js" defer></script>
-<script type="module" src="${PREFIX}src/ui/brain-ui/app.js"></script>`
-    );
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export function createBailongmaUi(options) {
@@ -53,13 +42,24 @@ export function createBailongmaUi(options) {
   const htmlPath = path.join(root, "brain-ui.html");
   const licensePath = path.join(root, "LICENSE");
   const packagePath = path.join(root, "package.json");
-  for (const required of [htmlPath, licensePath, packagePath]) {
+  const manifestPath = path.join(root, ".bairui-build.json");
+  for (const required of [htmlPath, licensePath, packagePath, manifestPath]) {
     if (!fs.existsSync(required)) throw new Error(`BaiLongma UI source is incomplete: ${required}`);
   }
 
-  const sourceHtml = fs.readFileSync(htmlPath, "utf8");
   const packageMetadata = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-  const entryHtml = transformEntryHtml(sourceHtml);
+  const buildManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (buildManifest.schemaVersion !== "1.0" || buildManifest.source !== "xiaoyuanda666-ship-it/BaiLongma" || buildManifest.sourceVersion !== packageMetadata.version) {
+    throw new Error("BaiLongma UI build manifest does not match its source metadata");
+  }
+  for (const relative of BUILD_INTEGRITY_FILES) {
+    const expected = buildManifest.files?.[relative];
+    const candidate = path.resolve(root, relative);
+    if (!/^[a-f0-9]{64}$/.test(expected || "") || !withinRoot(candidate, root) || !fs.existsSync(candidate) || sha256(fs.readFileSync(candidate)) !== expected) {
+      throw new Error(`BaiLongma UI build integrity check failed: ${relative}`);
+    }
+  }
+  const entryHtml = fs.readFileSync(htmlPath, "utf8");
 
   return Object.freeze({
     name: packageMetadata.name,
@@ -86,12 +86,6 @@ export function createBailongmaUi(options) {
       if (!ALLOWED_UI_ROOTS.some((allowed) => relative.startsWith(allowed))) return null;
       const candidate = path.resolve(root, relative);
       if (!withinRoot(candidate, root) || !fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return null;
-      if (relative === "src/ui/brain-ui/app.js") {
-        return { body: Buffer.from(transformBailongmaBrainApp(fs.readFileSync(candidate, "utf8"))), contentType: CONTENT_TYPES[".js"] };
-      }
-      if (relative === "src/ui/brain-ui/app-shell.js") {
-        return { body: Buffer.from(transformBailongmaAppShell(fs.readFileSync(candidate, "utf8"))), contentType: CONTENT_TYPES[".js"] };
-      }
       return {
         body: fs.readFileSync(candidate),
         contentType: CONTENT_TYPES[path.extname(candidate).toLowerCase()] ?? "application/octet-stream"

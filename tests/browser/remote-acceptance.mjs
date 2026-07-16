@@ -34,7 +34,18 @@ async function waitForWorkspaceText(page, value) {
   ]);
 }
 
-async function ordinaryDesktop(browser, baseUrl) {
+async function waitForRuntimeOperation(operations, predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const operation = operations.find(predicate);
+    if (operation) return operation;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Expected Runtime operation was not observed");
+}
+
+async function ordinaryDesktop(browser, fixture) {
+  const { baseUrl, runtimeOperations } = fixture;
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const browserErrors = [];
@@ -44,6 +55,17 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.waitForFunction(() => document.querySelectorAll("#graph circle").length >= 3);
   await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
   await page.locator(".bairui-chat-header").waitFor({ state: "visible" });
+  const hostAdapter = await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "BairuiHostAdapter");
+    return {
+      configurable: descriptor?.configurable,
+      writable: descriptor?.writable,
+      methods: Object.keys(descriptor?.value || {}).sort()
+    };
+  });
+  assert.equal(hostAdapter.configurable, false);
+  assert.equal(hostAdapter.writable, false);
+  assert.deepEqual(hostAdapter.methods, ["agentProfile", "conversations", "memories", "openEvents", "sendMessage"]);
   assert.equal(await page.locator("#panel-l1-tab").count(), 1, "missing left panel control");
   assert.equal(await page.locator("#panel-l2-tab").count(), 1, "missing right panel control");
   const chatWidthBeforeCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
@@ -133,11 +155,34 @@ async function ordinaryDesktop(browser, baseUrl) {
   await page.locator("#send-btn").click();
   await page.getByText("Remote acceptance reply", { exact: false }).waitFor({ timeout: 15_000 });
   await page.screenshot({ path: path.join(artifacts, "user-desktop-chat.png"), fullPage: true });
+  await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
+  await page.locator("#msg-input").fill("Approval fixture request");
+  await page.locator("#send-btn").click();
+  const approval = page.locator("dialog.bairui-approval-dialog");
+  await approval.waitFor({ state: "visible" });
+  await approval.getByText("Hermes 请求操作授权", { exact: true }).waitFor();
+  await approval.getByText("echo approval-fixture", { exact: true }).waitFor();
+  assert.equal(await approval.locator('[data-choice="always"]').count(), 0, "permanent approval must be hidden when Hermes forbids it");
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-approval.png"), fullPage: true });
+  await approval.locator('[data-choice="once"]').click();
+  await page.getByText("Approved fixture reply", { exact: false }).waitFor({ timeout: 15_000 });
+  const approveOperation = await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "runs.approve" && item.input.run_id === "run_approval_remote");
+  assert.equal(approveOperation.input.choice, "once");
+
+  await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
+  await page.locator("#msg-input").fill("Stop fixture request");
+  await page.locator("#send-btn").click();
+  await page.waitForFunction(() => document.body.classList.contains("bairui-streaming"));
+  await page.locator("#send-btn").click();
+  const stopOperation = await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "runs.stop" && item.input.run_id === "run_stop_remote");
+  assert.equal(stopOperation.input.run_id, "run_stop_remote");
+  await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
   assert.deepEqual(browserErrors, [], `browser errors: ${browserErrors.join("; ")}`);
   await context.close();
 }
 
-async function ordinaryMobile(browser, baseUrl) {
+async function ordinaryMobile(browser, fixture) {
+  const { baseUrl, runtimeOperations } = fixture;
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   await login(page, baseUrl, fixtureCredentials.user, "/app");
@@ -173,6 +218,20 @@ async function ordinaryMobile(browser, baseUrl) {
   await page.getByText("Web tools", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-runtime-capabilities.png"), fullPage: true });
+  await page.locator(".bw-header [data-close]").click();
+  await page.locator("#msg-input").fill("Approval fixture request");
+  await page.locator("#send-btn").click();
+  const approval = page.locator("dialog.bairui-approval-dialog");
+  await approval.waitFor({ state: "visible" });
+  const approvalGeometry = await approval.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(approvalGeometry.left >= 0 && approvalGeometry.top >= 0 && approvalGeometry.right <= approvalGeometry.viewportWidth && approvalGeometry.bottom <= approvalGeometry.viewportHeight, "mobile approval dialog must remain inside the viewport");
+  await page.screenshot({ path: path.join(artifacts, "user-mobile-approval.png"), fullPage: true });
+  await approval.locator('[data-choice="deny"]').click();
+  await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "runs.approve" && item.input.run_id === "run_approval_remote" && item.input.choice === "deny");
+  await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
   await context.close();
 }
 
@@ -197,8 +256,8 @@ async function platformAdmin(browser, baseUrl) {
 const fixture = await startBrowserFixture();
 const browser = await chromium.launch({ headless: true });
 try {
-  await ordinaryDesktop(browser, fixture.baseUrl);
-  await ordinaryMobile(browser, fixture.baseUrl);
+  await ordinaryDesktop(browser, fixture);
+  await ordinaryMobile(browser, fixture);
   await platformAdmin(browser, fixture.baseUrl);
   process.stdout.write(`Remote browser acceptance passed. Artifacts: ${artifacts}\n`);
 } finally {

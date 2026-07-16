@@ -1,12 +1,15 @@
 (function () {
   const nativeFetch = window.fetch.bind(window);
-  const NativeEventSource = window.EventSource;
   const state = {
     agents: [],
     activeAgent: null,
     activeSessionId: null,
     agentPromise: null,
     activeAbortController: null,
+    activeRunId: null,
+    stopRequested: false,
+    stopPromise: null,
+    approvalDialog: null,
     lastMessage: null,
     user: null
   };
@@ -298,23 +301,123 @@
     document.body.classList.toggle("bairui-streaming", active);
     const send = document.querySelector("#send-btn");
     if (send) {
-      send.textContent = active ? "停止" : "发送";
-      send.title = active ? "停止生成" : "发送消息";
+      const stopping = active && state.stopRequested;
+      send.textContent = stopping ? "停止中" : active ? "停止" : "发送";
+      send.title = stopping ? "正在停止 Hermes 运行" : active ? "停止生成" : "发送消息";
+      send.disabled = stopping;
     }
     window.dispatchEvent(new CustomEvent("bairui:stream-state", { detail: { active } }));
   }
 
+  function closeApprovalDialog() {
+    const dialog = state.approvalDialog;
+    state.approvalDialog = null;
+    if (!dialog) return;
+    if (dialog.open) dialog.close();
+    dialog.remove();
+  }
+
+  async function submitApproval(runId, choice) {
+    const agent = await loadActiveAgent();
+    return requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/runs/${encodeURIComponent(runId)}/approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ choice })
+    });
+  }
+
+  function showApprovalRequest(data) {
+    const runId = String(data.run_id || state.activeRunId || "");
+    if (!runId || state.stopRequested) return;
+    state.activeRunId = runId;
+    closeApprovalDialog();
+
+    const dialog = document.createElement("dialog");
+    dialog.className = "bairui-approval-dialog";
+    dialog.setAttribute("aria-labelledby", "bairui-approval-title");
+    const form = document.createElement("form");
+    form.method = "dialog";
+    const header = document.createElement("header");
+    const title = document.createElement("h2");
+    title.id = "bairui-approval-title";
+    title.textContent = "Hermes 请求操作授权";
+    const description = document.createElement("p");
+    description.textContent = String(data.description || data.prompt || "Agent 请求执行受保护操作。").slice(0, 2000);
+    header.append(title, description);
+    form.appendChild(header);
+    if (data.command) {
+      const command = document.createElement("pre");
+      command.textContent = String(data.command).slice(0, 4000);
+      form.appendChild(command);
+    }
+    const status = document.createElement("p");
+    status.className = "bairui-approval-status";
+    status.setAttribute("role", "status");
+    form.appendChild(status);
+    const actions = document.createElement("footer");
+    const labels = { once: "仅本次", session: "本次会话", always: "始终允许", deny: "拒绝" };
+    const advertised = Array.isArray(data.choices) ? data.choices : Object.keys(labels);
+    const choices = advertised.filter((choice) => labels[choice] && (choice !== "always" || data.allow_permanent !== false));
+    for (const choice of choices.length ? choices : ["once", "deny"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.choice = choice;
+      button.className = choice === "deny" ? "danger" : choice === "once" ? "primary" : "";
+      button.textContent = labels[choice];
+      button.addEventListener("click", async () => {
+        for (const item of actions.querySelectorAll("button")) item.disabled = true;
+        status.textContent = "正在提交审批决定";
+        try {
+          await submitApproval(runId, choice);
+          closeApprovalDialog();
+          cardNotice(choice === "deny" ? "已拒绝 Hermes 操作" : "审批决定已提交", choice === "deny" ? "info" : "success");
+        } catch (error) {
+          status.textContent = `提交失败：${error.message}`;
+          for (const item of actions.querySelectorAll("button")) item.disabled = false;
+        }
+      });
+      actions.appendChild(button);
+    }
+    form.appendChild(actions);
+    dialog.appendChild(form);
+    dialog.addEventListener("cancel", (event) => event.preventDefault());
+    document.body.appendChild(dialog);
+    state.approvalDialog = dialog;
+    dialog.showModal();
+  }
+
+  function finishActiveRun(name, data) {
+    if (data.run_id && state.activeRunId && data.run_id !== state.activeRunId) return;
+    if (name === "run.cancelled") emitCompatibility("stream_end", { mode: "text", interrupted: true });
+    if (name === "run.failed") {
+      emitCompatibility("stream_end", { mode: "text", interrupted: true });
+      emitCompatibility("error", { error: data.error?.message || data.message || "Hermes 运行失败" });
+    }
+    closeApprovalDialog();
+    state.activeRunId = null;
+    state.stopRequested = false;
+    setStreaming(false);
+  }
+
   function mapHermesEvent(name, data) {
-    if (name === "run.started") emitCompatibility("message_received", { input: contentText(data.user_message?.content) });
+    if (name === "run.started") {
+      state.activeRunId = data.run_id || state.activeRunId;
+      emitCompatibility("message_received", { input: contentText(data.user_message?.content) });
+      if (state.stopRequested) void stopActiveStream().catch((error) => cardNotice(`停止失败：${error.message}`, "error"));
+    }
     else if (name === "message.started") emitCompatibility("stream_start", { mode: "text", plainReply: true });
     else if (name === "assistant.delta") emitCompatibility("stream_chunk", { mode: "text", text: data.delta || "" });
     else if (name === "tool.progress") emitCompatibility("stream_chunk", { mode: "reasoning", text: data.delta || "" });
     else if (name === "tool.started") emitCompatibility("tool_executing", { name: data.tool_name, args: data.args });
     else if (name === "tool.completed" || name === "tool.failed") emitCompatibility("tool_call", { name: data.tool_name, args: data.args, result: data.preview, ok: name === "tool.completed" });
+    else if (name === "approval.request") showApprovalRequest(data);
     else if (name === "assistant.completed") {
       emitCompatibility("stream_end", { mode: "text" });
       emitCompatibility("message", { from: "consciousness", content: data.content || "", conversation_id: data.message_id, speak: false });
-    } else if (name === "run.completed") emitCompatibility("response", { runId: data.run_id, usage: data.usage });
+    } else if (name === "run.completed") {
+      emitCompatibility("response", { runId: data.run_id, usage: data.usage });
+      finishActiveRun(name, data);
+    } else if (name === "run.failed" || name === "run.cancelled") finishActiveRun(name, data);
     else if (name === "error") emitCompatibility("error", { error: data.message || "Hermes Runtime 请求失败" });
   }
 
@@ -343,12 +446,34 @@
   }
 
   async function stopActiveStream() {
-    if (!state.activeAbortController) return false;
-    state.activeAbortController.abort();
-    state.activeAbortController = null;
-    emitCompatibility("stream_end", { mode: "text", interrupted: true });
-    setStreaming(false);
-    return true;
+    if (!state.activeAbortController && !state.activeRunId) return false;
+    state.stopRequested = true;
+    setStreaming(true);
+    if (!state.activeRunId) return true;
+    if (state.stopPromise) return state.stopPromise;
+    const runId = state.activeRunId;
+    const controller = state.activeAbortController;
+    state.stopPromise = (async () => {
+      const agent = await loadActiveAgent();
+      await requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+      controller?.abort();
+      if (state.activeAbortController === controller) state.activeAbortController = null;
+      closeApprovalDialog();
+      state.activeRunId = null;
+      state.stopRequested = false;
+      emitCompatibility("stream_end", { mode: "text", interrupted: true });
+      setStreaming(false);
+      return true;
+    })();
+    try {
+      return await state.stopPromise;
+    } catch (error) {
+      state.stopRequested = false;
+      setStreaming(Boolean(state.activeAbortController || state.activeRunId));
+      throw error;
+    } finally {
+      state.stopPromise = null;
+    }
   }
 
   async function sendMessage(options) {
@@ -356,7 +481,7 @@
     const content = typeof body.content === "string" ? body.content.trim() : "";
     const attachments = Array.isArray(body.attachments) ? body.attachments : [];
     if (!content && !attachments.length) return jsonResponse({ error: "invalid_message" }, 400);
-    if (state.activeAbortController) return jsonResponse({ error: "run_in_progress" }, 409);
+    if (state.activeAbortController || state.activeRunId) return jsonResponse({ error: "run_in_progress" }, 409);
     const agent = await loadActiveAgent();
     const failure = operationalFailure(agent);
     if (failure) return jsonResponse({ error: failure.error, operational: failure.code }, failure.status);
@@ -364,6 +489,8 @@
     state.lastMessage = { content, attachments };
     const controller = new AbortController();
     state.activeAbortController = controller;
+    state.activeRunId = null;
+    state.stopRequested = false;
     setStreaming(true);
     void (async () => {
       try {
@@ -378,18 +505,18 @@
         if (error.name !== "AbortError") emitCompatibility("error", { error: error.message || "Hermes Runtime 请求失败" });
       } finally {
         if (state.activeAbortController === controller) state.activeAbortController = null;
-        setStreaming(false);
+        setStreaming(Boolean(state.activeRunId));
       }
     })();
     return jsonResponse({ accepted: true, sessionId: session.id }, 202);
   }
 
-  async function conversationHistory() {
+  async function conversationHistory(limit = 60) {
     try {
       const agent = await loadActiveAgent();
       const session = await ensureSession(agent);
       const result = await requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/sessions/${encodeURIComponent(session.id)}/messages`);
-      return (result.data || []).filter((message) => ["user", "assistant"].includes(message.role)).map((message) => ({
+      return (result.data || []).filter((message) => ["user", "assistant"].includes(message.role)).slice(-Math.max(1, Math.min(Number(limit) || 60, 200))).map((message) => ({
         id: message.id,
         role: message.role === "assistant" ? "jarvis" : "user",
         content: contentText(message.content),
@@ -400,13 +527,11 @@
     } catch { return []; }
   }
 
-  class BairuiEventSource extends EventTarget {
-    constructor(url, options) {
+  class BairuiCompatibilityStream extends EventTarget {
+    constructor() {
       super();
-      const parsed = new URL(url, location.href);
-      if (parsed.origin !== location.origin || parsed.pathname !== "/events") return new NativeEventSource(url, options);
-      this.url = parsed.href;
-      this.readyState = BairuiEventSource.CONNECTING;
+      this.url = "bairui://compatibility-events";
+      this.readyState = BairuiCompatibilityStream.CONNECTING;
       this.withCredentials = true;
       this.onopen = null;
       this.onmessage = null;
@@ -415,8 +540,8 @@
       queueMicrotask(async () => {
         try {
           await loadActiveAgent();
-          if (this.readyState === BairuiEventSource.CLOSED) return;
-          this.readyState = BairuiEventSource.OPEN;
+          if (this.readyState === BairuiCompatibilityStream.CLOSED) return;
+          this.readyState = BairuiCompatibilityStream.OPEN;
           const event = new Event("open");
           this.dispatchEvent(event);
           this.onopen?.(event);
@@ -428,37 +553,41 @@
       });
     }
     emit(data) {
-      if (this.readyState !== BairuiEventSource.OPEN) return;
+      if (this.readyState !== BairuiCompatibilityStream.OPEN) return;
       const event = new MessageEvent("message", { data });
       this.dispatchEvent(event);
       this.onmessage?.(event);
     }
     close() {
-      this.readyState = BairuiEventSource.CLOSED;
+      this.readyState = BairuiCompatibilityStream.CLOSED;
       compatibilityStreams.delete(this);
     }
   }
-  BairuiEventSource.CONNECTING = 0;
-  BairuiEventSource.OPEN = 1;
-  BairuiEventSource.CLOSED = 2;
-  window.EventSource = BairuiEventSource;
+  BairuiCompatibilityStream.CONNECTING = 0;
+  BairuiCompatibilityStream.OPEN = 1;
+  BairuiCompatibilityStream.CLOSED = 2;
 
-  window.fetch = async function bairuiFetch(input, options) {
-    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
-    if (url.origin !== location.origin) return nativeFetch(input, options);
-    if (url.pathname === "/message" && (options?.method || "GET").toUpperCase() === "POST") return sendMessage(options);
-    if (url.pathname === "/conversations") return jsonResponse(await conversationHistory());
-    if (url.pathname === "/agent-profile") {
+  const hostAdapter = Object.freeze({
+    sendMessage,
+    async conversations(options = {}) {
+      return jsonResponse(await conversationHistory(options.limit));
+    },
+    async agentProfile() {
       const agent = await loadActiveAgent();
       return jsonResponse({ name: agent.name, agentId: agent.id, runtime: "Hermes", runtimeStatus: agent.runtime?.status || "uninitialized", ui: "BaiLongma Brain UI" });
-    }
-    if (url.pathname === "/memories") {
+    },
+    async memories(options = {}) {
       const agent = await loadActiveAgent();
+      const url = new URL("/memories", location.origin);
       url.searchParams.set("agent_id", agent.id);
-      return nativeFetch(url, options);
+      url.searchParams.set("limit", String(Math.max(1, Math.min(Number(options.limit) || 120, 200))));
+      return platformRequest(`${url.pathname}${url.search}`);
+    },
+    openEvents() {
+      return new BairuiCompatibilityStream();
     }
-    return nativeFetch(input, options);
-  };
+  });
+  Object.defineProperty(window, "BairuiHostAdapter", { value: hostAdapter, writable: false, configurable: false, enumerable: false });
 
   function iconButton(label, text) {
     const button = document.createElement("button");
