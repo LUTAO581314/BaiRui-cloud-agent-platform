@@ -36,8 +36,8 @@ function formatMoney(value) {
 
 function statusNode(value) {
   const text = String(value ?? "unknown");
-  const healthy = ["healthy", "ready", "active", "applied", "completed", "passed", "succeeded", "resolved"];
-  const warning = ["degraded", "pending", "queued", "provisioning", "acknowledged", "staged", "draft"];
+  const healthy = ["healthy", "ready", "running", "active", "applied", "completed", "passed", "succeeded", "resolved"];
+  const warning = ["degraded", "paused", "restarting", "pending", "queued", "provisioning", "acknowledged", "staged", "draft"];
   const bad = ["unhealthy", "failed", "offline", "open", "critical", "deleted", "revoked"];
   const node = document.createElement("span");
   node.className = `status ${healthy.includes(text) ? "healthy" : warning.includes(text) ? "degraded" : bad.includes(text) ? "unhealthy" : "unknown"}`;
@@ -84,6 +84,37 @@ function rows(id, items, columns, emptyLabel = "暂无数据") {
 function publicMetadata(value) {
   const text = JSON.stringify(value ?? {});
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let amount = bytes;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
+  return `${amount >= 100 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
+}
+
+function formatPercent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? `${number.toFixed(1)}%` : "-";
+}
+
+function usagePercent(used, limit) {
+  const numerator = Number(used);
+  const denominator = Number(limit);
+  return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0 ? formatPercent(numerator / denominator * 100) : "-";
+}
+
+function memoryLabel(resource) {
+  if (!resource) return "-";
+  return `${formatBytes(resource.memoryUsedBytes)} / ${formatBytes(resource.memoryLimitBytes)}\n${usagePercent(resource.memoryUsedBytes, resource.memoryLimitBytes)}`;
+}
+
+function hostStorageLabel(resource) {
+  if (!resource) return "-";
+  return `${formatBytes(resource.hostStorageUsedBytes)} / ${formatBytes(resource.hostStorageLimitBytes)}\n${usagePercent(resource.hostStorageUsedBytes, resource.hostStorageLimitBytes)}`;
 }
 
 function showError(error) {
@@ -156,7 +187,36 @@ async function loadUsers() {
 
 async function loadAgents() {
   const agents = await fleetData();
-  rows("agent-rows", agents, [item => item.name, item => `${item.owner?.displayName ?? item.ownerUserId}\n${item.owner?.email ?? ""}`, item => item.desiredRuntimeState, item => statusNode(item.initializationStatus), item => statusNode(item.runtime?.status), item => item.runtime?.hermesVersion, item => item.components.length ? `${item.components.filter(component => component.status === "healthy").length}/${item.components.length}` : "-", item => formatTime(item.heartbeat?.receivedAt)]);
+  rows("agent-rows", agents, [
+    item => item.name,
+    item => `${item.owner?.displayName ?? item.ownerUserId}\n${item.owner?.email ?? ""}`,
+    item => statusNode(item.resource?.status ?? item.runtime?.status ?? item.initializationStatus),
+    item => formatPercent(item.resource?.cpuPercent),
+    item => memoryLabel(item.resource),
+    item => hostStorageLabel(item.resource),
+    item => `${item.runtime?.hermesVersion ?? "Hermes -"}\nBoundary ${item.runtime?.boundaryVersion ?? "-"}`,
+    item => item.resource ? `${item.resource.osType ?? "-"}/${item.resource.architecture ?? "-"}\n${item.resource.environment ?? "-"}` : "-",
+    item => formatTime(item.resource?.startedAt),
+    item => commandButton("详情", () => openAgentResources(item))
+  ]);
+}
+
+async function openAgentResources(agent) {
+  try {
+    const data = await request(scoped(`/api/admin/agents/${encodeURIComponent(agent.id)}/resources`));
+    const resource = data.latest;
+    document.querySelector("#agent-resource-title").textContent = `${agent.name} · 资源详情`;
+    document.querySelector("#agent-resource-subtitle").textContent = `${agent.owner?.displayName ?? agent.ownerUserId} · ${resource?.serverId ?? "尚未上报服务器"}`;
+    document.querySelector("#resource-detail-status").replaceChildren(statusNode(resource?.status ?? "unknown"));
+    document.querySelector("#resource-detail-cpu").textContent = formatPercent(resource?.cpuPercent);
+    document.querySelector("#resource-detail-memory").textContent = memoryLabel(resource).replace("\n", " · ");
+    document.querySelector("#resource-detail-agent-storage").textContent = formatBytes(resource?.agentStorageUsedBytes);
+    document.querySelector("#resource-detail-host-storage").textContent = hostStorageLabel(resource).replace("\n", " · ");
+    document.querySelector("#resource-detail-environment").textContent = resource ? `${resource.operatingSystem ?? resource.osType ?? "-"} / ${resource.architecture ?? "-"}` : "-";
+    rows("resource-container-rows", resource?.containers ?? [], [item => item.role, item => statusNode(item.status), item => `${item.containerName ?? "-"}\n${item.containerId?.slice(0, 12) ?? ""}`, item => formatPercent(item.cpuPercent), item => `${formatBytes(item.memoryUsedBytes)} / ${formatBytes(item.memoryLimitBytes)}`, item => formatBytes(item.writableBytes), item => `${item.version ?? "-"}\n${item.imageRef ?? "-"}`, item => formatTime(item.startedAt)]);
+    rows("resource-history-rows", data.samples, [item => formatTime(item.observedAt), item => statusNode(item.status), item => formatPercent(item.cpuPercent), item => memoryLabel(item), item => formatBytes(item.agentStorageUsedBytes), item => hostStorageLabel(item)]);
+    document.querySelector("#agent-resource-dialog").showModal();
+  } catch (error) { showError(error); }
 }
 
 async function loadOperations() {

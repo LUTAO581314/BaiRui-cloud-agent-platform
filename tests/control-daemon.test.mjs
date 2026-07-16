@@ -9,3 +9,25 @@ test("control daemon runs one signed lease cycle through the injected Supervisor
   await runControlDaemon({ once: true, env: { BAIRUI_PLATFORM_URL: "https://platform.example.test", BAIRUI_SERVER_ID: "server_a", BAIRUI_SERVER_AGENT_TOKEN: "server-token-that-is-longer-than-thirty-two-characters" }, fetch, executor: { execute: async () => { executed += 1; return { summary: { containers: 2 } }; } }, logger: { error() {} } });
   assert.equal(executed, 1);
 });
+
+test("control daemon reports fixed resource samples with the server identity", async () => {
+  const requests = [];
+  const fetch = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body), headers: options.headers });
+    if (url.endsWith("/lease")) return Response.json({ commands: [] });
+    if (url.endsWith("/resources")) return Response.json({ accepted: 1 }, { status: 202 });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const sample = { agentId: "agent_a", runtimeId: "runtime_a", deploymentId: "deployment_a", sequence: 1, status: "running", observedAt: "2026-07-16T07:00:00.000Z", containers: [] };
+  await runControlDaemon({
+    once: true,
+    env: { BAIRUI_PLATFORM_URL: "https://platform.example.test", BAIRUI_SERVER_ID: "server_a", BAIRUI_SERVER_AGENT_TOKEN: "server-token-that-is-longer-than-thirty-two-characters" },
+    fetch,
+    executor: { execute: async () => ({}), collectResourceSamples: async () => [sample] },
+    logger: { error() {} }
+  });
+  const upload = requests.find((request) => request.url.endsWith("/resources"));
+  assert.equal(upload.body.serverId, "server_a");
+  assert.equal(upload.body.samples[0].agentId, "agent_a");
+  assert.equal(upload.headers["x-bairui-machine-id"], "server_a");
+});

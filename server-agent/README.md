@@ -84,8 +84,21 @@ only to the fixed action map in `server-agent/supervisor.mjs`. The Supervisor
 uses Docker argument arrays without a shell. The one-shot observation command
 remains available for diagnostics.
 
+The same daemon collects infrastructure telemetry every
+`BAIRUI_RESOURCE_INTERVAL_MS` (default `30000`). The collector enumerates only
+containers named in verified `instance.json` files, then calls fixed `docker
+info`, `docker container ls`, `docker container inspect --size`, and `docker
+stats --no-stream` argument arrays. It reports CPU, memory, fixed Agent
+workspace size, host filesystem utilization, OS/architecture, container role,
+image/version metadata, and start time through the signed server identity.
+It never accepts a path or Docker argument from the platform.
+
 When `BAIRUI_USER_ID`, `BAIRUI_AGENT_ID`, and `BAIRUI_RUNTIME_ID` are set, the
 observation cycle also submits Agent-scoped five-layer telemetry. This payload
 contains health, versions, numeric metrics, and usage aggregates only. It does
 not contain conversation or memory content.
+
+Resource telemetry also excludes prompts, conversation content, Obsidian note
+bodies, environment values, API keys, connector tokens, browser fingerprints,
+and end-user device contents.
 

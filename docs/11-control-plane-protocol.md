@@ -41,6 +41,7 @@ sequence. A command that expired before execution is never started.
 | Protocol | Data | Credential |
 | --- | --- | --- |
 | Control | deployment state, references, observations, evidence | deployment identity |
+| Resource telemetry | CPU, memory, storage, OS/architecture, container lifecycle | server identity |
 | Runtime | `RuntimeRequest`, result, runtime event | Runtime shared secret |
 | Channel | inbound/outbound message, delivery receipt | connector identity |
 

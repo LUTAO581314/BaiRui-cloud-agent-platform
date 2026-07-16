@@ -15,6 +15,9 @@ const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_
 const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, endpointRef: row.endpoint_ref, routeUpdatedAt: row.route_updated_at?.toISOString?.() ?? row.route_updated_at, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapHeartbeat = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, sequence: Number(row.sequence), status: row.status, runtimeVersion: row.runtime_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, queueDepth: row.queue_depth, activeRuns: row.active_runs, failedRuns: row.failed_runs, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at }) : null;
 const mapAgentComponent = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, moduleId: row.module_id, status: row.status, version: row.version, upstreamRef: row.upstream_ref, capabilities: row.capabilities, metrics: row.metrics, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
+const nullableNumber = (value) => value === null || value === undefined ? null : Number(value);
+const mapContainerResource = (row) => ({ role: row.role, containerId: row.container_id, containerName: row.container_name, status: row.status, imageRef: row.image_ref, version: row.version, cpuPercent: nullableNumber(row.cpu_percent), memoryUsedBytes: nullableNumber(row.memory_used_bytes), memoryLimitBytes: nullableNumber(row.memory_limit_bytes), writableBytes: nullableNumber(row.writable_bytes), startedAt: row.started_at?.toISOString?.() ?? row.started_at });
+const mapResourceSample = (row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, deploymentId: row.deployment_id, serverId: row.server_id, environment: row.environment, sequence: Number(row.sequence), status: row.status, cpuPercent: nullableNumber(row.cpu_percent), memoryUsedBytes: nullableNumber(row.memory_used_bytes), memoryLimitBytes: nullableNumber(row.memory_limit_bytes), agentStorageUsedBytes: nullableNumber(row.agent_storage_used_bytes), hostStorageUsedBytes: nullableNumber(row.host_storage_used_bytes), hostStorageLimitBytes: nullableNumber(row.host_storage_limit_bytes), osType: row.os_type, architecture: row.architecture, operatingSystem: row.operating_system, dockerVersion: row.docker_version, cpuCount: nullableNumber(row.cpu_count), startedAt: row.started_at?.toISOString?.() ?? row.started_at, uptimeSeconds: nullableNumber(row.uptime_seconds), observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at, containers: [] });
 const mapAlert = (row) => row ? ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, code: row.code, severity: row.severity, status: row.status, title: row.title, summary: row.summary, acknowledgedBy: row.acknowledged_by, firstSeenAt: row.first_seen_at?.toISOString?.() ?? row.first_seen_at, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, resolvedAt: row.resolved_at?.toISOString?.() ?? row.resolved_at }) : null;
 const mapConversation = (row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const mapMessage = (row) => ({ id: row.id, conversationId: row.conversation_id, organizationId: row.organization_id, userId: row.user_id, role: row.role, content: row.content, createdAt: row.created_at?.toISOString?.() ?? row.created_at });
@@ -247,6 +250,125 @@ export class PostgresPlatformRepository {
     if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
     const { rows } = await this.pool.query(`SELECT * FROM agent_components${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY agent_id, layer, module_id`, values);
     return rows.map(mapAgentComponent);
+  }
+
+  async saveAgentResourceSamples(input) {
+    const client = await this.pool.connect();
+    const saved = [];
+    try {
+      await client.query("BEGIN");
+      for (const sample of input.samples ?? []) {
+        const { rows: identityRows } = await client.query(
+          `SELECT deployment.environment, agent.organization_id, agent.owner_user_id
+           FROM control_deployments deployment
+           JOIN servers server ON server.id=deployment.server_id
+           JOIN agents agent ON agent.id=deployment.agent_id
+           JOIN agent_runtimes runtime ON runtime.agent_id=agent.id
+           WHERE deployment.id=$1 AND deployment.server_id=$2 AND deployment.agent_id=$3
+             AND runtime.id=$4 AND runtime.deployment_id=deployment.id AND server.organization_id=agent.organization_id
+           FOR UPDATE OF deployment`,
+          [sample.deploymentId, input.serverId, sample.agentId, sample.runtimeId]
+        );
+        const identity = identityRows[0];
+        if (!identity) throw Object.assign(new Error("Resource sample does not belong to this server deployment"), { code: "resource_identity_mismatch", statusCode: 404 });
+        const { rows } = await client.query(
+          `INSERT INTO agent_resource_samples (
+             id, organization_id, user_id, agent_id, runtime_id, deployment_id, server_id, sequence, status,
+             cpu_percent, memory_used_bytes, memory_limit_bytes, agent_storage_used_bytes,
+             host_storage_used_bytes, host_storage_limit_bytes, os_type, architecture, operating_system,
+             docker_version, cpu_count, started_at, uptime_seconds, observed_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+           ON CONFLICT (runtime_id, sequence) DO UPDATE SET
+             status=EXCLUDED.status, cpu_percent=EXCLUDED.cpu_percent, memory_used_bytes=EXCLUDED.memory_used_bytes,
+             memory_limit_bytes=EXCLUDED.memory_limit_bytes, agent_storage_used_bytes=EXCLUDED.agent_storage_used_bytes,
+             host_storage_used_bytes=EXCLUDED.host_storage_used_bytes, host_storage_limit_bytes=EXCLUDED.host_storage_limit_bytes,
+             os_type=EXCLUDED.os_type, architecture=EXCLUDED.architecture, operating_system=EXCLUDED.operating_system,
+             docker_version=EXCLUDED.docker_version, cpu_count=EXCLUDED.cpu_count, started_at=EXCLUDED.started_at,
+             uptime_seconds=EXCLUDED.uptime_seconds, observed_at=EXCLUDED.observed_at, received_at=now()
+           RETURNING *`,
+          [randomUUID(), identity.organization_id, identity.owner_user_id, sample.agentId, sample.runtimeId, sample.deploymentId, input.serverId, sample.sequence, sample.status, sample.cpuPercent, sample.memoryUsedBytes, sample.memoryLimitBytes, sample.agentStorageUsedBytes, sample.hostStorageUsedBytes, sample.hostStorageLimitBytes, sample.osType, sample.architecture, sample.operatingSystem, sample.dockerVersion, sample.cpuCount, sample.startedAt, sample.uptimeSeconds, sample.observedAt]
+        );
+        const row = rows[0];
+        await client.query("DELETE FROM agent_container_resource_samples WHERE sample_id=$1", [row.id]);
+        for (const container of sample.containers ?? []) {
+          await client.query(
+            `INSERT INTO agent_container_resource_samples (sample_id, role, container_id, container_name, status, image_ref, version, cpu_percent, memory_used_bytes, memory_limit_bytes, writable_bytes, started_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [row.id, container.role, container.containerId, container.containerName, container.status, container.imageRef, container.version, container.cpuPercent, container.memoryUsedBytes, container.memoryLimitBytes, container.writableBytes, container.startedAt]
+          );
+        }
+        const resource = mapResourceSample({ ...row, environment: identity.environment });
+        resource.containers = sample.containers ?? [];
+        await this.evaluateResourceAlerts(client, resource);
+        saved.push(resource);
+      }
+      await client.query("COMMIT");
+      return saved;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async evaluateResourceAlerts(client, resource) {
+    const checks = [
+      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU 使用率过高"],
+      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent 内存使用率过高"],
+      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent 主机存储使用率过高"]
+    ];
+    for (const [code, value, threshold, severity, title] of checks) {
+      if (Number.isFinite(value) && value >= threshold) {
+        await client.query(
+          `INSERT INTO alerts (id, organization_id, agent_id, runtime_id, code, severity, status, title, summary, first_seen_at, last_seen_at)
+           VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$9)
+           ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged')
+           DO UPDATE SET severity=EXCLUDED.severity, title=EXCLUDED.title, summary=EXCLUDED.summary, last_seen_at=EXCLUDED.last_seen_at`,
+          [randomUUID(), resource.organizationId, resource.agentId, resource.runtimeId, code, severity, title, `当前使用率 ${value.toFixed(1)}%，阈值 ${threshold}%`, resource.observedAt]
+        );
+      } else {
+        await client.query("UPDATE alerts SET status='resolved', resolved_at=COALESCE(resolved_at,now()) WHERE agent_id=$1 AND runtime_id=$2 AND code=$3 AND status IN ('open','acknowledged')", [resource.agentId, resource.runtimeId, code]);
+      }
+    }
+  }
+
+  async attachContainerResources(rows) {
+    if (!rows.length) return [];
+    const resources = rows.map(mapResourceSample);
+    const byId = new Map(resources.map((item) => [item.id, item]));
+    const { rows: containers } = await this.pool.query("SELECT * FROM agent_container_resource_samples WHERE sample_id=ANY($1::text[]) ORDER BY sample_id, role", [resources.map((item) => item.id)]);
+    for (const row of containers) byId.get(row.sample_id)?.containers.push(mapContainerResource(row));
+    return resources;
+  }
+
+  async latestAgentResourceSamples(organizationId, agentId) {
+    const conditions = [];
+    const values = [];
+    if (organizationId) { values.push(organizationId); conditions.push(`organization_id=$${values.length}`); }
+    if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
+    const { rows } = await this.pool.query(
+      `SELECT latest.*, deployment.environment
+       FROM (SELECT DISTINCT ON (runtime_id) * FROM agent_resource_samples${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY runtime_id, observed_at DESC, received_at DESC) latest
+       JOIN control_deployments deployment ON deployment.id=latest.deployment_id
+       ORDER BY latest.observed_at DESC`,
+      values
+    );
+    return this.attachContainerResources(rows);
+  }
+
+  async listAgentResourceSamples(organizationId, agentId, limit = 288) {
+    const conditions = [];
+    const values = [];
+    if (organizationId) { values.push(organizationId); conditions.push(`sample.organization_id=$${values.length}`); }
+    if (agentId) { values.push(agentId); conditions.push(`sample.agent_id=$${values.length}`); }
+    values.push(Math.max(1, Math.min(Number(limit) || 288, 2000)));
+    const { rows } = await this.pool.query(
+      `SELECT sample.*, deployment.environment FROM agent_resource_samples sample
+       JOIN control_deployments deployment ON deployment.id=sample.deployment_id
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY sample.observed_at DESC LIMIT $${values.length}`,
+      values
+    );
+    return this.attachContainerResources(rows);
   }
 
   async listAlerts(organizationId) {
@@ -1125,6 +1247,7 @@ export class PostgresPlatformRepository {
           await client.query("INSERT INTO retention_runs (id, organization_id, status, cutoffs) VALUES ($1,$2,'running',$3)", [runId, policy.organization_id, cutoffs]);
           const deletedCounts = {};
           deletedCounts.heartbeats = (await client.query("DELETE FROM heartbeats WHERE organization_id=$1 AND received_at<$2", [policy.organization_id, cutoffs.telemetry])).rowCount;
+          deletedCounts.resourceSamples = (await client.query("DELETE FROM agent_resource_samples WHERE organization_id=$1 AND received_at<$2", [policy.organization_id, cutoffs.telemetry])).rowCount;
           deletedCounts.telemetryEvents = (await client.query("DELETE FROM telemetry_events WHERE organization_id=$1 AND occurred_at<$2", [policy.organization_id, cutoffs.telemetry])).rowCount;
           deletedCounts.usageRollups = (await client.query("DELETE FROM usage_rollups WHERE organization_id=$1 AND bucket_start<$2", [policy.organization_id, cutoffs.usage])).rowCount;
           deletedCounts.sensitiveAccessEvents = (await client.query("DELETE FROM sensitive_access_events WHERE organization_id=$1 AND created_at<$2", [policy.organization_id, cutoffs.sensitiveAccess])).rowCount;

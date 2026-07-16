@@ -12,7 +12,8 @@ const requiredTables = [
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
   "provider_channels", "model_policies", "data_retention_policies",
-  "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs"
+  "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs",
+  "agent_resource_samples", "agent_container_resource_samples"
 ];
 const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired_runtime_state"];
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];

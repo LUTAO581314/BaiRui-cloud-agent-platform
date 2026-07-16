@@ -56,6 +56,18 @@ export async function sendCommandReceipt(options) {
   return body.receipt;
 }
 
+export async function sendResourceSamples(options) {
+  const response = await signedMachinePost({
+    ...options,
+    machineId: options.serverId,
+    path: "/api/internal/control-plane/resources",
+    payload: { serverId: options.serverId, samples: options.samples ?? [] }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error("Resource telemetry upload failed"), { code: body.error ?? "resource_upload_failed", statusCode: response.status });
+  return body;
+}
+
 export async function executeControlCycle(options) {
   if (!options.executor?.execute) throw new TypeError("A white-listed control executor is required");
   const commands = await leaseControlCommands(options);

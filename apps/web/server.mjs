@@ -46,6 +46,7 @@ const server = createPlatformServer({
   configuredOrigin: process.env.BAIRUI_PLATFORM_ORIGIN,
   runtimeRouteHosts: (process.env.BAIRUI_RUNTIME_ROUTE_HOSTS ?? "").split(",").map((item) => item.trim()).filter(Boolean),
   runtimeStaleAfterMs: Math.max(30_000, Number(process.env.BAIRUI_RUNTIME_STALE_AFTER_MS) || 120_000),
+  resourceStaleAfterMs: Math.max(30_000, Number(process.env.BAIRUI_RESOURCE_STALE_AFTER_MS) || 120_000),
   allowRegistration: process.env.BAIRUI_ALLOW_REGISTRATION === "1",
   agentIngestToken: process.env.BAIRUI_AGENT_INGEST_TOKEN,
   runtimeClient: process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({

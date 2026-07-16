@@ -66,6 +66,15 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     await repository.saveAgentHeartbeat({ organizationId, userId, agentId, runtimeId, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [], usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "example/model", inputTokens: 3, outputTokens: 4, runCount: 1 } });
     const usage = await repository.listUsageRollups(organizationId, userId, agentId);
     assert.equal(usage[0].inputTokens, 3);
+    await repository.saveAgentResourceSamples({ serverId, samples: [{ agentId, runtimeId, deploymentId: provision.deployment.id, sequence: 1, status: "running", cpuPercent: 4.2, memoryUsedBytes: 1024, memoryLimitBytes: 4096, agentStorageUsedBytes: 2048, hostStorageUsedBytes: 8192, hostStorageLimitBytes: 16384, osType: "linux", architecture: "amd64", operatingSystem: "PostgreSQL Test Linux", dockerVersion: "27.1.0", cpuCount: 4, startedAt: "2026-07-16T00:00:00.000Z", uptimeSeconds: 3600, observedAt: new Date().toISOString(), containers: [{ role: "hermes", status: "running", containerId: "container_pg", containerName: "bairui-hermes-pg", imageRef: "hermes:test", version: "1.0.0", cpuPercent: 4.2, memoryUsedBytes: 1024, memoryLimitBytes: 4096, writableBytes: 512, startedAt: "2026-07-16T00:00:00.000Z" }] }] });
+    const latestResource = (await repository.latestAgentResourceSamples(organizationId, agentId))[0];
+    assert.equal(latestResource.cpuPercent, 4.2);
+    assert.equal(latestResource.containers[0].role, "hermes");
+    const highResource = { ...latestResource, sequence: 2, cpuPercent: 390, memoryUsedBytes: 3900, hostStorageUsedBytes: 16000, observedAt: new Date().toISOString(), containers: [] };
+    await repository.saveAgentResourceSamples({ serverId, samples: [highResource] });
+    assert.equal((await repository.listAlerts(organizationId)).filter((item) => item.code.startsWith("resource.") && item.status === "open").length, 3);
+    await repository.saveAgentResourceSamples({ serverId, samples: [{ ...highResource, sequence: 3, cpuPercent: 4.2, memoryUsedBytes: 1024, hostStorageUsedBytes: 8192, observedAt: new Date().toISOString() }] });
+    assert.ok((await repository.listAlerts(organizationId)).filter((item) => item.code.startsWith("resource.")).every((item) => item.status === "resolved"));
 
     const providerChannel = await repository.upsertProviderChannel({ organizationId, name: "primary", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { encrypted: true }, keyHint: "test", priority: 10, weight: 2, maxConcurrency: 20, monthlyBudgetUsd: 100, enabled: true, updatedBy: userId });
     assert.equal((await repository.listProviderChannels(organizationId))[0].id, providerChannel.id);
@@ -119,6 +128,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     const retentionRuns = await repository.enforceRetentionPolicies({ organizationId, now: Date.now() + 500 * 24 * 60 * 60_000 });
     assert.equal(retentionRuns[0].status, "succeeded");
     assert.ok(retentionRuns[0].deletedCounts.heartbeats > 0);
+    assert.ok(retentionRuns[0].deletedCounts.resourceSamples > 0);
     assert.ok(retentionRuns[0].deletedCounts.usageRollups > 0);
     assert.ok(retentionRuns[0].deletedCounts.sensitiveAccessEvents > 0);
     assert.ok(retentionRuns[0].deletedCounts.auditEvents > 0);

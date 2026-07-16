@@ -23,6 +23,9 @@ Control storage and telemetry exclude prompts, replies, conversations, files,
 Obsidian note bodies, Hermes memory, model keys, connector tokens, database
 passwords, private keys, and unrestricted logs. Operational records contain
 identifiers, versions, hashes, redacted errors, and artifact references.
+Resource telemetry is limited to registered Agent containers and fixed
+workspace/host filesystem metadata. It excludes environment values, end-user
+device fingerprints, user files, and business content.
 
 Secrets use envelope encryption for the intended server identity. Plaintext is
 unwrapped only in target memory, never returned by an API, snapshot, command
