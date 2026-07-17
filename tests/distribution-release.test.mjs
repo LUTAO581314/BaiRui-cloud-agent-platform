@@ -27,8 +27,10 @@ const input = {
 test("distribution version is a single explicit prerelease", () => {
   const version = currentVersion(root);
   const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
   assert.equal(version, "0.1.0-rc.3");
   assert.equal(packageDocument.version, version);
+  assert.match(installer, new RegExp(`^readonly INSTALLER_VERSION="${version.replaceAll(".", "\\.")}"$`, "m"));
 });
 
 test("release manifest binds all deployable images by digest", () => {

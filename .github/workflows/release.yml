@@ -37,6 +37,7 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
       commit: ${{ steps.metadata.outputs.commit }}
       bailongma_commit: ${{ steps.metadata.outputs.bailongma_commit }}
+      contracts_version: ${{ steps.metadata.outputs.contracts_version }}
       migration: ${{ steps.metadata.outputs.migration }}
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +52,8 @@ jobs:
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "image=$PLATFORM_IMAGE" >> "$GITHUB_OUTPUT"
           echo "bailongma_commit=$(git -C upstreams/bailongma rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          contracts_version="$(node -p 'new URL(require("./package.json").dependencies["@bairui/contracts"]).pathname.split("/").at(-1).replace(/^v/, "")')"
+          echo "contracts_version=$contracts_version" >> "$GITHUB_OUTPUT"
           echo "migration=$(find packages/db/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4.2.0
       - uses: docker/login-action@v4.4.0
@@ -69,7 +72,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.metadata.outputs.commit }}
             org.opencontainers.image.title=bairui-agent Platform
-            io.bairui.contracts.version=1.2.0
+            io.bairui.contracts.version=${{ steps.metadata.outputs.contracts_version }}
             io.bairui.migration=${{ steps.metadata.outputs.migration }}
             io.bairui.bailongma.revision=${{ steps.metadata.outputs.bailongma_commit }}
           cache-from: type=gha,scope=bairui-platform
@@ -171,7 +174,7 @@ jobs:
             --arg platform_commit "${{ needs.platform-image.outputs.commit }}" \
             --arg platform_image "${{ needs.platform-image.outputs.image }}@${{ needs.platform-image.outputs.digest }}" \
             --arg bailongma_commit "${{ needs.platform-image.outputs.bailongma_commit }}" \
-            --arg contracts_version "1.2.0" \
+            --arg contracts_version "${{ needs.platform-image.outputs.contracts_version }}" \
             --arg migration "$migration" \
             --argjson platform_ready "$platform_ready" \
             --argjson worker_ready "$worker_ready" \

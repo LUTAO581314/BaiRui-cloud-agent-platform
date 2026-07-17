@@ -6,7 +6,7 @@ on:
       version:
         description: Product version without the leading v
         required: true
-        default: 0.1.0-rc.2
+        default: 0.1.0-rc.3
       platform_image:
         description: Exact verified Platform image@sha256 digest
         required: true
@@ -128,7 +128,6 @@ jobs:
       - name: Build and verify distribution bundle
         env:
           BAIRUI_RELEASE_VERSION: ${{ inputs.version }}
-          BAIRUI_CONTRACTS_VERSION: 1.2.0
           BAIRUI_PLATFORM_COMMIT: ${{ github.sha }}
           BAIRUI_PLATFORM_IMAGE: ${{ inputs.platform_image }}
           BAIRUI_AGENT_COMMIT: ${{ inputs.agent_commit }}
@@ -140,6 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export BAIRUI_CONTRACTS_VERSION="$(node -p 'new URL(require("./package.json").dependencies["@bairui/contracts"]).pathname.split("/").at(-1).replace(/^v/, "")')"
           export BAIRUI_BAILONGMA_COMMIT="$(git -C upstreams/bailongma rev-parse HEAD)"
           export BAIRUI_DATABASE_MIGRATION="$(find packages/db/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)"
           mkdir -p dist/bundle
