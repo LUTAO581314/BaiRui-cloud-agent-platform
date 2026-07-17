@@ -81,7 +81,7 @@ jobs:
           shellcheck distribution/install.sh
       - name: Build and verify a digest-pinned distribution fixture
         env:
-          BAIRUI_RELEASE_VERSION: 0.1.0-rc.1
+          BAIRUI_RELEASE_VERSION: 0.1.0-rc.2
           BAIRUI_RELEASE_GENERATED_AT: 2026-07-17T00:00:00.000Z
           BAIRUI_CONTRACTS_VERSION: 1.2.0
           BAIRUI_PLATFORM_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -99,7 +99,7 @@ jobs:
           node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
           node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
           cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
-          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version 0.1.0-rc.1
+          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version 0.1.0-rc.2
 
   postgres-migrations:
     runs-on: ubuntu-latest

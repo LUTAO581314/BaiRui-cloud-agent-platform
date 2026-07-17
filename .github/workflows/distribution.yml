@@ -6,7 +6,7 @@ on:
       version:
         description: Product version without the leading v
         required: true
-        default: 0.1.0-rc.1
+        default: 0.1.0-rc.2
       platform_image:
         description: Exact verified Platform image@sha256 digest
         required: true
