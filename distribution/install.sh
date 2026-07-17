@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 readonly REPOSITORY="LUTAO581314/BaiRui-cloud-agent-platform"
-readonly INSTALLER_VERSION="0.1.0-rc.1"
+readonly INSTALLER_VERSION="0.1.0-rc.2"
 
 RELEASE_VERSION="$INSTALLER_VERSION"
 DOMAIN=""
@@ -153,7 +153,7 @@ set_env_value() {
 write_initial_environment() {
   local manifest="$INSTALL_DIR/release-manifest.json"
   local license_key
-  license_key="$(openssl genpkey -algorithm ED25519 2>/dev/null | awk '{printf "%s\\\\n",$0}')"
+  license_key="$(openssl genpkey -algorithm ED25519 2>/dev/null | awk '{printf "%s\\n",$0}')"
   BAIRUI_BOOTSTRAP_ADMIN_PASSWORD="${BAIRUI_BOOTSTRAP_ADMIN_PASSWORD:-$(random_hex 18)}"
   ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$DOMAIN}"
   cat > "$CONFIG_DIR/bairui.env" <<EOF
@@ -174,7 +174,7 @@ BAIRUI_CHANNEL_WORKER_ID=channel-worker-primary
 BAIRUI_CHANNEL_WORKER_TOKEN=$(random_hex 32)
 BAIRUI_RUNTIME_SHARED_SECRET=$(random_hex 32)
 BAIRUI_PROVIDER_ENCRYPTION_KEY=$(random_hex 32)
-BAIRUI_LICENSE_PRIVATE_KEY=$license_key
+BAIRUI_LICENSE_PRIVATE_KEY='$license_key'
 BAIRUI_ALLOW_REGISTRATION=0
 BAIRUI_SERVER_ID=pending-registration
 BAIRUI_SERVER_AGENT_TOKEN=$(random_hex 32)

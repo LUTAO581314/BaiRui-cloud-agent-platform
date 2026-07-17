@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +9,7 @@ import { createReleaseManifest, currentVersion, validateReleaseManifest } from "
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const digest = (name) => `ghcr.io/lutao581314/${name}@sha256:${"a".repeat(64)}`;
 const input = {
-  version: "0.1.0-rc.1",
+  version: "0.1.0-rc.2",
   generatedAt: "2026-07-17T00:00:00.000Z",
   contractsVersion: "1.2.0",
   platformCommit: "1".repeat(40),
@@ -26,7 +27,7 @@ const input = {
 test("distribution version is a single explicit prerelease", () => {
   const version = currentVersion(root);
   const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(version, "0.1.0-rc.1");
+  assert.equal(version, "0.1.0-rc.2");
   assert.equal(packageDocument.version, version);
 });
 
@@ -49,4 +50,22 @@ test("installer and Compose prohibit latest tags and include the complete deploy
   assert.doesNotMatch(installer + compose, /:latest\b/);
   for (const service of ["postgres:", "platform:", "channel-worker:", "caddy:", "server-agent:"]) assert.match(compose, new RegExp(`^  ${service}`, "m"));
   for (const evidence of ["sha256sum --check --strict", "register_server_agent", "rollback_on_error", "docker pull", "wait_for_platform"]) assert.match(installer, new RegExp(evidence));
+});
+
+test("generated license PEM survives the sourceable Compose environment", { skip: process.platform === "win32" }, () => {
+  const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
+  const assignment = installer.match(/^BAIRUI_LICENSE_PRIVATE_KEY=.*$/gm)?.find((line) => line.includes("$license_key"));
+  assert.equal(assignment, "BAIRUI_LICENSE_PRIVATE_KEY='$license_key'");
+
+  const script = String.raw`set -euo pipefail
+env_file="$(mktemp)"
+trap 'rm -f "$env_file"' EXIT
+license_key="$(openssl genpkey -algorithm ED25519 2>/dev/null | awk '{printf "%s\\n",$0}')"
+cat > "$env_file" <<EOF
+${assignment}
+EOF
+source "$env_file"
+node -e 'require("node:crypto").createPrivateKey(process.argv[1].replaceAll("\\n", "\n"))' -- "$BAIRUI_LICENSE_PRIVATE_KEY"`;
+  const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
