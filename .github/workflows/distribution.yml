@@ -115,10 +115,16 @@ jobs:
             --certificate-identity "https://github.com/LUTAO581314/BaiRui-agent/.github/workflows/release.yml@refs/heads/main" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "$HERMES_IMAGE" > hermes-provenance-verification.json
-          gh attestation verify "oci://$PLATFORM_IMAGE" --repo LUTAO581314/BaiRui-cloud-agent-platform > platform-provenance-verification.json
+          gh attestation verify "oci://$PLATFORM_IMAGE" \
+            --repo LUTAO581314/BaiRui-cloud-agent-platform \
+            --bundle-from-oci \
+            --cert-identity "https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/.github/workflows/release.yml@refs/heads/main" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --source-digest "$GITHUB_SHA" \
+            --format json > platform-provenance-verification.json
           test -s runtime-provenance-verification.json
           test -s hermes-provenance-verification.json
-          test -s platform-provenance-verification.json
+          jq -e 'length > 0' platform-provenance-verification.json
       - name: Build and verify distribution bundle
         env:
           BAIRUI_RELEASE_VERSION: ${{ inputs.version }}
