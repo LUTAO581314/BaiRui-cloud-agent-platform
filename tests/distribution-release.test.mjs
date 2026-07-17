@@ -65,7 +65,7 @@ cat > "$env_file" <<EOF
 ${assignment}
 EOF
 source "$env_file"
-node -e 'require("node:crypto").createPrivateKey(process.argv[1].replaceAll("\\n", "\n"))' "$BAIRUI_LICENSE_PRIVATE_KEY"`;
+node -e 'require("node:crypto").createPrivateKey(process.argv[1].replaceAll("\\n", "\n"))' -- "$BAIRUI_LICENSE_PRIVATE_KEY"`;
   const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
