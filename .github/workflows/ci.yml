@@ -56,6 +56,7 @@ jobs:
           BAIRUI_BOOTSTRAP_ADMIN_EMAIL: admin@example.test
           BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password-at-least-12
           BAIRUI_AGENT_INGEST_TOKEN: ci-agent-ingest-token
+          BAIRUI_CHANNEL_WORKER_TOKEN: ci-channel-worker-token-at-least-32-characters
           BAIRUI_RUNTIME_SHARED_SECRET: ci-runtime-secret-at-least-32-characters
           BAIRUI_PROVIDER_ENCRYPTION_KEY: ci-provider-encryption-key-at-least-32-characters
           BAIRUI_LICENSE_PRIVATE_KEY: ci-placeholder-only-compose-validation

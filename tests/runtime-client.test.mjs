@@ -26,6 +26,23 @@ test("runtime client does not convert runtime failures into assistant text", asy
   await assert.rejects(() => client.invoke({ principal: { userId: "u", organizationId: "o", role: "user" }, agent: { id: "a", ownerUserId: "u", organizationId: "o" }, conversation: { id: "c" }, content: "x" }), { statusCode: 503 });
 });
 
+test("runtime client preserves normalized external channel context", async () => {
+  let payload;
+  const client = new BairuiRuntimeClient({ baseUrl: "http://runtime.test", sharedSecret: secret, fetch: async (_url, options) => {
+    payload = JSON.parse(options.body);
+    return Response.json({ result: { status: "completed", reply: { content: "reply" } } });
+  } });
+  await client.invoke({
+    principal: { userId: "user_a", organizationId: "org_a", role: "user" },
+    agent: { id: "agent_a", ownerUserId: "user_a", organizationId: "org_a" },
+    conversation: { id: "runtime_conversation_a" },
+    content: "hello",
+    channelContext: { channel: "feishu", bindingId: "binding_a", channelAccountId: "app_a", externalSenderId: "ou_a", externalMessageId: "message_a", conversationKind: "group" }
+  });
+  assert.deepEqual(payload.request.channel_context, { channel: "feishu", conversation_id: "runtime_conversation_a", binding_id: "binding_a", channel_account_id: "app_a", external_sender_id: "ou_a", external_message_id: "message_a", conversation_kind: "group" });
+  assert.deepEqual(payload.config.channel_policy, { channel: "feishu" });
+});
+
 test("runtime client rejects a cross-user Agent before making a request", async () => {
   let called = false;
   const client = new BairuiRuntimeClient({ sharedSecret: secret, fetch: async () => { called = true; return Response.json({}); } });

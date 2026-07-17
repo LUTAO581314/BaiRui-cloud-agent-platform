@@ -15,6 +15,8 @@ const required = [
   "apps/web/routes/auth.mjs",
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
+  "apps/web/routes/internal-channels.mjs",
+  "apps/channel-worker/server.mjs",
   "apps/web/server.mjs",
   "apps/web/views.mjs",
   "apps/web/public/styles.css",
@@ -42,6 +44,7 @@ const required = [
   "packages/db/migrations/015_hermes_obsidian_memory.sql",
   "packages/db/migrations/016_agent_authorizations.sql",
   "packages/db/migrations/017_memory_projection_outbox.sql",
+  "packages/db/migrations/018_durable_channel_delivery.sql",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
@@ -59,6 +62,12 @@ const required = [
   "packages/memory/obsidian-note.mjs",
   "packages/memory/projection-coordinator.mjs",
   "packages/memory/projection-worker.mjs",
+  "packages/channels/platform-client.mjs",
+  "packages/channels/worker.mjs",
+  "packages/channels/ingress-worker.mjs",
+  "packages/channels/adapters/feishu.mjs",
+  "packages/channels/adapters/wechat-official.mjs",
+  "packages/channels/adapters/qq.mjs",
   "packages/license/license.mjs",
   "packages/deployment/bundle.mjs",
   "tests/authorization.test.mjs",
@@ -68,6 +77,8 @@ const required = [
   "tests/control-plane-protocol.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "tests/memory-projection-worker.test.mjs",
+  "tests/channel-adapters.test.mjs",
+  "tests/channel-delivery.test.mjs",
   "tests/http-routing.test.mjs",
   "tests/browser/fixture-server.mjs",
   "tests/browser/remote-acceptance.mjs",
@@ -100,7 +111,8 @@ const required = [
   "docs/14-multi-tenant-agent-runtime.md",
   "docs/15-agent-fleet-control.md",
   "docs/16-control-command-delivery.md",
-  "docs/17-agent-resource-telemetry.md"
+  "docs/17-agent-resource-telemetry.md",
+  "docs/23-durable-channel-bridge.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -237,6 +249,24 @@ for (const fragment of ["CREATE TABLE IF NOT EXISTS memory_projection_outbox", "
 const platformStartup = fs.readFileSync(path.join(root, "apps/web/server.mjs"), "utf8");
 for (const evidence of ["MemoryProjectionWorker", ".start()", "memoryProjectionWorker?.stop()"] ) if (!platformStartup.includes(evidence)) failures.push(`Memory projection worker lifecycle is missing ${evidence}`);
 for (const evidence of ["memory_projection_outbox", "background projection worker", "browser"] ) if (!integrationGuide.includes(evidence)) failures.push(`Memory reliability guidance is missing ${evidence}`);
+const channelMigration = fs.readFileSync(path.join(root, "packages/db/migrations/018_durable_channel_delivery.sql"), "utf8");
+for (const table of ["channel_worker_credentials", "channel_conversations", "channel_inbox", "channel_outbox", "channel_delivery_receipts", "channel_health_observations", "channel_dead_letters"]) {
+  if (!channelMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Durable channel migration is missing ${table}`);
+}
+for (const fragment of ["connection_generation", "channel-worker", "channel_inbox_lease_idx", "channel_outbox_lease_idx"]) if (!channelMigration.includes(fragment)) failures.push(`Durable channel migration is missing ${fragment}`);
+const internalChannelRoutes = fs.readFileSync(path.join(root, "apps/web/routes/internal-channels.mjs"), "utf8");
+for (const evidence of ["validateChannelBindingInventory", "validateChannelCredentialResolution", "validateChannelIngress", "validateChannelDeliveryBatch", "validateChannelDeliveryReceipt", "validateChannelHealthReport", '"channel-worker"']) {
+  if (!internalChannelRoutes.includes(evidence)) failures.push(`Internal channel route is missing ${evidence}`);
+}
+for (const evidence of ["ChannelIngressWorker", "createChannelWorkerCredential", "BAIRUI_CHANNEL_WORKER_TOKEN", "channelIngressWorker?.stop()"] ) if (!platformStartup.includes(evidence)) failures.push(`Channel worker lifecycle is missing ${evidence}`);
+const channelWorker = fs.readFileSync(path.join(root, "packages/channels/worker.mjs"), "utf8");
+for (const evidence of ["refreshInventory", "connection_generation", "lease", "receipt", "handleCallback"] ) if (!channelWorker.includes(evidence)) failures.push(`Channel Worker is missing ${evidence}`);
+const compose = fs.readFileSync(path.join(root, "infra/docker-compose.yml"), "utf8");
+for (const evidence of ["channel-worker:", "BAIRUI_CHANNEL_WORKER_TOKEN", 'command: ["node", "apps/channel-worker/server.mjs"]', "127.0.0.1:8790:8790"] ) if (!compose.includes(evidence)) failures.push(`Channel Worker composition is missing ${evidence}`);
+const nginx = fs.readFileSync(path.join(root, "infra/nginx/bairui.conf"), "utf8");
+for (const evidence of ["location /callbacks/wechat/", "proxy_pass http://127.0.0.1:8790"] ) if (!nginx.includes(evidence)) failures.push(`WeChat callback proxy is missing ${evidence}`);
+const channelGuide = fs.readFileSync(path.join(root, "docs/23-durable-channel-bridge.md"), "utf8");
+for (const evidence of ["at-least-once", "Channel Worker", "channel-worker", "connected", "/callbacks/wechat/"] ) if (!channelGuide.includes(evidence)) failures.push(`Durable channel guidance is missing ${evidence}`);
 for (const evidence of ["/memory-notes", "/skills", "/channels", "/hotspots", "/usage"]) {
   if (!server.includes(evidence)) failures.push(`Missing Agent-scoped user API evidence: ${evidence}`);
 }

@@ -9,8 +9,10 @@ import { hashPassword } from "../../packages/auth/password.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
 import { BairuiRuntimeClient } from "../../packages/server-protocol/runtime-client.mjs";
 import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
+import { deriveMachineKey } from "../../packages/security/machine-request.mjs";
 import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
 import { MemoryProjectionWorker } from "../../packages/memory/projection-worker.mjs";
+import { ChannelIngressWorker } from "../../packages/channels/ingress-worker.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, "..", "..");
@@ -39,6 +41,10 @@ const admin = await repository.createUser({
   passwordHash: await hashPassword(adminPassword),
   role: ROLES.PLATFORM_ADMIN
 });
+const channelWorkerId = process.env.BAIRUI_CHANNEL_WORKER_ID ?? "channel-worker-primary";
+const channelWorkerToken = process.env.BAIRUI_CHANNEL_WORKER_TOKEN ?? (production ? "" : "development-channel-worker-token-at-least-32-characters");
+if (!channelWorkerToken || channelWorkerToken.length < 32) throw new Error("BAIRUI_CHANNEL_WORKER_TOKEN must contain at least 32 characters");
+await repository.createChannelWorkerCredential({ workerId: channelWorkerId, keyHash: deriveMachineKey(channelWorkerToken), keyHint: channelWorkerToken.slice(-4), allowedChannels: ["feishu", "wechat", "qq"], createdBy: admin.id });
 await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, ownerUserId: admin.id, name: "bairui-agent", description: "Hermes runtime boundary" });
 await repository.recordAudit({ organizationId: organization.id, actorUserId: admin.id, action: "platform.bootstrap", targetType: "organization", targetId: organization.id });
 
@@ -93,6 +99,17 @@ const memoryProjectionWorker = runtimeClient ? new MemoryProjectionWorker({
   logger: console
 }).start() : null;
 
+const channelIngressWorker = runtimeClient ? new ChannelIngressWorker({
+  repository,
+  runtimeClient,
+  intervalMs: Number(process.env.BAIRUI_CHANNEL_INGRESS_INTERVAL_MS) || 1_000,
+  batchSize: Number(process.env.BAIRUI_CHANNEL_INGRESS_BATCH_SIZE) || 8,
+  leaseSeconds: Number(process.env.BAIRUI_CHANNEL_INGRESS_LEASE_SECONDS) || 90,
+  baseRetryMs: Number(process.env.BAIRUI_CHANNEL_INGRESS_BASE_RETRY_MS) || 1_000,
+  maxRetryMs: Number(process.env.BAIRUI_CHANNEL_INGRESS_MAX_RETRY_MS) || 300_000,
+  logger: console
+}).start() : null;
+
 const healthEvaluationIntervalMs = Math.max(15_000, Number(process.env.BAIRUI_HEALTH_EVALUATION_INTERVAL_MS) || 30_000);
 const runtimeStaleAfterMs = Math.max(30_000, Number(process.env.BAIRUI_RUNTIME_STALE_AFTER_MS) || 120_000);
 async function evaluateControlPlaneHealth() {
@@ -127,6 +144,7 @@ server.on("close", () => {
   clearInterval(healthEvaluationTimer);
   clearInterval(retentionTimer);
   memoryProjectionWorker?.stop();
+  channelIngressWorker?.stop();
 });
 
 const port = Number(process.env.PORT ?? 3000);

@@ -46,6 +46,7 @@ import {
 import { parseTavernCharacterCard } from "../../packages/character-card/tavern-card.mjs";
 import { createAuthRoutes } from "./routes/auth.mjs";
 import { createAdminControlRoutes } from "./routes/admin-control.mjs";
+import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
 
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
@@ -219,7 +220,7 @@ function controlOperationArguments(action, body) {
 function publicChannelBinding(binding) {
   if (!binding) return null;
   const { credentialEnvelope, ...safe } = binding;
-  return { ...safe, configured: Boolean(credentialEnvelope), credentialMasked: binding.credentialHint ? `****${binding.credentialHint}` : null };
+  return { ...safe, ...(binding.channel === "wechat" ? { callbackPath: `/callbacks/wechat/${encodeURIComponent(binding.id)}` } : {}), configured: Boolean(credentialEnvelope), credentialMasked: binding.credentialHint ? `****${binding.credentialHint}` : null };
 }
 
 function publicAgentAuthorization(authorization) {
@@ -453,7 +454,9 @@ export function createPlatformApp(options) {
     if (typeof machineId !== "string") return null;
     const credential = credentialType === "server"
       ? await repository.getActiveServerCredential(machineId)
-      : await repository.getActiveAgentRuntimeCredential(machineId);
+      : credentialType === "channel-worker"
+        ? await repository.getActiveChannelWorkerCredential(machineId)
+        : await repository.getActiveAgentRuntimeCredential(machineId);
     if (!credential || !verifyMachineRequest({ method: request.method, path: url.pathname, timestamp, nonce, body: rawBody, signature, keyHash: credential.keyHash })) return null;
     const timestampMs = Number(timestamp);
     const claimed = await repository.claimMachineNonce({ credentialType, credentialId: credential.id, nonce, timestampMs, expiresAt: new Date(timestampMs + 10 * 60_000).toISOString() });
@@ -545,6 +548,7 @@ export function createPlatformApp(options) {
     controlOperationArguments,
     immutableImage: IMMUTABLE_IMAGE
   });
+  const routeInternalChannels = createInternalChannelRoutes({ repository, providerVault, authenticateMachine });
 
   return async function handle(request, response) {
     securityHeaders(response);
@@ -593,6 +597,8 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.bairuiWorkspaceScript);
       }
+
+      if (await routeInternalChannels({ method, url, request, response })) return;
 
       const principal = await principalFor(request);
       if (method === "GET" && url.pathname === "/bailongma-ui/src/ui/scene-shell/bootstrap.js") {
@@ -881,7 +887,7 @@ export function createPlatformApp(options) {
           status: channel === "web" ? "connected" : "pending",
           credentialEnvelope: credentialText ? providerVault.seal(credentialText) : null,
           credentialHint: channelSecretHint(credentials),
-          metadata: channelMetadata(body.metadata)
+          metadata: { ...channelMetadata(body.metadata), ...(typeof credentials?.appId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(credentials.appId) ? { accountId: credentials.appId } : {}) }
         });
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.channel.bind", targetType: "agent", targetId: agent.id, metadata: { channel, status: binding.status, credentialChanged: Boolean(credentialText) } });
         return json(response, channel === "web" ? 200 : 202, { binding: publicChannelBinding(binding) });

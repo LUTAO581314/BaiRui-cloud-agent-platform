@@ -38,6 +38,12 @@ export class MemoryPlatformRepository {
   #memoryProjectionOutbox = [];
   #agentSkillPreferences = [];
   #agentChannelBindings = [];
+  #channelConversations = [];
+  #channelInbox = [];
+  #channelOutbox = [];
+  #channelDeliveryReceipts = [];
+  #channelHealthObservations = [];
+  #channelDeadLetters = [];
   #agentAuthorizations = [];
   #agentRuns = [];
   #agentHotspotBookmarks = [];
@@ -65,6 +71,7 @@ export class MemoryPlatformRepository {
   #testRuns = [];
   #serverCredentials = [];
   #agentRuntimeCredentials = [];
+  #channelWorkerCredentials = [];
   #machineNonces = new Set();
   #commandReceipts = [];
 
@@ -513,6 +520,24 @@ export class MemoryPlatformRepository {
 
   async getActiveAgentRuntimeCredential(agentId) {
     return this.#agentRuntimeCredentials.findLast((item) => item.agentId === agentId && item.status === "active") ?? null;
+  }
+
+  async createChannelWorkerCredential(input) {
+    const current = this.#channelWorkerCredentials.findLast((item) => item.workerId === input.workerId && item.status === "active");
+    if (current?.keyHash === input.keyHash && current.organizationId === (input.organizationId ?? null)) return current;
+    if (current) Object.assign(current, { status: "revoked", revokedAt: new Date().toISOString() });
+    const credential = { id: input.id ?? randomUUID(), workerId: input.workerId, organizationId: input.organizationId ?? null, allowedChannels: input.allowedChannels ?? ["feishu", "wechat", "qq"], keyHash: input.keyHash, keyHint: input.keyHint, status: "active", createdBy: input.createdBy ?? null, expiresAt: input.expiresAt ?? null, createdAt: new Date().toISOString() };
+    this.#channelWorkerCredentials.push(credential);
+    return credential;
+  }
+
+  async getActiveChannelWorkerCredential(workerId) {
+    return this.#channelWorkerCredentials.findLast((item) => item.workerId === workerId && item.status === "active" && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())) ?? null;
+  }
+
+  async listChannelBindingsForWorker(input) {
+    const channels = new Set(input.channels.filter((channel) => input.allowedChannels.includes(channel)));
+    return this.#agentChannelBindings.filter((item) => channels.has(item.channel) && item.credentialEnvelope && !["disabled", "unconfigured", "unavailable"].includes(item.status) && (!input.organizationId || item.organizationId === input.organizationId));
   }
 
   async claimMachineNonce(input) {
@@ -974,7 +999,9 @@ export class MemoryPlatformRepository {
       channel: input.channel, displayName: input.displayName, status: input.status ?? "pending",
       credentialEnvelope: input.credentialEnvelope ?? existing?.credentialEnvelope ?? null,
       credentialHint: input.credentialHint ?? existing?.credentialHint ?? null,
-      metadata: input.metadata ?? {}, lastErrorCode: input.lastErrorCode ?? null, lastSeenAt: existing?.lastSeenAt ?? null,
+      metadata: input.metadata ?? {}, connectionGeneration: (existing?.connectionGeneration ?? 0) + (input.credentialEnvelope ? 1 : 0), capabilities: input.credentialEnvelope ? [] : (existing?.capabilities ?? []), adapterVersion: input.credentialEnvelope ? null : (existing?.adapterVersion ?? null),
+      lastErrorCode: input.lastErrorCode ?? null, lastSeenAt: existing?.lastSeenAt ?? null, lastHealthAt: input.credentialEnvelope ? null : (existing?.lastHealthAt ?? null),
+      lastInboundAt: existing?.lastInboundAt ?? null, lastOutboundAt: existing?.lastOutboundAt ?? null,
       createdAt: existing?.createdAt ?? now, updatedAt: now
     };
     if (existing) Object.assign(existing, value);
@@ -987,6 +1014,127 @@ export class MemoryPlatformRepository {
     if (index < 0) return false;
     this.#agentChannelBindings.splice(index, 1);
     return true;
+  }
+
+  async getChannelBindingById(bindingId) {
+    return this.#agentChannelBindings.find((item) => item.id === bindingId) ?? null;
+  }
+
+  async acceptChannelIngress(input) {
+    const binding = this.#agentChannelBindings.find((item) => item.id === input.bindingId && item.agentId === input.agentId && item.channel === input.channel);
+    if (!binding || ["disabled", "unconfigured"].includes(binding.status)) return null;
+    const duplicate = this.#channelInbox.find((item) => item.bindingId === binding.id && item.externalMessageId === input.externalMessageId);
+    if (duplicate) return { status: "duplicate", binding, inbox: duplicate };
+    const now = new Date().toISOString();
+    const inbox = {
+      id: input.id ?? randomUUID(), organizationId: binding.organizationId, userId: binding.userId, agentId: binding.agentId,
+      bindingId: binding.id, channel: binding.channel, channelAccountId: input.channelAccountId, externalMessageId: input.externalMessageId,
+      sender: input.sender, conversation: input.conversation, content: input.content, attachments: input.attachments ?? [], replyToMessageId: input.replyToMessageId ?? null, trace: input.trace,
+      state: "pending", attempts: 0, maxAttempts: input.maxAttempts ?? 8, availableAt: now, leaseToken: null, leaseExpiresAt: null, lastErrorCode: null,
+      receivedAt: input.receivedAt, completedAt: null, createdAt: now, updatedAt: now
+    };
+    this.#channelInbox.push(inbox);
+    Object.assign(binding, { lastInboundAt: input.receivedAt, lastSeenAt: input.receivedAt, updatedAt: now });
+    return { status: "accepted", binding, inbox };
+  }
+
+  async ensureChannelConversation(input) {
+    const existing = this.#channelConversations.find((item) => item.bindingId === input.bindingId && item.channelConversationId === input.channelConversationId);
+    const now = new Date().toISOString();
+    if (existing) {
+      Object.assign(existing, { conversationKind: input.conversationKind, lastMessageAt: input.lastMessageAt ?? now, updatedAt: now });
+      return existing;
+    }
+    const conversation = { id: input.id ?? randomUUID(), organizationId: input.organizationId, userId: input.userId, agentId: input.agentId, bindingId: input.bindingId, channel: input.channel, channelConversationId: input.channelConversationId, conversationKind: input.conversationKind, runtimeConversationId: input.runtimeConversationId ?? randomUUID(), lastMessageAt: input.lastMessageAt ?? now, createdAt: now, updatedAt: now };
+    this.#channelConversations.push(conversation);
+    return conversation;
+  }
+
+  async leaseChannelIngress(input = {}) {
+    const now = Date.now();
+    const leaseSeconds = Math.max(5, Math.min(Number(input.leaseSeconds) || 60, 300));
+    const leaseId = input.leaseId ?? randomUUID();
+    const jobs = this.#channelInbox
+      .filter((item) => item.attempts < item.maxAttempts && ((["pending", "retry"].includes(item.state) && Date.parse(item.availableAt) <= now) || (item.state === "leased" && Date.parse(item.leaseExpiresAt) < now)))
+      .sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))
+      .slice(0, Math.max(1, Math.min(Number(input.limit) || 10, 100)));
+    for (const item of jobs) Object.assign(item, { state: "leased", attempts: item.attempts + 1, leaseToken: `${leaseId}:${item.id}`, leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
+    return jobs;
+  }
+
+  async completeChannelIngress(input) {
+    const inbox = this.#channelInbox.find((item) => item.id === input.id && item.state === "leased" && item.leaseToken === input.leaseToken);
+    if (!inbox) return null;
+    let outbound = this.#channelOutbox.find((item) => item.inboxId === inbox.id) ?? null;
+    const now = new Date().toISOString();
+    if (input.outbound && !outbound) {
+      outbound = {
+        id: input.outbound.id ?? randomUUID(), organizationId: inbox.organizationId, userId: inbox.userId, agentId: inbox.agentId, bindingId: inbox.bindingId, inboxId: inbox.id,
+        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: input.outbound.conversation ?? inbox.conversation, content: input.outbound.content,
+        attachments: input.outbound.attachments ?? [], replyToMessageId: input.outbound.replyToMessageId ?? inbox.externalMessageId, trace: input.outbound.trace ?? inbox.trace,
+        state: "pending", attempts: 0, maxAttempts: input.outbound.maxAttempts ?? 8, availableAt: now, workerId: null, leaseToken: null, leaseExpiresAt: null,
+        channelMessageId: null, lastErrorCode: null, deliveredAt: null, createdAt: now, updatedAt: now
+      };
+      this.#channelOutbox.push(outbound);
+    }
+    Object.assign(inbox, { state: "completed", leaseToken: null, leaseExpiresAt: null, lastErrorCode: null, completedAt: now, updatedAt: now });
+    return { inbox, outbound };
+  }
+
+  async failChannelIngress(input) {
+    const inbox = this.#channelInbox.find((item) => item.id === input.id && item.state === "leased" && item.leaseToken === input.leaseToken);
+    if (!inbox) return null;
+    const dead = inbox.attempts >= inbox.maxAttempts;
+    const now = new Date().toISOString();
+    Object.assign(inbox, { state: dead ? "dead" : "retry", availableAt: input.availableAt ?? now, leaseToken: null, leaseExpiresAt: null, lastErrorCode: input.errorCode, updatedAt: now });
+    if (dead && !this.#channelDeadLetters.some((item) => item.direction === "inbound" && item.sourceId === inbox.id)) this.#channelDeadLetters.push({ id: randomUUID(), organizationId: inbox.organizationId, agentId: inbox.agentId, bindingId: inbox.bindingId, direction: "inbound", sourceId: inbox.id, attempts: inbox.attempts, errorCode: input.errorCode, deadAt: now });
+    return inbox;
+  }
+
+  async leaseChannelDeliveries(input) {
+    const now = Date.now();
+    const leaseSeconds = Math.max(5, Math.min(Number(input.leaseSeconds) || 60, 300));
+    const leaseId = input.leaseId ?? randomUUID();
+    const bindings = new Set(input.bindingIds ?? []);
+    const deliveries = this.#channelOutbox
+      .filter((item) => (!input.agentId || item.agentId === input.agentId) && (!input.organizationId || item.organizationId === input.organizationId) && input.channels.includes(item.channel) && (!bindings.size || bindings.has(item.bindingId)) && item.attempts < item.maxAttempts && ((["pending", "retry"].includes(item.state) && Date.parse(item.availableAt) <= now) || (item.state === "leased" && Date.parse(item.leaseExpiresAt) < now)))
+      .sort((left, right) => Date.parse(left.availableAt) - Date.parse(right.availableAt))
+      .slice(0, Math.max(1, Math.min(Number(input.limit) || 10, 100)));
+    for (const item of deliveries) Object.assign(item, { state: "leased", attempts: item.attempts + 1, workerId: input.workerId, leaseToken: `${leaseId}:${item.id}`, leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
+    return { leaseId, deliveries };
+  }
+
+  async recordChannelDeliveryReceipt(input) {
+    const previous = this.#channelDeliveryReceipts.find((item) => item.outboundId === input.outboundId && item.attempt === input.attempt);
+    if (previous) {
+      if ((input.workerId && previous.workerId !== input.workerId) || previous.status !== input.status) throw Object.assign(new Error("Conflicting channel delivery receipt"), { code: "channel_receipt_conflict", statusCode: 409 });
+      return { receipt: previous, outbound: this.#channelOutbox.find((item) => item.id === input.outboundId) ?? null };
+    }
+    const outbound = this.#channelOutbox.find((item) => item.id === input.outboundId && item.bindingId === input.bindingId && item.agentId === input.agentId && (!input.workerId || item.workerId === input.workerId) && item.state === "leased" && item.leaseToken === input.leaseToken && item.attempts === input.attempt);
+    if (!outbound) return null;
+    const exhausted = outbound.attempts >= outbound.maxAttempts;
+    const nextState = input.status === "delivered" ? "delivered" : input.status === "retryable" && !exhausted ? "retry" : input.status === "retryable" ? "dead" : "failed";
+    const receipt = { id: input.receiptId ?? randomUUID(), outboundId: outbound.id, bindingId: outbound.bindingId, workerId: outbound.workerId, attempt: input.attempt, status: input.status, channelMessageId: input.channelMessageId ?? null, errorCode: input.errorCode ?? null, observedAt: input.observedAt };
+    this.#channelDeliveryReceipts.push(receipt);
+    Object.assign(outbound, { state: nextState, availableAt: nextState === "retry" ? new Date(Date.now() + Math.max(0, Number(input.retryAfterMs) || 0)).toISOString() : outbound.availableAt, workerId: null, leaseToken: null, leaseExpiresAt: null, channelMessageId: input.channelMessageId ?? outbound.channelMessageId, lastErrorCode: input.errorCode ?? null, deliveredAt: nextState === "delivered" ? input.observedAt : outbound.deliveredAt, updatedAt: new Date().toISOString() });
+    if (["dead", "failed"].includes(nextState) && !this.#channelDeadLetters.some((item) => item.direction === "outbound" && item.sourceId === outbound.id)) this.#channelDeadLetters.push({ id: randomUUID(), organizationId: outbound.organizationId, agentId: outbound.agentId, bindingId: outbound.bindingId, direction: "outbound", sourceId: outbound.id, attempts: outbound.attempts, errorCode: input.errorCode ?? "delivery_failed", deadAt: new Date().toISOString() });
+    if (nextState === "delivered") {
+      const binding = await this.getChannelBindingById(outbound.bindingId);
+      if (binding) Object.assign(binding, { lastOutboundAt: input.observedAt, lastSeenAt: input.observedAt, updatedAt: new Date().toISOString() });
+    }
+    return { receipt, outbound };
+  }
+
+  async saveChannelHealthReport(input) {
+    const binding = this.#agentChannelBindings.find((item) => item.id === input.bindingId && item.agentId === input.agentId && item.channel === input.channel);
+    if (!binding) return null;
+    let observation = this.#channelHealthObservations.find((item) => item.bindingId === binding.id && item.workerId === input.workerId && item.sequence === input.sequence);
+    if (!observation) {
+      observation = { id: input.id ?? randomUUID(), organizationId: binding.organizationId, agentId: binding.agentId, bindingId: binding.id, channel: binding.channel, workerId: input.workerId, sequence: input.sequence, status: input.status, capabilities: input.capabilities ?? [], adapterVersion: input.adapterVersion ?? null, latencyMs: input.latencyMs ?? null, lastInboundAt: input.lastInboundAt ?? null, lastOutboundAt: input.lastOutboundAt ?? null, errorCode: input.errorCode ?? null, observedAt: input.observedAt, createdAt: new Date().toISOString() };
+      this.#channelHealthObservations.push(observation);
+    }
+    if (!binding.lastHealthAt || Date.parse(binding.lastHealthAt) <= Date.parse(input.observedAt)) Object.assign(binding, { status: input.status, capabilities: input.capabilities ?? [], adapterVersion: input.adapterVersion ?? null, lastErrorCode: input.errorCode ?? null, lastHealthAt: input.observedAt, lastSeenAt: input.status === "connected" ? input.observedAt : binding.lastSeenAt, lastInboundAt: input.lastInboundAt ?? binding.lastInboundAt, lastOutboundAt: input.lastOutboundAt ?? binding.lastOutboundAt, updatedAt: new Date().toISOString() });
+    return { observation, binding };
   }
 
   async listAgentAuthorizations(organizationId, userId, agentId) {

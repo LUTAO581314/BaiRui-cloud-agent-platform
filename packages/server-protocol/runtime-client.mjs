@@ -51,19 +51,29 @@ export class BairuiRuntimeClient {
     return result;
   }
 
-  async invoke({ principal, agent, conversation, content, model }) {
+  async invoke({ principal, agent, conversation, content, model, channelContext = {} }) {
     if (!agent?.id || agent.ownerUserId !== principal.userId || agent.organizationId !== principal.organizationId) {
       throw Object.assign(new Error("Agent ownership does not match the authenticated principal"), { code: "agent_ownership_mismatch", statusCode: 403 });
     }
     const requestId = randomUUID();
     const configId = `config:${principal.organizationId}:${agent.id}`;
+    const channel = typeof channelContext.channel === "string" && channelContext.channel ? channelContext.channel : "web";
+    const runtimeChannelContext = {
+      channel,
+      conversation_id: conversation.id,
+      ...(channelContext.bindingId ? { binding_id: channelContext.bindingId } : {}),
+      ...(channelContext.channelAccountId ? { channel_account_id: channelContext.channelAccountId } : {}),
+      ...(channelContext.externalSenderId ? { external_sender_id: channelContext.externalSenderId } : {}),
+      ...(channelContext.externalMessageId ? { external_message_id: channelContext.externalMessageId } : {}),
+      ...(channelContext.conversationKind ? { conversation_kind: channelContext.conversationKind } : {})
+    };
     const payload = {
       request: {
         request_id: requestId,
         request_type: "message",
         tenant: { organization_id: principal.organizationId, agent_id: agent.id },
         actor: { user_id: principal.userId, roles: [principal.role] },
-        channel_context: { channel: "web", conversation_id: conversation.id },
+        channel_context: runtimeChannelContext,
         input: { content },
         runtime_config_ref: configId,
         trace: { correlation_id: requestId },
@@ -77,7 +87,7 @@ export class BairuiRuntimeClient {
         approval_policy: { mode: "required-for-risky-actions" },
         storage_policy: {},
         integration_policy: {},
-        channel_policy: { channel: "web" }
+        channel_policy: { channel }
       }
     };
     const response = await this.signedPost("/v1/runtime/requests", validateRuntimeRequestEnvelope(payload), { runtime: await this.resolveRuntime(agent) });

@@ -73,7 +73,28 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
 
     const channel = await repository.upsertAgentChannelBinding({ organizationId, userId, agentId, channel: "feishu", displayName: "Postgres Feishu", status: "pending", credentialEnvelope: { encrypted: true }, credentialHint: "test" });
     assert.deepEqual(channel.credentialEnvelope, { encrypted: true });
+    assert.equal(channel.connectionGeneration, 1);
     assert.equal((await repository.listAgentChannelBindings(organizationId, userId, agentId)).length, 1);
+    const channelWorker = await repository.createChannelWorkerCredential({ id: `channel_worker_cred_${suffix}`, workerId: `channel_worker_${suffix}`, organizationId, allowedChannels: ["feishu"], keyHash: "c".repeat(64), keyHint: "test", createdBy: userId });
+    assert.equal((await repository.getActiveChannelWorkerCredential(channelWorker.workerId)).organizationId, organizationId);
+    assert.equal(await repository.claimMachineNonce({ credentialType: "channel-worker", credentialId: channelWorker.id, nonce: `channel_nonce_${suffix}_1234567890`, timestampMs: Date.now(), expiresAt: new Date(Date.now() + 600_000).toISOString() }), true);
+    assert.deepEqual((await repository.listChannelBindingsForWorker({ organizationId, allowedChannels: ["feishu"], channels: ["feishu", "qq"] })).map((item) => item.id), [channel.id]);
+    const channelReceivedAt = new Date().toISOString();
+    const ingressInput = { id: `channel_in_${suffix}`, bindingId: channel.id, agentId, channel: "feishu", channelAccountId: `app_${suffix}`, externalMessageId: `message_${suffix}`, sender: { channel_user_id: `sender_${suffix}` }, conversation: { channel_conversation_id: `conversation_${suffix}`, kind: "group" }, content: { kind: "text", text: "PostgreSQL channel ingress" }, attachments: [], trace: { correlation_id: `channel_trace_${suffix}` }, receivedAt: channelReceivedAt };
+    assert.equal((await repository.acceptChannelIngress(ingressInput)).status, "accepted");
+    assert.equal((await repository.acceptChannelIngress(ingressInput)).status, "duplicate");
+    const [channelJob] = await repository.leaseChannelIngress({ limit: 1, leaseSeconds: 30, leaseId: `channel_in_lease_${suffix}` });
+    assert.equal(channelJob.id, ingressInput.id);
+    const channelConversation = await repository.ensureChannelConversation({ organizationId, userId, agentId, bindingId: channel.id, channel: "feishu", channelConversationId: ingressInput.conversation.channel_conversation_id, conversationKind: "group", runtimeConversationId: `runtime_conversation_${suffix}` });
+    assert.equal(channelConversation.runtimeConversationId, `runtime_conversation_${suffix}`);
+    const channelCompletion = await repository.completeChannelIngress({ id: channelJob.id, leaseToken: channelJob.leaseToken, outbound: { id: `channel_out_${suffix}`, content: { kind: "text", text: "PostgreSQL channel reply" } } });
+    assert.equal(channelCompletion.outbound.state, "pending");
+    const channelDelivery = (await repository.leaseChannelDeliveries({ agentId, workerId: `worker_${suffix}`, channels: ["feishu"], limit: 1, leaseSeconds: 30, leaseId: `channel_out_lease_${suffix}` })).deliveries[0];
+    assert.equal(channelDelivery.id, channelCompletion.outbound.id);
+    const channelReceipt = await repository.recordChannelDeliveryReceipt({ outboundId: channelDelivery.id, bindingId: channel.id, agentId, workerId: `worker_${suffix}`, leaseToken: channelDelivery.leaseToken, attempt: channelDelivery.attempts, status: "delivered", channelMessageId: `vendor_message_${suffix}`, observedAt: new Date().toISOString() });
+    assert.equal(channelReceipt.outbound.state, "delivered");
+    const channelHealth = await repository.saveChannelHealthReport({ bindingId: channel.id, agentId, channel: "feishu", workerId: `worker_${suffix}`, sequence: 1, status: "connected", capabilities: ["receive", "send", "websocket"], adapterVersion: "test", observedAt: new Date().toISOString() });
+    assert.equal(channelHealth.binding.status, "connected");
 
     const agentRun = await repository.createAgentRun({ id: `run_${suffix}`, organizationId, userId, agentId, inputText: "PostgreSQL runtime history", model: "example/model", status: "started" });
     assert.equal(agentRun.status, "started");
