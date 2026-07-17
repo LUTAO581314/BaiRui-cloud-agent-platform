@@ -128,6 +128,13 @@ Database policy:
 - Obsidian is a Markdown/Vault interchange format, not a replacement for PG;
 - SQLite used internally by an upstream stays behind that upstream's adapter.
 
+Channel policy:
+
+- Feishu, WeChat Official and QQ run in a separate Channel Worker;
+- the Worker uses a dedicated signed machine identity, never Runtime credentials;
+- PostgreSQL inbox/outbox leases and durable receipts provide at-least-once delivery;
+- a channel is connected only after its real vendor handshake succeeds.
+
 Server management:
 
 - customer-side VPS, VM, or managed deployment;
@@ -149,6 +156,10 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 The platform binds only to `127.0.0.1:3000`. Put
 `infra/nginx/bairui.conf` in front of it for HTTPS. The container waits for
 PostgreSQL and applies migrations before starting the web process.
+The Channel Worker binds to `127.0.0.1:8790`; Nginx sends only the public
+`/callbacks/wechat/` path to it. See
+[`docs/23-durable-channel-bridge.md`](docs/23-durable-channel-bridge.md) for the
+credential, callback, health and delivery contract.
 
 After startup, check `GET /ready` before customer deployment or acceptance.
 

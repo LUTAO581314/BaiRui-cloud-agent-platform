@@ -40,10 +40,13 @@ const mapIntegrationRun = (row) => ({ id: row.id, organizationId: row.organizati
 const mapHotspot = (row) => ({ id: row.id, runId: row.run_id, externalId: row.external_id, sourceId: row.source_id, sourceName: row.source_name, rank: row.rank, title: row.title, url: row.url, mobileUrl: row.mobile_url, heat: row.heat, category: row.category, fetchedAt: row.fetched_at?.toISOString?.() ?? row.fetched_at });
 const mapObsidianNote = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, title: row.title, slug: row.slug, markdown: row.markdown, frontmatter: row.frontmatter, wikilinks: row.wikilinks, memoryKind: row.memory_kind, importance: row.importance, hermesTarget: row.hermes_target, sourceRef: row.source_ref, revision: row.revision, hermesSyncStatus: row.hermes_sync_status, hermesSyncedRevision: row.hermes_synced_revision, hermesSyncedAt: row.hermes_synced_at?.toISOString?.() ?? row.hermes_synced_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapSkillPreference = (row) => row ? ({ agentId: row.agent_id, organizationId: row.organization_id, userId: row.user_id, skillId: row.skill_id, enabled: row.enabled, applyStatus: row.apply_status, lastErrorCode: row.last_error_code, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
-const mapChannelBinding = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, channel: row.channel, displayName: row.display_name, status: row.status, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, lastErrorCode: row.last_error_code, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapChannelBinding = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, channel: row.channel, displayName: row.display_name, status: row.status, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, connectionGeneration: row.connection_generation ?? 0, capabilities: row.capabilities ?? [], adapterVersion: row.adapter_version, lastErrorCode: row.last_error_code, lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at, lastHealthAt: row.last_health_at?.toISOString?.() ?? row.last_health_at, lastInboundAt: row.last_inbound_at?.toISOString?.() ?? row.last_inbound_at, lastOutboundAt: row.last_outbound_at?.toISOString?.() ?? row.last_outbound_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentAuthorization = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, service: row.service, label: row.label, authType: row.auth_type, endpointUrl: row.endpoint_url, credentialEnvelope: row.credential_envelope, credentialHint: row.credential_hint, metadata: row.metadata, status: row.status, lastErrorCode: row.last_error_code, lastUsedAt: row.last_used_at?.toISOString?.() ?? row.last_used_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapUsageRollup = (row) => ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, bucketStart: row.bucket_start?.toISOString?.() ?? row.bucket_start, bucketSeconds: row.bucket_seconds, model: row.model, inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), estimatedCostUsd: Number(row.estimated_cost_usd), runCount: Number(row.run_count), failedRunCount: Number(row.failed_run_count), latencySumMs: Number(row.latency_sum_ms) });
 const mapMemoryProjectionJob = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, reason: row.reason, state: row.state, attempts: row.attempts, availableAt: row.available_at?.toISOString?.() ?? row.available_at, leaseToken: row.lease_token, leaseExpiresAt: row.lease_expires_at?.toISOString?.() ?? row.lease_expires_at, lastErrorCode: row.last_error_code, resultSummary: row.result_summary ?? {}, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at }) : null;
+const mapChannelInbox = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, bindingId: row.binding_id, channel: row.channel, channelAccountId: row.channel_account_id, externalMessageId: row.external_message_id, sender: row.sender, conversation: row.conversation, content: row.content, attachments: row.attachments ?? [], replyToMessageId: row.reply_to_message_id, trace: row.trace, state: row.state, attempts: row.attempts, maxAttempts: row.max_attempts, availableAt: row.available_at?.toISOString?.() ?? row.available_at, leaseToken: row.lease_token, leaseExpiresAt: row.lease_expires_at?.toISOString?.() ?? row.lease_expires_at, lastErrorCode: row.last_error_code, receivedAt: row.received_at?.toISOString?.() ?? row.received_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapChannelOutbound = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, bindingId: row.binding_id, inboxId: row.inbox_id, channel: row.channel, channelAccountId: row.channel_account_id, conversation: row.conversation, content: row.content, attachments: row.attachments ?? [], replyToMessageId: row.reply_to_message_id, trace: row.trace, state: row.state, attempts: row.attempts, maxAttempts: row.max_attempts, availableAt: row.available_at?.toISOString?.() ?? row.available_at, workerId: row.worker_id, leaseToken: row.lease_token, leaseExpiresAt: row.lease_expires_at?.toISOString?.() ?? row.lease_expires_at, channelMessageId: row.channel_message_id, lastErrorCode: row.last_error_code, deliveredAt: row.delivered_at?.toISOString?.() ?? row.delivered_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapChannelHealth = (row) => row ? ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, bindingId: row.binding_id, channel: row.channel, workerId: row.worker_id, sequence: Number(row.sequence), status: row.status, capabilities: row.capabilities ?? [], adapterVersion: row.adapter_version, latencyMs: nullableNumber(row.latency_ms), lastInboundAt: row.last_inbound_at?.toISOString?.() ?? row.last_inbound_at, lastOutboundAt: row.last_outbound_at?.toISOString?.() ?? row.last_outbound_at, errorCode: row.error_code, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
 
 async function transaction(pool, callback) {
   const client = await pool.connect();
@@ -780,6 +783,38 @@ export class PostgresPlatformRepository {
     return row ? { id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, keyHash: row.key_hash, keyHint: row.key_hint, status: row.status } : null;
   }
 
+  async createChannelWorkerCredential(input) {
+    return transaction(this.pool, async (client) => {
+      const current = (await client.query("SELECT * FROM channel_worker_credentials WHERE worker_id=$1 AND status='active' FOR UPDATE", [input.workerId])).rows[0];
+      if (current?.key_hash === input.keyHash && current.organization_id === (input.organizationId ?? null)) {
+        return { id: current.id, workerId: current.worker_id, organizationId: current.organization_id, allowedChannels: current.allowed_channels, keyHash: current.key_hash, keyHint: current.key_hint, status: current.status };
+      }
+      await client.query("UPDATE channel_worker_credentials SET status='revoked', revoked_at=now() WHERE worker_id=$1 AND status='active'", [input.workerId]);
+      const { rows } = await client.query(
+        "INSERT INTO channel_worker_credentials (id, worker_id, organization_id, allowed_channels, key_hash, key_hint, status, created_by, expires_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8) RETURNING *",
+        [input.id ?? randomUUID(), input.workerId, input.organizationId ?? null, input.allowedChannels ?? ["feishu", "wechat", "qq"], input.keyHash, input.keyHint, input.createdBy ?? null, input.expiresAt ?? null]
+      );
+      const row = rows[0];
+      return { id: row.id, workerId: row.worker_id, organizationId: row.organization_id, allowedChannels: row.allowed_channels, keyHash: row.key_hash, keyHint: row.key_hint, status: row.status };
+    });
+  }
+
+  async getActiveChannelWorkerCredential(workerId) {
+    const { rows } = await this.pool.query("SELECT * FROM channel_worker_credentials WHERE worker_id=$1 AND status='active' AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC LIMIT 1", [workerId]);
+    const row = rows[0];
+    return row ? { id: row.id, workerId: row.worker_id, organizationId: row.organization_id, allowedChannels: row.allowed_channels, keyHash: row.key_hash, keyHint: row.key_hint, status: row.status } : null;
+  }
+
+  async listChannelBindingsForWorker(input) {
+    const channels = input.channels.filter((channel) => input.allowedChannels.includes(channel));
+    if (!channels.length) return [];
+    const values = [channels];
+    const conditions = ["channel=ANY($1::text[])", "credential_envelope IS NOT NULL", "status NOT IN ('disabled','unconfigured','unavailable')"];
+    if (input.organizationId) { values.push(input.organizationId); conditions.push(`organization_id=$${values.length}`); }
+    const { rows } = await this.pool.query(`SELECT * FROM agent_channel_bindings WHERE ${conditions.join(" AND ")} ORDER BY organization_id,agent_id,channel`, values);
+    return rows.map(mapChannelBinding);
+  }
+
   async claimMachineNonce(input) {
     const { rowCount } = await this.pool.query("INSERT INTO machine_request_nonces (credential_type, credential_id, nonce, timestamp_ms, expires_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", [input.credentialType, input.credentialId, input.nonce, input.timestampMs, input.expiresAt]);
     return rowCount === 1;
@@ -1378,14 +1413,19 @@ export class PostgresPlatformRepository {
 
   async upsertAgentChannelBinding(input) {
     const { rows } = await this.pool.query(
-      `INSERT INTO agent_channel_bindings (id, organization_id, user_id, agent_id, channel, display_name, status, credential_envelope, credential_hint, metadata, last_error_code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO agent_channel_bindings (id, organization_id, user_id, agent_id, channel, display_name, status, credential_envelope, credential_hint, metadata, last_error_code, connection_generation)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (agent_id, channel) DO UPDATE SET display_name=EXCLUDED.display_name, status=EXCLUDED.status,
          credential_envelope=COALESCE(EXCLUDED.credential_envelope, agent_channel_bindings.credential_envelope),
          credential_hint=COALESCE(EXCLUDED.credential_hint, agent_channel_bindings.credential_hint), metadata=EXCLUDED.metadata,
-         last_error_code=EXCLUDED.last_error_code, updated_at=now()
+         last_error_code=EXCLUDED.last_error_code,
+         connection_generation=agent_channel_bindings.connection_generation + CASE WHEN EXCLUDED.credential_envelope IS NOT NULL THEN 1 ELSE 0 END,
+         capabilities=CASE WHEN EXCLUDED.credential_envelope IS NOT NULL THEN ARRAY[]::text[] ELSE agent_channel_bindings.capabilities END,
+         adapter_version=CASE WHEN EXCLUDED.credential_envelope IS NOT NULL THEN NULL ELSE agent_channel_bindings.adapter_version END,
+         last_health_at=CASE WHEN EXCLUDED.credential_envelope IS NOT NULL THEN NULL ELSE agent_channel_bindings.last_health_at END,
+         updated_at=now()
        RETURNING *`,
-      [input.id ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.channel, input.displayName, input.status ?? "pending", input.credentialEnvelope ?? null, input.credentialHint ?? null, input.metadata ?? {}, input.lastErrorCode ?? null]
+      [input.id ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.channel, input.displayName, input.status ?? "pending", input.credentialEnvelope ?? null, input.credentialHint ?? null, input.metadata ?? {}, input.lastErrorCode ?? null, input.credentialEnvelope ? 1 : 0]
     );
     return mapChannelBinding(rows[0]);
   }
@@ -1393,6 +1433,216 @@ export class PostgresPlatformRepository {
   async deleteAgentChannelBinding(organizationId, userId, agentId, channel) {
     const { rowCount } = await this.pool.query("DELETE FROM agent_channel_bindings WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND channel=$4", [organizationId, userId, agentId, channel]);
     return rowCount === 1;
+  }
+
+  async getChannelBindingById(bindingId) {
+    const { rows } = await this.pool.query("SELECT * FROM agent_channel_bindings WHERE id=$1", [bindingId]);
+    return mapChannelBinding(rows[0]);
+  }
+
+  async acceptChannelIngress(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows: bindingRows } = await client.query(
+        "SELECT * FROM agent_channel_bindings WHERE id=$1 AND agent_id=$2 AND channel=$3 FOR UPDATE",
+        [input.bindingId, input.agentId, input.channel]
+      );
+      const binding = mapChannelBinding(bindingRows[0]);
+      if (!binding || ["disabled", "unconfigured"].includes(binding.status)) return null;
+      const { rows } = await client.query(
+        `INSERT INTO channel_inbox
+          (id, organization_id, user_id, agent_id, binding_id, channel, channel_account_id, external_message_id, sender, conversation, content, attachments, reply_to_message_id, trace, received_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (binding_id, external_message_id) DO NOTHING
+         RETURNING *`,
+        [input.id ?? randomUUID(), binding.organizationId, binding.userId, binding.agentId, binding.id, binding.channel, input.channelAccountId, input.externalMessageId, input.sender, input.conversation, input.content, input.attachments ?? [], input.replyToMessageId ?? null, input.trace, input.receivedAt]
+      );
+      const accepted = Boolean(rows[0]);
+      const inbox = accepted
+        ? mapChannelInbox(rows[0])
+        : mapChannelInbox((await client.query("SELECT * FROM channel_inbox WHERE binding_id=$1 AND external_message_id=$2", [binding.id, input.externalMessageId])).rows[0]);
+      if (accepted) {
+        await client.query("UPDATE agent_channel_bindings SET last_inbound_at=$2, last_seen_at=GREATEST(COALESCE(last_seen_at,$2),$2), updated_at=now() WHERE id=$1", [binding.id, input.receivedAt]);
+      }
+      return { status: accepted ? "accepted" : "duplicate", binding, inbox };
+    });
+  }
+
+  async ensureChannelConversation(input) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO channel_conversations
+        (id, organization_id, user_id, agent_id, binding_id, channel, channel_conversation_id, conversation_kind, runtime_conversation_id, last_message_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (binding_id, channel_conversation_id) DO UPDATE
+         SET conversation_kind=EXCLUDED.conversation_kind, last_message_at=EXCLUDED.last_message_at, updated_at=now()
+       RETURNING *`,
+      [input.id ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.bindingId, input.channel, input.channelConversationId, input.conversationKind, input.runtimeConversationId ?? randomUUID(), input.lastMessageAt ?? new Date().toISOString()]
+    );
+    const row = rows[0];
+    return { id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, bindingId: row.binding_id, channel: row.channel, channelConversationId: row.channel_conversation_id, conversationKind: row.conversation_kind, runtimeConversationId: row.runtime_conversation_id, lastMessageAt: row.last_message_at?.toISOString?.() ?? row.last_message_at, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at };
+  }
+
+  async leaseChannelIngress(input = {}) {
+    const limit = Math.max(1, Math.min(Number(input.limit) || 10, 100));
+    const leaseSeconds = Math.max(5, Math.min(Number(input.leaseSeconds) || 60, 300));
+    const leaseId = input.leaseId ?? randomUUID();
+    const { rows } = await this.pool.query(
+      `WITH selected AS (
+         SELECT id FROM channel_inbox
+         WHERE attempts < max_attempts AND (
+           (state IN ('pending','retry') AND available_at <= now()) OR
+           (state='leased' AND lease_expires_at < now())
+         )
+         ORDER BY received_at, id
+         FOR UPDATE SKIP LOCKED
+         LIMIT $1
+       )
+       UPDATE channel_inbox inbox SET
+         state='leased', attempts=inbox.attempts+1, lease_token=$3 || ':' || inbox.id,
+         lease_expires_at=now()+($2::text || ' seconds')::interval, updated_at=now()
+       FROM selected WHERE inbox.id=selected.id
+       RETURNING inbox.*`,
+      [limit, leaseSeconds, leaseId]
+    );
+    return rows.map(mapChannelInbox);
+  }
+
+  async completeChannelIngress(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows } = await client.query("SELECT * FROM channel_inbox WHERE id=$1 AND state='leased' AND lease_token=$2 FOR UPDATE", [input.id, input.leaseToken]);
+      const inbox = mapChannelInbox(rows[0]);
+      if (!inbox) return null;
+      let outbound = null;
+      if (input.outbound) {
+        const result = await client.query(
+          `INSERT INTO channel_outbox
+            (id, organization_id, user_id, agent_id, binding_id, inbox_id, channel, channel_account_id, conversation, content, attachments, reply_to_message_id, trace)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           ON CONFLICT (inbox_id) DO UPDATE SET updated_at=channel_outbox.updated_at
+           RETURNING *`,
+          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, input.outbound.conversation ?? inbox.conversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
+        );
+        outbound = mapChannelOutbound(result.rows[0]);
+      }
+      const completed = await client.query("UPDATE channel_inbox SET state='completed', lease_token=NULL, lease_expires_at=NULL, last_error_code=NULL, completed_at=now(), updated_at=now() WHERE id=$1 RETURNING *", [inbox.id]);
+      return { inbox: mapChannelInbox(completed.rows[0]), outbound };
+    });
+  }
+
+  async failChannelIngress(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows } = await client.query("SELECT * FROM channel_inbox WHERE id=$1 AND state='leased' AND lease_token=$2 FOR UPDATE", [input.id, input.leaseToken]);
+      const inbox = mapChannelInbox(rows[0]);
+      if (!inbox) return null;
+      const dead = inbox.attempts >= inbox.maxAttempts;
+      const { rows: updatedRows } = await client.query(
+        "UPDATE channel_inbox SET state=$2, available_at=$3, lease_token=NULL, lease_expires_at=NULL, last_error_code=$4, updated_at=now() WHERE id=$1 RETURNING *",
+        [inbox.id, dead ? "dead" : "retry", input.availableAt ?? new Date().toISOString(), input.errorCode]
+      );
+      if (dead) {
+        await client.query(
+          "INSERT INTO channel_dead_letters (id, organization_id, agent_id, binding_id, direction, source_id, attempts, error_code) VALUES ($1,$2,$3,$4,'inbound',$5,$6,$7) ON CONFLICT (direction, source_id) DO NOTHING",
+          [randomUUID(), inbox.organizationId, inbox.agentId, inbox.bindingId, inbox.id, inbox.attempts, input.errorCode]
+        );
+      }
+      return mapChannelInbox(updatedRows[0]);
+    });
+  }
+
+  async leaseChannelDeliveries(input) {
+    const limit = Math.max(1, Math.min(Number(input.limit) || 10, 100));
+    const leaseSeconds = Math.max(5, Math.min(Number(input.leaseSeconds) || 60, 300));
+    const leaseId = input.leaseId ?? randomUUID();
+    const bindingIds = Array.isArray(input.bindingIds) ? input.bindingIds : [];
+    const { rows } = await this.pool.query(
+      `WITH selected AS (
+         SELECT id FROM channel_outbox
+         WHERE ($1::text IS NULL OR agent_id=$1) AND ($2::text IS NULL OR organization_id=$2)
+           AND channel=ANY($3::text[]) AND (cardinality($4::text[])=0 OR binding_id=ANY($4::text[]))
+           AND attempts < max_attempts AND (
+             (state IN ('pending','retry') AND available_at <= now()) OR
+             (state='leased' AND lease_expires_at < now())
+           )
+         ORDER BY available_at, created_at, id
+         FOR UPDATE SKIP LOCKED
+         LIMIT $5
+       )
+       UPDATE channel_outbox outbound SET
+         state='leased', attempts=outbound.attempts+1, worker_id=$6,
+         lease_token=$7 || ':' || outbound.id,
+         lease_expires_at=now()+($8::text || ' seconds')::interval, updated_at=now()
+       FROM selected WHERE outbound.id=selected.id
+       RETURNING outbound.*`,
+      [input.agentId ?? null, input.organizationId ?? null, input.channels, bindingIds, limit, input.workerId, leaseId, leaseSeconds]
+    );
+    return { leaseId, deliveries: rows.map(mapChannelOutbound) };
+  }
+
+  async recordChannelDeliveryReceipt(input) {
+    return transaction(this.pool, async (client) => {
+      const existing = await client.query("SELECT * FROM channel_delivery_receipts WHERE outbound_id=$1 AND attempt=$2", [input.outboundId, input.attempt]);
+      if (existing.rows[0]) {
+        const row = existing.rows[0];
+        if ((input.workerId && row.worker_id !== input.workerId) || row.status !== input.status) throw Object.assign(new Error("Conflicting channel delivery receipt"), { code: "channel_receipt_conflict", statusCode: 409 });
+        return { receipt: { id: row.id, outboundId: row.outbound_id, bindingId: row.binding_id, workerId: row.worker_id, attempt: row.attempt, status: row.status, channelMessageId: row.channel_message_id, errorCode: row.error_code, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at }, outbound: mapChannelOutbound((await client.query("SELECT * FROM channel_outbox WHERE id=$1", [input.outboundId])).rows[0]) };
+      }
+      const { rows } = await client.query(
+        "SELECT * FROM channel_outbox WHERE id=$1 AND binding_id=$2 AND agent_id=$3 AND ($4::text IS NULL OR worker_id=$4) AND state='leased' AND lease_token=$5 AND attempts=$6 FOR UPDATE",
+        [input.outboundId, input.bindingId, input.agentId, input.workerId, input.leaseToken, input.attempt]
+      );
+      const outbound = mapChannelOutbound(rows[0]);
+      if (!outbound) return null;
+      const workerId = outbound.workerId;
+      const exhausted = outbound.attempts >= outbound.maxAttempts;
+      const nextState = input.status === "delivered" ? "delivered" : input.status === "retryable" && !exhausted ? "retry" : input.status === "retryable" ? "dead" : "failed";
+      const availableAt = input.status === "retryable" && !exhausted ? new Date(Date.now() + Math.max(0, Number(input.retryAfterMs) || 0)).toISOString() : outbound.availableAt;
+      const receiptId = input.receiptId ?? randomUUID();
+      const receiptRows = await client.query(
+        "INSERT INTO channel_delivery_receipts (id, outbound_id, binding_id, worker_id, attempt, status, channel_message_id, error_code, observed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
+        [receiptId, outbound.id, outbound.bindingId, workerId, input.attempt, input.status, input.channelMessageId ?? null, input.errorCode ?? null, input.observedAt]
+      );
+      const updated = await client.query(
+        `UPDATE channel_outbox SET state=$2, available_at=$3, worker_id=NULL, lease_token=NULL, lease_expires_at=NULL,
+           channel_message_id=COALESCE($4,channel_message_id), last_error_code=$5,
+           delivered_at=CASE WHEN $2='delivered' THEN $6 ELSE delivered_at END, updated_at=now()
+         WHERE id=$1 RETURNING *`,
+        [outbound.id, nextState, availableAt, input.channelMessageId ?? null, input.errorCode ?? null, input.observedAt]
+      );
+      if (["dead", "failed"].includes(nextState)) {
+        await client.query(
+          "INSERT INTO channel_dead_letters (id, organization_id, agent_id, binding_id, direction, source_id, attempts, error_code) VALUES ($1,$2,$3,$4,'outbound',$5,$6,$7) ON CONFLICT (direction, source_id) DO NOTHING",
+          [randomUUID(), outbound.organizationId, outbound.agentId, outbound.bindingId, outbound.id, outbound.attempts, input.errorCode ?? "delivery_failed"]
+        );
+      }
+      if (nextState === "delivered") {
+        await client.query("UPDATE agent_channel_bindings SET last_outbound_at=$2, last_seen_at=GREATEST(COALESCE(last_seen_at,$2),$2), updated_at=now() WHERE id=$1", [outbound.bindingId, input.observedAt]);
+      }
+      const receipt = receiptRows.rows[0];
+      return { receipt: { id: receipt.id, outboundId: receipt.outbound_id, bindingId: receipt.binding_id, workerId: receipt.worker_id, attempt: receipt.attempt, status: receipt.status, channelMessageId: receipt.channel_message_id, errorCode: receipt.error_code, observedAt: receipt.observed_at?.toISOString?.() ?? receipt.observed_at }, outbound: mapChannelOutbound(updated.rows[0]) };
+    });
+  }
+
+  async saveChannelHealthReport(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows: bindingRows } = await client.query("SELECT * FROM agent_channel_bindings WHERE id=$1 AND agent_id=$2 AND channel=$3 FOR UPDATE", [input.bindingId, input.agentId, input.channel]);
+      const binding = mapChannelBinding(bindingRows[0]);
+      if (!binding) return null;
+      const { rows } = await client.query(
+        `INSERT INTO channel_health_observations
+          (id, organization_id, agent_id, binding_id, channel, worker_id, sequence, status, capabilities, adapter_version, latency_ms, last_inbound_at, last_outbound_at, error_code, observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (binding_id, worker_id, sequence) DO NOTHING RETURNING *`,
+        [input.id ?? randomUUID(), binding.organizationId, binding.agentId, binding.id, binding.channel, input.workerId, input.sequence, input.status, input.capabilities ?? [], input.adapterVersion ?? null, input.latencyMs ?? null, input.lastInboundAt ?? null, input.lastOutboundAt ?? null, input.errorCode ?? null, input.observedAt]
+      );
+      const observation = rows[0] ?? (await client.query("SELECT * FROM channel_health_observations WHERE binding_id=$1 AND worker_id=$2 AND sequence=$3", [binding.id, input.workerId, input.sequence])).rows[0];
+      await client.query(
+        `UPDATE agent_channel_bindings SET status=$2, capabilities=$3, adapter_version=$4, last_error_code=$5,
+           last_health_at=$6, last_seen_at=CASE WHEN $2='connected' THEN GREATEST(COALESCE(last_seen_at,$6),$6) ELSE last_seen_at END,
+           last_inbound_at=GREATEST(last_inbound_at,$7), last_outbound_at=GREATEST(last_outbound_at,$8), updated_at=now()
+         WHERE id=$1 AND (last_health_at IS NULL OR last_health_at <= $6)`,
+        [binding.id, input.status, input.capabilities ?? [], input.adapterVersion ?? null, input.errorCode ?? null, input.observedAt, input.lastInboundAt ?? null, input.lastOutboundAt ?? null]
+      );
+      return { observation: mapChannelHealth(observation), binding: mapChannelBinding((await client.query("SELECT * FROM agent_channel_bindings WHERE id=$1", [binding.id])).rows[0]) };
+    });
   }
 
   async listAgentAuthorizations(organizationId, userId, agentId) {

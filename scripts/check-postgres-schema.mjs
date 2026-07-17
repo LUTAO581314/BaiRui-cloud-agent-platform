@@ -13,6 +13,8 @@ const requiredTables = [
   "agent_runtime_credentials", "machine_request_nonces", "command_receipts",
   "agent_skill_preferences", "agent_channel_bindings", "agent_hotspot_bookmarks",
   "agent_runs", "agent_authorizations", "memory_projection_outbox",
+  "channel_worker_credentials", "channel_conversations", "channel_inbox", "channel_outbox",
+  "channel_delivery_receipts", "channel_health_observations", "channel_dead_letters",
   "provider_channels", "model_policies", "data_retention_policies",
   "sensitive_access_grants", "sensitive_access_events", "backup_restore_runs", "retention_runs",
   "agent_resource_samples", "agent_container_resource_samples"
@@ -21,6 +23,9 @@ const requiredAgentColumns = ["owner_user_id", "initialization_status", "desired
 const requiredRuntimeColumns = ["endpoint_ref", "route_updated_at"];
 const requiredObsidianColumns = ["agent_id", "memory_kind", "importance", "hermes_target", "source_ref", "revision", "hermes_sync_status", "hermes_synced_revision", "hermes_synced_at"];
 const requiredMemoryOutboxColumns = ["organization_id", "user_id", "agent_id", "reason", "state", "attempts", "available_at", "lease_token", "lease_expires_at", "last_error_code", "result_summary"];
+const requiredChannelBindingColumns = ["connection_generation", "capabilities", "adapter_version", "last_health_at", "last_inbound_at", "last_outbound_at"];
+const requiredChannelInboxColumns = ["organization_id", "user_id", "agent_id", "binding_id", "external_message_id", "state", "attempts", "lease_token", "lease_expires_at"];
+const requiredChannelOutboxColumns = ["organization_id", "user_id", "agent_id", "binding_id", "inbox_id", "state", "attempts", "worker_id", "lease_token", "lease_expires_at"];
 const requiredBackupColumns = ["expired_at"];
 const client = new pg.Client({ connectionString });
 await client.connect();
@@ -40,6 +45,11 @@ try {
   const { rows: memoryOutboxColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='memory_projection_outbox'");
   const memoryOutboxColumns = new Set(memoryOutboxColumnRows.map((row) => row.column_name));
   for (const column of requiredMemoryOutboxColumns) if (!memoryOutboxColumns.has(column)) throw new Error(`Missing memory_projection_outbox column: ${column}`);
+  for (const [table, requiredColumns] of [["agent_channel_bindings", requiredChannelBindingColumns], ["channel_inbox", requiredChannelInboxColumns], ["channel_outbox", requiredChannelOutboxColumns]]) {
+    const { rows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1", [table]);
+    const columns = new Set(rows.map((row) => row.column_name));
+    for (const column of requiredColumns) if (!columns.has(column)) throw new Error(`Missing ${table} column: ${column}`);
+  }
   const { rows: backupColumnRows } = await client.query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='backup_records'");
   const backupColumns = new Set(backupColumnRows.map((row) => row.column_name));
   for (const column of requiredBackupColumns) if (!backupColumns.has(column)) throw new Error(`Missing backup_records column: ${column}`);
@@ -48,6 +58,8 @@ try {
   for (const action of ["deployment.provision", "deployment.suspend", "deployment.delete", "credential.revoke", "config.apply-user", "backup.restore", "backup.expire"]) {
     if (!actionConstraint.includes(action)) throw new Error(`Missing control action in PostgreSQL constraint: ${action}`);
   }
+  const { rows: nonceConstraintRows } = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='machine_request_nonces_credential_type_check'");
+  if (!(nonceConstraintRows[0]?.definition ?? "").includes("channel-worker")) throw new Error("Channel Worker machine nonce type is missing");
   console.log("PostgreSQL schema check passed.");
 } finally {
   await client.end();

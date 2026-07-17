@@ -8,7 +8,7 @@ import { hashPassword } from "../packages/auth/password.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
 import { signedMachinePost, sendCommandReceipt } from "../server-agent/control-client.mjs";
-import { signMachineRequest } from "../packages/security/machine-request.mjs";
+import { deriveMachineKey, signMachineRequest } from "../packages/security/machine-request.mjs";
 import { createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
 
 const sessionSecret = "http-test-session-secret-that-is-longer-than-32-characters";
@@ -311,6 +311,51 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.equal((await resolved.json()).credential.secret, personalSecret);
   const wrongMachine = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: resolvePath, payload: {} });
   assert.equal(wrongMachine.status, 401);
+
+  const channelSecret = "channel-worker-only-secret";
+  const channelWorkerId = "channel_worker_http";
+  const channelWorkerToken = "channel-worker-http-token-at-least-32-characters";
+  await context.repository.createChannelWorkerCredential({ workerId: channelWorkerId, keyHash: deriveMachineKey(channelWorkerToken), keyHint: channelWorkerToken.slice(-4), allowedChannels: ["feishu", "wechat", "qq"], createdBy: "root" });
+  const channelBindingResponse = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/channels/feishu`, { method: "PUT", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Production Feishu", credentials: { appId: "app_channel", appSecret: channelSecret }, metadata: { accountId: "app_channel" } }) });
+  assert.equal(channelBindingResponse.status, 202);
+  const channelBinding = (await channelBindingResponse.json()).binding;
+  assert.equal(channelBinding.status, "pending");
+  assert.doesNotMatch(JSON.stringify(channelBinding), new RegExp(channelSecret));
+  const channelResolvePath = `/api/internal/channels/bindings/${channelBinding.id}/resolve`;
+  const channelCredentialResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: channelResolvePath, payload: {} });
+  assert.equal(channelCredentialResponse.status, 200);
+  assert.equal((await channelCredentialResponse.json()).credential.values.appSecret, channelSecret);
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: channelResolvePath, payload: {} })).status, 401);
+
+  const channelInventory = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/bindings", payload: { schema_version: "1.0", worker_id: channelWorkerId, channels: ["feishu", "wechat", "qq"], trace: { correlation_id: "channel_inventory_http" } } });
+  assert.equal(channelInventory.status, 200);
+  const inventoryBody = await channelInventory.json();
+  assert.equal(inventoryBody.bindings[0].id, channelBinding.id);
+  assert.doesNotMatch(JSON.stringify(inventoryBody), new RegExp(channelSecret));
+
+  const channelTrace = { correlation_id: "channel_trace_http" };
+  const channelIngress = { schema_version: "1.0", ingress_id: "channel_ingress_http", binding_id: channelBinding.id, channel: "feishu", channel_account_id: "app_channel", message_id: "vendor_message_http", sender: { channel_user_id: "ou_http" }, conversation: { channel_conversation_id: "oc_http", kind: "group" }, content: { kind: "text", text: "hello" }, attachments: [], received_at: new Date().toISOString(), trace: channelTrace };
+  const ingressResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/ingress", payload: channelIngress });
+  assert.equal(ingressResponse.status, 202);
+  assert.equal((await ingressResponse.json()).status, "accepted");
+  const duplicateIngress = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/ingress", payload: channelIngress });
+  assert.equal((await duplicateIngress.json()).status, "duplicate");
+  const [channelInbox] = await context.repository.leaseChannelIngress({ limit: 1, leaseSeconds: 30, leaseId: "channel_http_inbox_lease" });
+  await context.repository.completeChannelIngress({ id: channelInbox.id, leaseToken: channelInbox.leaseToken, outbound: { id: "channel_outbound_http", content: { kind: "text", text: "world" } } });
+
+  const deliveryLeasePayload = { schema_version: "1.0", worker_id: "channel_worker_http", channels: ["feishu"], binding_ids: [channelBinding.id], limit: 10, lease_seconds: 30, requested_at: new Date().toISOString(), trace: channelTrace };
+  const channelLeaseResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/deliveries/lease", payload: deliveryLeasePayload });
+  assert.equal(channelLeaseResponse.status, 200);
+  const channelDelivery = (await channelLeaseResponse.json()).deliveries[0];
+  assert.equal(channelDelivery.outbound_id, "channel_outbound_http");
+  const channelHealth = { schema_version: "1.0", binding_id: channelBinding.id, channel: "feishu", worker_id: "channel_worker_http", sequence: 1, status: "connected", capabilities: ["receive", "send", "websocket"], adapter_version: "test", observed_at: new Date().toISOString() };
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/health", payload: { ...channelHealth, message: "must-not-pass" } })).status, 400);
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/health", payload: channelHealth })).status, 202);
+  const deliveryReceipt = { schema_version: "1.0", outbound_id: channelDelivery.outbound_id, binding_id: channelDelivery.binding_id, lease_token: channelDelivery.lease_token, status: "delivered", attempt: channelDelivery.attempt, channel_message_id: "vendor_reply_http", observed_at: new Date().toISOString(), trace: channelTrace };
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/delivery-receipts", payload: deliveryReceipt })).status, 202);
+  const connectedBinding = await context.repository.getChannelBindingById(channelBinding.id);
+  assert.equal(connectedBinding.status, "connected");
+  assert.ok(connectedBinding.lastOutboundAt);
 
   const resource = { agentId: context.agent.id, runtimeId: context.runtime.id, deploymentId: command.deployment_id, sequence: 10, status: "running", cpuPercent: 5.3, memoryUsedBytes: 201326592, memoryLimitBytes: 2147483648, agentStorageUsedBytes: 10485760, hostStorageUsedBytes: 53687091200, hostStorageLimitBytes: 107374182400, osType: "linux", architecture: "amd64", operatingSystem: "Test Linux", dockerVersion: "27.1.0", cpuCount: 8, startedAt: "2026-07-16T06:00:00.000Z", uptimeSeconds: 3600, observedAt: "2026-07-16T07:00:00.000Z", containers: [{ role: "hermes", status: "running", containerId: "a".repeat(64), containerName: "bairui-hermes-a", imageRef: "hermes:test", version: "1.2.3", cpuPercent: 3.1, memoryUsedBytes: 134217728, memoryLimitBytes: 2147483648, writableBytes: 1024, startedAt: "2026-07-16T06:00:00.000Z" }, { role: "runtime-boundary", status: "running", containerId: "b".repeat(64), containerName: "bairui-runtime-a", imageRef: "runtime:test", version: "0.4.0", cpuPercent: 2.2, memoryUsedBytes: 67108864, memoryLimitBytes: 2147483648, writableBytes: 2048, startedAt: "2026-07-16T06:01:00.000Z" }] };
   const taintedResource = { ...resource, prompt: "must-not-be-stored", containers: [{ ...resource.containers[0], secret: "must-not-be-stored" }, resource.containers[1]] };

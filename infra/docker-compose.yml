@@ -33,6 +33,8 @@ services:
       BAIRUI_BOOTSTRAP_ADMIN_EMAIL: ${BAIRUI_BOOTSTRAP_ADMIN_EMAIL:?BAIRUI_BOOTSTRAP_ADMIN_EMAIL is required}
       BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ${BAIRUI_BOOTSTRAP_ADMIN_PASSWORD:?BAIRUI_BOOTSTRAP_ADMIN_PASSWORD is required}
       BAIRUI_AGENT_INGEST_TOKEN: ${BAIRUI_AGENT_INGEST_TOKEN:?BAIRUI_AGENT_INGEST_TOKEN is required}
+      BAIRUI_CHANNEL_WORKER_ID: ${BAIRUI_CHANNEL_WORKER_ID:-channel-worker-primary}
+      BAIRUI_CHANNEL_WORKER_TOKEN: ${BAIRUI_CHANNEL_WORKER_TOKEN:?BAIRUI_CHANNEL_WORKER_TOKEN is required}
       BAIRUI_RUNTIME_URL: ${BAIRUI_RUNTIME_URL:-http://host.docker.internal:8787}
       BAIRUI_RUNTIME_SHARED_SECRET: ${BAIRUI_RUNTIME_SHARED_SECRET:?BAIRUI_RUNTIME_SHARED_SECRET is required}
       BAIRUI_PROVIDER_ENCRYPTION_KEY: ${BAIRUI_PROVIDER_ENCRYPTION_KEY:?BAIRUI_PROVIDER_ENCRYPTION_KEY is required}
@@ -55,6 +57,35 @@ services:
       retries: 12
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks: [backend]
+
+  channel-worker:
+    build:
+      context: ..
+    restart: unless-stopped
+    depends_on:
+      platform:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BAIRUI_PLATFORM_URL: http://platform:3000
+      BAIRUI_CHANNEL_WORKER_ID: ${BAIRUI_CHANNEL_WORKER_ID:-channel-worker-primary}
+      BAIRUI_CHANNEL_WORKER_TOKEN: ${BAIRUI_CHANNEL_WORKER_TOKEN:?BAIRUI_CHANNEL_WORKER_TOKEN is required}
+      BAIRUI_CHANNEL_WORKER_CHANNELS: ${BAIRUI_CHANNEL_WORKER_CHANNELS:-feishu,wechat,qq}
+      BAIRUI_CHANNEL_WORKER_HOST: 0.0.0.0
+      BAIRUI_CHANNEL_WORKER_PORT: 8790
+      BAIRUI_CHANNEL_INVENTORY_INTERVAL_MS: ${BAIRUI_CHANNEL_INVENTORY_INTERVAL_MS:-30000}
+      BAIRUI_CHANNEL_DELIVERY_INTERVAL_MS: ${BAIRUI_CHANNEL_DELIVERY_INTERVAL_MS:-1000}
+      BAIRUI_CHANNEL_DELIVERY_BATCH_SIZE: ${BAIRUI_CHANNEL_DELIVERY_BATCH_SIZE:-20}
+      BAIRUI_CHANNEL_DELIVERY_LEASE_SECONDS: ${BAIRUI_CHANNEL_DELIVERY_LEASE_SECONDS:-60}
+    command: ["node", "apps/channel-worker/server.mjs"]
+    ports:
+      - "127.0.0.1:8790:8790"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     networks: [backend]
 
 volumes:

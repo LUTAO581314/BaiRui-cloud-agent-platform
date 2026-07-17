@@ -254,7 +254,7 @@ async function loadIntegrations() {
 
 async function loadChannels() {
   const { channels } = await request(scoped("/api/admin/channels"));
-  rows("channel-rows", channels, [item => item.channel, item => item.displayName, item => item.agentId, item => item.userId, item => statusNode(item.status), item => item.configured ? item.credentialMasked : "未配置", item => formatTime(item.lastSeenAt)]);
+  rows("channel-rows", channels, [item => item.channel, item => item.displayName, item => item.agentId, item => item.userId, item => statusNode(item.status), item => (item.capabilities || []).join(", ") || "-", item => item.adapterVersion || "-", item => formatTime(item.lastHealthAt), item => `${formatTime(item.lastInboundAt)} / ${formatTime(item.lastOutboundAt)}`]);
 }
 
 async function loadConfig() {

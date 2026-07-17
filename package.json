@@ -7,11 +7,13 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v1.0.0",
+    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v1.2.0",
+    "@larksuiteoapi/node-sdk": "1.71.1",
+    "@tencent-connect/qqbot-connector": "1.1.0",
     "pg": "^8.16.0",
     "png-chunk-text": "^1.0.0",
     "png-chunks-extract": "^1.0.0",
-    "yaml": "^2.8.1"
+    "yaml": "2.9.0"
   },
   "scripts": {
     "test": "node --test \"tests/*.test.mjs\"",
@@ -28,6 +30,7 @@
     "delivery:release": "node packages/deployment/bin/release-delivery.mjs",
     "bailongma:build": "node scripts/build-bailongma-ui.mjs",
     "platform:dev": "node scripts/start-platform-dev.mjs",
+    "channel-worker:serve": "node apps/channel-worker/server.mjs",
     "server-agent:once": "node server-agent/index.mjs",
     "server-agent:daemon": "node server-agent/daemon.mjs",
     "server-agent:acceptance": "node server-agent/bin/acceptance-check.mjs",
