@@ -271,6 +271,8 @@ test("a failed Agent initialization can be retried without duplicating configura
   assert.equal(firstResponse.status, 202);
   const first = await firstResponse.json();
   const [leased] = await context.repository.leaseControlCommands({ serverId: "server_retry", limit: 1, leaseSeconds: 120 });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_retry", attempt: leased.attempt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_retry", attempt: leased.attempt, state: "running" });
   await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_retry", attempt: leased.attempt, state: "failed", errorCode: "docker_unavailable", errorSummary: "Control executor failed (docker_unavailable)" });
 
   const retryResponse = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });

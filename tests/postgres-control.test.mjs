@@ -26,6 +26,8 @@ test("PostgreSQL reuses an approved configuration when failed provisioning is re
     await repository.createServer({ id: serverId, organizationId, name: "Retry Host", status: "healthy" });
     const first = await repository.requestAgentProvisioning(request);
     const [leased] = await repository.leaseControlCommands({ serverId, limit: 1, leaseSeconds: 120 });
+    await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "accepted" });
+    await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "running" });
     await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "failed", errorCode: "docker_unavailable", errorSummary: "Control executor failed (docker_unavailable)" });
     const retry = await repository.requestAgentProvisioning({ ...request, secretEnvelope: { ...request.secretEnvelope, agentControlToken: { generation: 2 } }, agentCredentialHash: "e".repeat(64) });
     assert.notEqual(retry.command.id, first.command.id);
