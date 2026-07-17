@@ -84,10 +84,10 @@ jobs:
           BAIRUI_RELEASE_VERSION: 0.1.0-rc.1
           BAIRUI_RELEASE_GENERATED_AT: 2026-07-17T00:00:00.000Z
           BAIRUI_CONTRACTS_VERSION: 1.2.0
-          BAIRUI_PLATFORM_COMMIT: 1111111111111111111111111111111111111111
-          BAIRUI_AGENT_COMMIT: 2222222222222222222222222222222222222222
-          BAIRUI_HERMES_COMMIT: 3333333333333333333333333333333333333333
-          BAIRUI_BAILONGMA_COMMIT: 4444444444444444444444444444444444444444
+          BAIRUI_PLATFORM_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          BAIRUI_AGENT_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          BAIRUI_HERMES_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+          BAIRUI_BAILONGMA_COMMIT: dddddddddddddddddddddddddddddddddddddddd
           BAIRUI_PLATFORM_IMAGE: ghcr.io/lutao581314/bairui-platform@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           BAIRUI_RUNTIME_IMAGE: ghcr.io/lutao581314/bairui-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           BAIRUI_HERMES_IMAGE: ghcr.io/lutao581314/bairui-hermes@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
