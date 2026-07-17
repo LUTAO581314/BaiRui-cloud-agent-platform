@@ -255,7 +255,12 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.ok(serverRegistration.credential.token.length >= 32);
   assert.doesNotMatch(JSON.stringify(await context.repository.getActiveServerCredential(serverRegistration.server.id)), new RegExp(serverRegistration.credential.token));
   assert.equal((await fetch(`${context.baseUrl}/api/admin/servers/${serverRegistration.server.id}/credentials`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: "{}" })).status, 403);
-  await context.repository.recordServerHeartbeat({ id: serverRegistration.server.id, organizationId: "org_a", status: "healthy", runtimeVersion: "0.3.0" });
+  const emptyFleetReport = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/resources", payload: { serverId: serverRegistration.server.id, samples: [] } });
+  assert.equal(emptyFleetReport.status, 202);
+  assert.deepEqual(await emptyFleetReport.json(), { accepted: 0, sampleIds: [] });
+  const healthyServer = (await context.repository.listServers("org_a")).find((server) => server.id === serverRegistration.server.id);
+  assert.equal(healthyServer.status, "healthy");
+  assert.ok(healthyServer.lastSeenAt);
   const replayPath = "/api/internal/control-plane/commands/lease";
   const replayBody = JSON.stringify({ serverId: serverRegistration.server.id, limit: 1 });
   const replayTimestamp = Date.now().toString();

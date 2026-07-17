@@ -1426,8 +1426,10 @@ export function createPlatformApp(options) {
         catch { return json(response, 400, { error: "invalid_resource_samples" }); }
         const samples = body.samples.map(resourceSample);
         if (samples.some((sample) => !sample)) return json(response, 400, { error: "invalid_resource_sample" });
-        const saved = await repository.saveAgentResourceSamples({ serverId: machine.machineId, samples });
-        await repository.recordServerHeartbeat({ id: machine.machineId, organizationId: saved[0].organizationId, status: "healthy", runtimeVersion: saved[0].dockerVersion ?? null });
+        const server = (await repository.listServers()).find((item) => item.id === machine.machineId);
+        if (!server) return json(response, 404, { error: "server_not_found" });
+        const saved = samples.length ? await repository.saveAgentResourceSamples({ serverId: machine.machineId, samples }) : [];
+        await repository.recordServerHeartbeat({ id: machine.machineId, organizationId: server.organizationId, status: "healthy", runtimeVersion: saved[0]?.dockerVersion ?? server.runtimeVersion ?? null });
         return json(response, 202, { accepted: saved.length, sampleIds: saved.map((sample) => sample.id) });
       }
 
