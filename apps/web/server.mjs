@@ -13,6 +13,7 @@ import { deriveMachineKey } from "../../packages/security/machine-request.mjs";
 import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
 import { MemoryProjectionWorker } from "../../packages/memory/projection-worker.mjs";
 import { ChannelIngressWorker } from "../../packages/channels/ingress-worker.mjs";
+import { ensureActiveAgentRuntimes } from "../../packages/db/runtime-bootstrap.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, "..", "..");
@@ -46,6 +47,7 @@ const channelWorkerToken = process.env.BAIRUI_CHANNEL_WORKER_TOKEN ?? (productio
 if (!channelWorkerToken || channelWorkerToken.length < 32) throw new Error("BAIRUI_CHANNEL_WORKER_TOKEN must contain at least 32 characters");
 await repository.createChannelWorkerCredential({ workerId: channelWorkerId, keyHash: deriveMachineKey(channelWorkerToken), keyHint: channelWorkerToken.slice(-4), allowedChannels: ["feishu", "wechat", "qq"], createdBy: admin.id });
 await repository.createAgent({ id: "agent_bairui", organizationId: organization.id, ownerUserId: admin.id, name: "bairui-agent", description: "Hermes runtime boundary" });
+await ensureActiveAgentRuntimes(repository);
 await repository.recordAudit({ organizationId: organization.id, actorUserId: admin.id, action: "platform.bootstrap", targetType: "organization", targetId: organization.id });
 
 const runtimeClient = process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({

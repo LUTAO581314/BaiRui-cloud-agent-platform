@@ -153,7 +153,7 @@ PostgreSQL and HTTPS, registers the local Server Agent through the Platform API,
 and preserves the previous release for rollback:
 
 ```sh
-curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.3/install.sh | sudo bash -s -- --domain agent.example.com
+curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.4/install.sh | sudo bash -s -- --domain agent.example.com
 ```
 
 The release manifest binds Platform, Runtime, Hermes, PostgreSQL and Caddy by

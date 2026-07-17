@@ -6,6 +6,7 @@ import {
   sessionCookie
 } from "../../../packages/auth/session.mjs";
 import { json, readJson } from "../http.mjs";
+import { ensureAgentRuntime } from "../../../packages/db/runtime-bootstrap.mjs";
 
 export function createAuthRoutes(options) {
   const {
@@ -51,7 +52,8 @@ export function createAuthRoutes(options) {
       const organization = await repository.createOrganization({ name: body.organizationName || "Personal workspace" });
       const passwordHash = await hashPassword(body.password);
       const user = await repository.createUser({ organizationId: organization.id, email: body.email, displayName: body.displayName || body.email, passwordHash, role: ROLES.ORG_ADMIN });
-      await repository.createAgent({ organizationId: organization.id, ownerUserId: user.id, name: "bairui-agent", description: "User-owned Hermes agent" });
+      const agent = await repository.createAgent({ organizationId: organization.id, ownerUserId: user.id, name: "bairui-agent", description: "User-owned Hermes agent" });
+      await ensureAgentRuntime(repository, agent);
       await repository.recordAudit({ organizationId: organization.id, actorUserId: user.id, action: "organization.register", targetType: "organization", targetId: organization.id });
       json(response, 201, { id: user.id });
       return true;
