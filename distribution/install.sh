@@ -124,6 +124,7 @@ install_host_dependencies() {
   apt-get update
   apt-get install -y ca-certificates curl jq openssl tar gnupg
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then return; fi
+  # shellcheck disable=SC1091
   . /etc/os-release
   [[ "$ID" == "ubuntu" || "$ID" == "debian" ]] || fail "automatic Docker installation supports Ubuntu and Debian"
   install -d -m 0755 /etc/apt/keyrings
@@ -226,7 +227,7 @@ wait_for_platform() {
 }
 
 register_server_agent() {
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   source "$CONFIG_DIR/bairui.env"
   if [[ "$BAIRUI_SERVER_ID" != "pending-registration" ]]; then return; fi
   local cookie="$TEMP_DIR/session.cookie" login="$TEMP_DIR/login.json" request="$TEMP_DIR/server.json" response="$TEMP_DIR/server-response.json"
