@@ -131,8 +131,36 @@ jobs:
           trap cleanup EXIT
           docker compose -p "$project" -f infra/docker-compose.yml pull platform channel-worker
           docker compose -p "$project" -f infra/docker-compose.yml up -d --no-build --wait --wait-timeout 300
-          platform_ready="$(curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:3000/ready)"
-          worker_ready="$(curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:8790/ready)"
+          platform_ready="$(docker compose -p "$project" -f infra/docker-compose.yml exec -T platform node -e '
+            fetch("http://127.0.0.1:3000/ready")
+              .then(async (response) => {
+                const body = await response.text();
+                if (!response.ok) {
+                  console.error(body);
+                  process.exit(1);
+                }
+                process.stdout.write(body);
+              })
+              .catch((error) => {
+                console.error(error);
+                process.exit(1);
+              });
+          ')"
+          worker_ready="$(docker compose -p "$project" -f infra/docker-compose.yml exec -T channel-worker node -e '
+            fetch("http://127.0.0.1:8790/ready")
+              .then(async (response) => {
+                const body = await response.text();
+                if (!response.ok) {
+                  console.error(body);
+                  process.exit(1);
+                }
+                process.stdout.write(body);
+              })
+              .catch((error) => {
+                console.error(error);
+                process.exit(1);
+              });
+          ')"
           jq -e '.ready == true and .backend == "postgresql"' <<<"$platform_ready"
           jq -e '.ready == true and .adapters == 0' <<<"$worker_ready"
           migration="$(docker compose -p "$project" -f infra/docker-compose.yml exec -T postgres sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U bairui -d bairui -Atqc "select name from schema_migrations order by name desc limit 1"')"
