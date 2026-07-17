@@ -10,6 +10,7 @@ const expectedContracts = `https://codeload.github.com/LUTAO581314/BaiRui-contra
 if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw new Error(`@bairui/contracts must be pinned to ${expectedContracts}`);
 const required = [
   ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
   "apps/web/app.mjs",
   "apps/web/http.mjs",
   "apps/web/routes/auth.mjs",
@@ -112,7 +113,8 @@ const required = [
   "docs/15-agent-fleet-control.md",
   "docs/16-control-command-delivery.md",
   "docs/17-agent-resource-telemetry.md",
-  "docs/23-durable-channel-bridge.md"
+  "docs/23-durable-channel-bridge.md",
+  "docs/24-immutable-release-pipeline.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -126,6 +128,11 @@ const workflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "u
 for (const evidence of ["browser-acceptance:", "playwright install --with-deps chromium", "npm run test:browser:remote", "actions/upload-artifact@v4"]) {
   if (!workflow.includes(evidence)) failures.push(`Missing remote browser workflow evidence: ${evidence}`);
 }
+const releaseWorkflow = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+for (const evidence of ["workflow_run:", "Platform CI", "ghcr.io/lutao581314/bairui-platform", "docker/build-push-action@v7.3.0", "aquasecurity/trivy-action@v0.36.0", "anchore/sbom-action@v0.24.0", "actions/attest-build-provenance@v4.1.1", "postgres-platform-integration:", "platform-release-manifest.json"]) {
+  if (!releaseWorkflow.includes(evidence)) failures.push(`Immutable Platform release workflow is missing ${evidence}`);
+}
+if (releaseWorkflow.includes(":latest")) failures.push("Immutable Platform release workflow must not publish or consume latest tags");
 const integrationGuide = fs.readFileSync(path.join(root, "docs/20-platform-agent-integration-guide.md"), "utf8");
 for (const evidence of ["User data plane", "Memory contract", "Control plane and Server Agent", "Agent initialization sequence", "Administrator boundary", "memory_projection_conflict"]) {
   if (!integrationGuide.includes(evidence)) failures.push(`Missing platform-Agent integration guidance: ${evidence}`);
@@ -262,7 +269,7 @@ for (const evidence of ["ChannelIngressWorker", "createChannelWorkerCredential",
 const channelWorker = fs.readFileSync(path.join(root, "packages/channels/worker.mjs"), "utf8");
 for (const evidence of ["refreshInventory", "connection_generation", "lease", "receipt", "handleCallback"] ) if (!channelWorker.includes(evidence)) failures.push(`Channel Worker is missing ${evidence}`);
 const compose = fs.readFileSync(path.join(root, "infra/docker-compose.yml"), "utf8");
-for (const evidence of ["channel-worker:", "BAIRUI_CHANNEL_WORKER_TOKEN", 'command: ["node", "apps/channel-worker/server.mjs"]', "127.0.0.1:8790:8790"] ) if (!compose.includes(evidence)) failures.push(`Channel Worker composition is missing ${evidence}`);
+for (const evidence of ["BAIRUI_PLATFORM_IMAGE", "channel-worker:", "BAIRUI_CHANNEL_WORKER_TOKEN", 'command: ["node", "apps/channel-worker/server.mjs"]', "127.0.0.1:8790:8790"] ) if (!compose.includes(evidence)) failures.push(`Channel Worker composition is missing ${evidence}`);
 const nginx = fs.readFileSync(path.join(root, "infra/nginx/bairui.conf"), "utf8");
 for (const evidence of ["location /callbacks/wechat/", "proxy_pass http://127.0.0.1:8790"] ) if (!nginx.includes(evidence)) failures.push(`WeChat callback proxy is missing ${evidence}`);
 const channelGuide = fs.readFileSync(path.join(root, "docs/23-durable-channel-bridge.md"), "utf8");
