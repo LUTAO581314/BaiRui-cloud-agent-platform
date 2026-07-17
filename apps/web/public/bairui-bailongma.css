@@ -459,6 +459,13 @@
   letter-spacing: 0;
 }
 
+.bairui-onboarding-agent {
+  display: block;
+  margin-top: 10px;
+  color: #8ea5ba;
+  font-size: 12px;
+}
+
 .bairui-onboarding-form fieldset {
   margin: 20px 0 14px;
   border: 1px solid rgba(126, 153, 181, 0.24);
@@ -470,6 +477,32 @@
   color: #d7e5f2;
   padding: 0 6px;
 }
+
+.bairui-provider-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 10px 0 14px;
+  border: 1px solid rgba(126, 153, 181, 0.34);
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(126, 153, 181, 0.24);
+}
+
+.bairui-provider-mode label {
+  position: relative;
+  display: grid;
+  min-height: 38px;
+  place-items: center;
+  margin: 0;
+  background: #0b121c;
+  color: #9eb1c3;
+  cursor: pointer;
+}
+
+.bairui-provider-mode input { position: absolute; opacity: 0; }
+.bairui-provider-mode label:has(input:checked) { background: #1c5f9d; color: #fff; }
+.bairui-hermes-provider [data-agent-provider][hidden] { display: none; }
 
 .bairui-onboarding-form label {
   display: grid;

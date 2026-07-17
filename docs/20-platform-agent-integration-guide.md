@@ -246,8 +246,9 @@ runtime, shell, script, or SQL actions.
 
 ```text
 1. Platform creates organization, user, Agent, and uninitialized Runtime row.
-2. Administrator configures an encrypted provider channel and model policy.
-3. Owner requests Agent initialization.
+2. Owner configures an Agent-private Hermes Provider and encrypted model key,
+   or selects a platform-managed Provider allowed by model policy.
+3. Owner requests Agent initialization through the BaiLongma-hosted setup dialog.
 4. Platform creates deployment, Agent-scoped config revision, four encrypted secrets,
    and a deployment.provision command.
 5. Server Agent leases the command and Supervisor starts the Runtime Boundary and Hermes.

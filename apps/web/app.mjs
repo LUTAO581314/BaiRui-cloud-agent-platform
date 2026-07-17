@@ -48,6 +48,7 @@ import { createAuthRoutes } from "./routes/auth.mjs";
 import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
+import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
 
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
@@ -249,7 +250,7 @@ function authorizationEndpoint(value) {
 }
 
 function publicAuthorizationServices(policy) {
-  return Object.entries(USER_AUTHORIZATION_SERVICES).map(([id, item]) => ({ id, ...item, enabled: item.policy !== "userCustomKeysAllowed" || policy?.userCustomKeysAllowed === true }));
+  return Object.entries(USER_AUTHORIZATION_SERVICES).map(([id, item]) => ({ id, ...item, enabled: item.policy !== "userCustomKeysAllowed" || policy?.userCustomKeysAllowed !== false }));
 }
 
 function channelSecretHint(credentials) {
@@ -372,12 +373,15 @@ export function createPlatformApp(options) {
     const fallbackModels = [...new Set([legacy?.apiKeyEnvelope ? legacy.model : null, ...configuredChannels.map((item) => item.model)].filter(Boolean))];
     const allowedModels = policy?.allowedModels?.length ? policy.allowedModels : fallbackModels;
     const defaultModel = policy?.defaultModel && allowedModels.includes(policy.defaultModel) ? policy.defaultModel : legacy?.model && allowedModels.includes(legacy.model) ? legacy.model : allowedModels[0] ?? null;
-    return { configured: Boolean(legacy?.apiKeyEnvelope || configuredChannels.length), allowedModels, defaultModel, userCustomKeysAllowed: policy?.userCustomKeysAllowed === true, dailyTokenLimit: policy?.dailyTokenLimit ?? null, monthlyBudgetUsd: policy?.monthlyBudgetUsd ?? null };
+    return { configured: Boolean(legacy?.apiKeyEnvelope || configuredChannels.length), allowedModels, defaultModel, userCustomKeysAllowed: policy?.userCustomKeysAllowed !== false, dailyTokenLimit: policy?.dailyTokenLimit ?? null, monthlyBudgetUsd: policy?.monthlyBudgetUsd ?? null };
   }
+  const agentInitializationProvider = createAgentInitializationProvider({ repository, providerVault });
 
   async function agentOperationalView(principal, agent, runtimeInput) {
     const runtime = runtimeInput ?? await repository.getAgentRuntimeByAgent(agent.id);
-    const [models, rollups, commands] = await Promise.all([modelAccess(agent.organizationId), repository.listUsageRollups(agent.organizationId, agent.ownerUserId, agent.id), repository.listControlCommands(agent.organizationId)]);
+    const [models, rollups, commands, authorizations] = await Promise.all([modelAccess(agent.organizationId), repository.listUsageRollups(agent.organizationId, agent.ownerUserId, agent.id), repository.listControlCommands(agent.organizationId), repository.listAgentAuthorizations(agent.organizationId, agent.ownerUserId, agent.id)]);
+    const personalProvider = models.userCustomKeysAllowed ? authorizations.find((item) => item.service === "model-provider" && item.status === "stored" && item.credentialEnvelope && item.endpointUrl && item.metadata?.model) : null;
+    const effectiveModels = personalProvider ? { ...models, configured: true, defaultModel: personalProvider.metadata.model, source: "agent", provider: personalProvider.metadata.provider, keyMasked: personalProvider.credentialHint ? `****${personalProvider.credentialHint}` : null } : { ...models, source: models.configured ? "platform" : null };
     const now = Date.now();
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     const monthStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1).getTime();
@@ -393,10 +397,10 @@ export function createPlatformApp(options) {
     else if (activeChange) code = "upgrading";
     else if (["failed", "suspended", "stopped"].includes(runtime.status)) code = runtime.status;
     else if (runtimeOffline) code = "offline";
-    else if (!models.configured || !models.defaultModel) code = "model_unconfigured";
+    else if (!effectiveModels.configured || !effectiveModels.defaultModel) code = "model_unconfigured";
     else if (quotaExhausted) code = "quota_exhausted";
     else if (runtime.status === "degraded") code = "degraded";
-    return { ...agent, runtime: runtime ? { ...runtime, effectiveStatus: runtimeOffline ? "offline" : runtime.status } : null, operational: { code, runtimeOffline, activeChange: activeChange ? { action: activeChange.action, state: activeChange.state } : null, model: models, quota: { exhausted: quotaExhausted, dailyTokens, dailyTokenLimit: models.dailyTokenLimit, monthlyCostUsd, monthlyBudgetUsd: models.monthlyBudgetUsd } } };
+    return { ...agent, runtime: runtime ? { ...runtime, effectiveStatus: runtimeOffline ? "offline" : runtime.status } : null, operational: { code, runtimeOffline, activeChange: activeChange ? { action: activeChange.action, state: activeChange.state } : null, model: effectiveModels, quota: { exhausted: quotaExhausted, dailyTokens, dailyTokenLimit: models.dailyTokenLimit, monthlyCostUsd, monthlyBudgetUsd: models.monthlyBudgetUsd } } };
   }
 
   async function requireOperationalAgent(principal, agent) {
@@ -744,9 +748,11 @@ export function createPlatformApp(options) {
       if (initializeAgentMatch && method === "POST") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
         const agent = await ownedAgent(principal, initializeAgentMatch[1]);
-        const provider = await repository.getProviderConfiguration(principal.organizationId);
-        if (!provider?.apiKeyEnvelope || !provider.provider || !provider.model) return json(response, 409, { error: "model_provider_not_configured" });
         if (!providerVault) return json(response, 503, { error: "secret_storage_unavailable" });
+        const body = await readJson(request);
+        const initialization = await agentInitializationProvider(principal, agent, body);
+        const provider = initialization.provider;
+        if (agent.settings?.preferredModel !== provider.model) await repository.updateAgent(agent.id, { settings: { ...(agent.settings ?? {}), preferredModel: provider.model } });
         const runtimeSecret = randomBytes(32).toString("base64url");
         const hermesSecret = randomBytes(32).toString("base64url");
         const agentCredential = issueMachineToken();
@@ -765,7 +771,7 @@ export function createPlatformApp(options) {
           }
         });
         if (!result) return json(response, 404, { error: "agent_runtime_not_found" });
-        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.initialization.request", targetType: "agent", targetId: agent.id, metadata: { deploymentId: result.deployment?.id, commandId: result.command?.id } });
+        await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.initialization.request", targetType: "agent", targetId: agent.id, metadata: { deploymentId: result.deployment?.id, commandId: result.command?.id, providerSource: initialization.source, provider: provider.provider, model: provider.model, authorizationId: initialization.authorization?.id ?? null } });
         return json(response, 202, result);
       }
 

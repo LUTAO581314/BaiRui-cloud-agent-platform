@@ -242,7 +242,7 @@ async function loadProviders() {
   form.elements.defaultModel.value = policy?.defaultModel ?? "";
   form.elements.dailyTokenLimit.value = policy?.dailyTokenLimit ?? "";
   form.elements.monthlyBudgetUsd.value = policy?.monthlyBudgetUsd ?? "";
-  form.elements.userCustomKeysAllowed.checked = policy?.userCustomKeysAllowed === true;
+  form.elements.userCustomKeysAllowed.checked = policy?.userCustomKeysAllowed !== false;
 }
 
 async function loadIntegrations() {

@@ -9,15 +9,20 @@ memory.
 ## User initialization
 
 1. The user creates an owned Agent and isolated Runtime record.
-2. The user requests initialization.
-3. The platform verifies that an encrypted Provider configuration exists and a
-   healthy server has capacity.
+2. The user completes the Hermes model form with either an Agent-owned
+   OpenAI-compatible Provider, HTTPS Base URL, model id, and API key/token, or
+   explicitly selects a platform-managed Provider.
+3. The platform verifies ownership and model policy, encrypts an Agent-owned
+   credential when supplied, and verifies that a healthy server has capacity.
 4. The platform creates an Agent-scoped configuration revision, Deployment,
    desired state, and `deployment.provision` command in one transaction.
 5. The Agent remains `provisioning` until an Agent heartbeat proves that
    Hermes and the Runtime Boundary are healthy.
 
 No API reports `ready` merely because a command was queued.
+Agent-owned model credentials are scoped by organization, owner, and Agent.
+They are masked in every browser response and cannot be read by another user
+in the same organization or by the administrator fleet view.
 
 ## Fleet telemetry
 

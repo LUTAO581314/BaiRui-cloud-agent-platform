@@ -53,11 +53,11 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function initializeAgent(agent) {
+  async function submitAgentInitialization(agent, configuration = {}) {
     return requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/initialize`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: "{}"
+      body: JSON.stringify(configuration)
     });
   }
 
@@ -125,7 +125,7 @@
       initializing: ["Agent 正在初始化", "运行环境正在创建和验证，状态就绪后页面会自动刷新。"],
       upgrading: ["Agent 正在升级", "配置或版本正在应用，完成健康验证前暂时停止新任务。"],
       offline: ["Runtime 当前离线", "最近没有收到运行环境心跳。历史数据仍可在工作区查看。"],
-      model_unconfigured: ["模型尚未配置", "管理员需要完成模型渠道配置和应用验证。"],
+      model_unconfigured: ["模型尚未配置", "请为当前 Agent 配置 Hermes 模型密钥，或使用平台提供的模型。"],
       quota_exhausted: ["当前额度已用尽", "可在工作区查看 Token 和预算用量，等待额度恢复或管理员调整策略。"],
       failed: ["Agent 初始化失败", "可以重新提交初始化，失败原因会保留在 Agent 状态中。"],
       suspended: ["Agent 已暂停", "可在工作区恢复 Agent。"],
@@ -136,11 +136,137 @@
     return copies[code] || [initializationLabel(agent), "当前运行状态不允许创建新的会话或任务。"];
   }
 
+  const HERMES_PROVIDER_PRESETS = Object.freeze({
+    custom: { label: "OpenAI 兼容接口", baseUrl: "" },
+    openai: { label: "OpenAI", baseUrl: "https://api.openai.com/v1" },
+    openrouter: { label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" }
+  });
+
+  function modelAuthorization(authorizations) {
+    return (authorizations || []).find((item) => item.service === "model-provider" && item.status === "stored" && item.configured) || null;
+  }
+
+  function hermesProviderFields({ bootstrap, authorization }) {
+    const personalEnabled = bootstrap.models?.userCustomKeysAllowed !== false;
+    const platformEnabled = bootstrap.models?.configured === true;
+    const defaultMode = personalEnabled ? "agent" : "platform";
+    const provider = authorization?.metadata?.provider || "custom";
+    const baseUrl = authorization?.endpointUrl || HERMES_PROVIDER_PRESETS[provider]?.baseUrl || "";
+    const model = authorization?.metadata?.model || bootstrap.models?.defaultModel || "";
+    const modeOptions = [
+      personalEnabled ? `<label><input type="radio" name="modelMode" value="agent" ${defaultMode === "agent" ? "checked" : ""}>私有密钥</label>` : "",
+      platformEnabled ? `<label><input type="radio" name="modelMode" value="platform" ${defaultMode === "platform" ? "checked" : ""}>平台模型</label>` : ""
+    ].join("");
+    return `<fieldset class="bairui-hermes-provider"><legend>Hermes 模型</legend>
+      <div class="bairui-provider-mode">${modeOptions}</div>
+      <div data-agent-provider>
+        <label>Provider<select name="hermesProvider">${Object.entries(HERMES_PROVIDER_PRESETS).map(([id, item]) => `<option value="${id}" ${provider === id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+        <label>Base URL<input name="hermesBaseUrl" type="url" maxlength="2000" value="${escapeHtml(baseUrl)}" placeholder="https://api.example.com/v1"></label>
+        <label>模型 ID<input name="hermesModel" maxlength="200" value="${escapeHtml(model)}" placeholder="gpt-5.5"></label>
+        <label>认证类型<select name="hermesAuthType"><option value="api_key" ${authorization?.authType !== "bearer_token" ? "selected" : ""}>API Key</option><option value="bearer_token" ${authorization?.authType === "bearer_token" ? "selected" : ""}>Bearer Token</option></select></label>
+        <label>API Key / Token<input name="hermesApiKey" type="password" maxlength="64000" autocomplete="new-password" placeholder="${authorization?.credentialMasked ? `已保存 ${escapeHtml(authorization.credentialMasked)}，留空继续使用` : "输入模型接口密钥"}"></label>
+      </div>
+    </fieldset>`;
+  }
+
+  function bindHermesProviderFields(form, authorization) {
+    const provider = form.elements.hermesProvider;
+    const baseUrl = form.elements.hermesBaseUrl;
+    const apiKey = form.elements.hermesApiKey;
+    const updateMode = () => {
+      const personal = form.elements.modelMode?.value === "agent";
+      const fields = form.querySelector("[data-agent-provider]");
+      if (fields) fields.hidden = !personal;
+      for (const name of ["hermesProvider", "hermesBaseUrl", "hermesModel", "hermesAuthType", "hermesApiKey"]) if (form.elements[name]) form.elements[name].disabled = !personal;
+      if (baseUrl) baseUrl.required = personal;
+      if (form.elements.hermesModel) form.elements.hermesModel.required = personal;
+      if (apiKey) apiKey.required = personal && !authorization?.configured;
+    };
+    form.querySelectorAll('[name="modelMode"]').forEach((input) => input.addEventListener("change", updateMode));
+    provider?.addEventListener("change", () => {
+      const previousPreset = baseUrl?.dataset.preset || "";
+      const nextPreset = HERMES_PROVIDER_PRESETS[provider.value]?.baseUrl || "";
+      if (baseUrl && (!baseUrl.value || baseUrl.value === previousPreset)) baseUrl.value = nextPreset;
+      if (baseUrl) baseUrl.dataset.preset = nextPreset;
+    });
+    if (baseUrl) baseUrl.dataset.preset = HERMES_PROVIDER_PRESETS[provider?.value]?.baseUrl || "";
+    updateMode();
+  }
+
+  function hermesProviderPayload(form, authorization) {
+    const data = new FormData(form);
+    if (data.get("modelMode") === "platform") return { mode: "platform" };
+    return {
+      mode: "agent",
+      authorizationId: authorization?.id || undefined,
+      provider: data.get("hermesProvider"),
+      baseUrl: data.get("hermesBaseUrl"),
+      model: data.get("hermesModel"),
+      authType: data.get("hermesAuthType"),
+      apiKey: data.get("hermesApiKey")
+    };
+  }
+
+  function initializationError(error) {
+    const labels = {
+      model_provider_not_configured: "平台尚未配置可用模型，请改用私有密钥",
+      provider_api_key_required: "请输入 API Key 或 Token",
+      invalid_hermes_provider_configuration: "请完整填写 Provider、HTTPS Base URL 和模型 ID",
+      user_custom_keys_disabled: "当前组织没有开放用户私有模型密钥",
+      model_not_allowed: "该模型不在当前组织允许范围内",
+      model_provider_credential_invalid: "已保存的模型密钥无法解密，请重新输入",
+      no_agent_capacity: "暂无可用运行服务器，请稍后重试"
+    };
+    return labels[error.message] || `初始化失败：${error.message}`;
+  }
+
+  async function initializeAgent(agent) {
+    await readyDom();
+    const [bootstrap, authorizationResult] = await Promise.all([
+      requestJson("/api/user/bootstrap"),
+      requestJson(`/api/user/agents/${encodeURIComponent(agent.id)}/authorizations`)
+    ]);
+    const authorization = modelAuthorization(authorizationResult.authorizations);
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "bairui-onboarding";
+      overlay.innerHTML = `<form class="bairui-onboarding-form">
+        <img src="/assets/bairui-agent-logo.png" alt="">
+        <span class="bairui-onboarding-agent">${escapeHtml(agent.name)}</span>
+        <h1>初始化 Hermes</h1>
+        ${hermesProviderFields({ bootstrap, authorization })}
+        <p class="bairui-onboarding-error" role="alert"></p>
+        <div class="bairui-onboarding-actions"><button type="button" data-later>稍后</button><button type="submit">保存并初始化</button></div>
+      </form>`;
+      document.body.appendChild(overlay);
+      const form = overlay.querySelector("form");
+      const error = overlay.querySelector(".bairui-onboarding-error");
+      const later = overlay.querySelector("[data-later]");
+      bindHermesProviderFields(form, authorization);
+      later.addEventListener("click", () => { overlay.remove(); resolve(null); });
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submit = form.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        later.disabled = true;
+        error.textContent = "";
+        try {
+          const result = await submitAgentInitialization(agent, hermesProviderPayload(form, authorization));
+          overlay.remove();
+          resolve(result);
+        } catch (cause) {
+          error.textContent = initializationError(cause);
+          submit.disabled = false;
+          later.disabled = false;
+        }
+      });
+    });
+  }
+
   async function createAgentDialog() {
     await readyDom();
     const bootstrap = await requestJson("/api/user/bootstrap");
-    const modelOptions = (bootstrap.models?.allowedModels ?? []).map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("");
-    const authorizationOptions = (bootstrap.authorizationServices ?? []).filter((item) => item.enabled).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} - ${escapeHtml(item.purpose)}</option>`).join("");
+    const authorizationOptions = (bootstrap.authorizationServices ?? []).filter((item) => item.enabled && item.id !== "model-provider").map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} - ${escapeHtml(item.purpose)}</option>`).join("");
     return new Promise((resolve, reject) => {
       let createdAgent = null;
       let authorizationStored = false;
@@ -153,7 +279,7 @@
         <label>头像 URL<input name="avatarUrl" type="url" maxlength="2000" placeholder="https://example.com/avatar.png"></label>
         <label>描述<textarea name="description" maxlength="500" rows="3" placeholder="这个 Agent 主要帮你做什么"></textarea></label>
         <label>身份与原则<textarea name="soulMarkdown" maxlength="50000" rows="7" placeholder="# Identity\n\n说明 Agent 的身份、语气和工作原则"></textarea></label>
-        <label>模型<select name="preferredModel"><option value="">管理员默认模型</option>${modelOptions}</select></label>
+        ${hermesProviderFields({ bootstrap, authorization: null })}
         ${authorizationOptions ? `<fieldset><legend>第三方授权（可选）</legend><label>服务<select name="authorizationService"><option value="">暂不配置</option>${authorizationOptions}</select></label><label>授权名称<input name="authorizationLabel" maxlength="100" value="首次初始化"></label><label>HTTPS 接口地址<input name="authorizationEndpoint" type="url" maxlength="2000"></label><label>Provider<input name="authorizationProvider" maxlength="200"></label><label>模型<input name="authorizationModel" maxlength="200"></label><label>密钥或 Token<input name="authorizationSecret" type="password" maxlength="64000" autocomplete="new-password"></label></fieldset>` : ""}
         <div class="bairui-onboarding-progress" hidden><span></span><strong></strong></div>
         <p class="bairui-onboarding-error" role="alert"></p>
@@ -165,6 +291,7 @@
       const progress = overlay.querySelector(".bairui-onboarding-progress");
       const later = overlay.querySelector("[data-later]");
       const polling = new AbortController();
+      bindHermesProviderFields(form, null);
       later.addEventListener("click", () => {
         polling.abort();
         overlay.remove();
@@ -181,7 +308,7 @@
             const result = await requestJson("/api/user/agents", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: data.get("name"), avatarUrl: data.get("avatarUrl"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown"), preferredModel: data.get("preferredModel") })
+              body: JSON.stringify({ name: data.get("name"), avatarUrl: data.get("avatarUrl"), description: data.get("description"), soulMarkdown: data.get("soulMarkdown") })
             });
             createdAgent = result.agent;
           }
@@ -196,11 +323,10 @@
               });
             }
             authorizationStored = true;
-            for (const field of form.elements) if (field.name) field.disabled = true;
           }
           progress.hidden = false;
           progress.querySelector("strong").textContent = "提交初始化请求";
-          await initializeAgent(createdAgent);
+          await submitAgentInitialization(createdAgent, hermesProviderPayload(form, null));
           later.hidden = false;
           const ready = await waitForAgentReady(createdAgent.id, (agent) => {
             progress.querySelector("strong").textContent = initializationLabel(agent);
@@ -209,15 +335,13 @@
           resolve(ready);
         } catch (cause) {
           const labels = {
-            model_provider_not_configured: "管理员尚未配置模型供应商",
-            no_agent_capacity: "暂无可用运行服务器，请稍后重试",
             model_unconfigured: "管理员尚未配置可用模型",
             quota_exhausted: "当前组织额度已用尽",
             offline: "Runtime 已离线，正在等待服务器恢复",
             agent_initialization_timeout: "初始化仍在后台进行，请稍后从 Agent 页面查看"
           };
           if (cause.name === "AbortError") return;
-          error.textContent = labels[cause.message] || `初始化失败：${cause.message}`;
+          error.textContent = labels[cause.message] || initializationError(cause);
           submit.disabled = false;
           submit.textContent = createdAgent ? "重试初始化" : "创建并初始化";
           if (cause.message === "authentication_required") reject(cause);
@@ -852,7 +976,12 @@
         initialize.disabled = true;
         initialize.textContent = "正在提交";
         try {
-          await initializeAgent(agent);
+          const accepted = await initializeAgent(agent);
+          if (!accepted) {
+            initialize.disabled = false;
+            initialize.textContent = failure.code === "failed" ? "重试初始化" : "初始化 Agent";
+            return;
+          }
           await waitForAgentReady(agent.id, (current) => {
             blocker.querySelector("h1").textContent = initializationLabel(current);
           });
@@ -863,6 +992,11 @@
         }
       });
       actions.appendChild(initialize);
+      const promptKey = `bairui.initializationPrompt.${agent.id}`;
+      if (failure.code === "uninitialized" && !sessionStorage.getItem(promptKey)) {
+        sessionStorage.setItem(promptKey, "shown");
+        setTimeout(() => initialize.click(), 0);
+      }
     }
     if (failure.code === "deleted") {
       const create = document.createElement("button");
@@ -923,7 +1057,12 @@
         status.disabled = true;
         status.textContent = "提交初始化请求";
         try {
-          await initializeAgent(agent);
+          const accepted = await initializeAgent(agent);
+          if (!accepted) {
+            status.disabled = false;
+            status.textContent = initializationLabel(agent);
+            return;
+          }
           await waitForAgentReady(agent.id, (current) => { status.textContent = initializationLabel(current); });
           location.reload();
         } catch (error) {
