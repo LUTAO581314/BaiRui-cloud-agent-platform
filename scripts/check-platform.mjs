@@ -175,6 +175,8 @@ for (const forbidden of ["window.fetch =", "window.EventSource ="]) {
 const bailongmaServer = fs.readFileSync(path.join(root, "apps/web/server.mjs"), "utf8");
 if (!bailongmaServer.includes('path.join(repoRoot, "build", "bailongma-ui")')) failures.push("Runtime must serve the prebuilt BaiLongma artifact");
 if (bailongmaServer.includes('path.join(repoRoot, "upstreams", "bailongma")')) failures.push("Runtime must not transform or serve the BaiLongma source tree directly");
+const platformDockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+for (const evidence of ["/usr/local/lib/node_modules/npm", "/usr/local/lib/node_modules/corepack"]) if (!platformDockerfile.includes(evidence)) failures.push(`Platform image must remove unused package manager content: ${evidence}`);
 const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/build.mjs"), "utf8");
 for (const evidence of [".bairui-build.json", "transformBailongmaHostApp", "transformBailongmaHostChat", "transformBailongmaHostVoiceWake", "BUILD_INTEGRITY_FILES"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);

@@ -12,8 +12,13 @@ process and the independent Channel Worker.
 
 The image receives OCI revision and dependency labels, an SPDX JSON SBOM, a
 GitHub provenance attestation and a blocking Trivy scan for fixed high or
-critical vulnerabilities. The integration job pulls the exact digest and
-starts PostgreSQL, Platform and Channel Worker. It requires:
+critical vulnerabilities. The final runtime stage removes npm and Corepack
+because neither Platform nor
+Channel Worker installs packages at runtime. Build stages retain the package
+manager; the production image does not carry that unnecessary attack surface.
+
+The integration job pulls the exact digest and starts PostgreSQL, Platform and
+Channel Worker. It requires:
 
 - Platform `/ready` to report PostgreSQL readiness;
 - Channel Worker `/ready` to report a successful dynamic inventory load;
