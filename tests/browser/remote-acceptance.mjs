@@ -89,6 +89,20 @@ async function ordinaryDesktop(browser, fixture) {
   assert.equal((await page.request.get(`${baseUrl}/api/admin/overview`)).status(), 403);
   assert.equal((await page.request.get(`${baseUrl}/admin`)).status(), 404);
 
+  await page.evaluate(() => {
+    window.__bairuiInitializationDialog = window.bairuiPlatform.initializeAgent({ id: "agent_remote", name: "Hermes Memory Agent" });
+  });
+  const initializationDialog = page.locator(".bairui-onboarding-form");
+  await initializationDialog.getByText("初始化 Hermes", { exact: true }).waitFor();
+  assert.equal(await initializationDialog.locator('input[name="modelMode"][value="agent"]').count(), 1);
+  assert.equal(await initializationDialog.locator('input[name="modelMode"][value="platform"]').count(), 1);
+  for (const field of ["hermesProvider", "hermesBaseUrl", "hermesModel", "hermesAuthType", "hermesApiKey"]) assert.equal(await initializationDialog.locator(`[name="${field}"]`).count(), 1, `missing Hermes initialization field: ${field}`);
+  const modalLayers = await page.evaluate(() => ({ overlay: Number(getComputedStyle(document.querySelector(".bairui-onboarding")).zIndex), toolbar: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex) }));
+  assert.ok(modalLayers.overlay > modalLayers.toolbar, `Hermes initialization must cover the Agent toolbar: ${JSON.stringify(modalLayers)}`);
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-hermes-initialization.png"), fullPage: true });
+  await initializationDialog.locator("[data-later]").click();
+  await initializationDialog.waitFor({ state: "detached" });
+
   const views = ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"];
   const workspaceButton = page.locator('.bairui-platform-tools [data-action="workspace"]');
   const hitTest = await workspaceButton.evaluate((button) => {
@@ -187,6 +201,17 @@ async function ordinaryMobile(browser, fixture) {
   const page = await context.newPage();
   await login(page, baseUrl, fixtureCredentials.user, "/app");
   await page.locator("#graph").waitFor({ state: "visible" });
+  await page.evaluate(() => { window.__bairuiMobileInitializationDialog = window.bairuiPlatform.initializeAgent({ id: "agent_remote", name: "Hermes Memory Agent" }); });
+  const initializationDialog = page.locator(".bairui-onboarding-form");
+  await initializationDialog.getByText("初始化 Hermes", { exact: true }).waitFor();
+  const initializationGeometry = await initializationDialog.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(initializationGeometry.left >= 0 && initializationGeometry.top >= 0 && initializationGeometry.right <= initializationGeometry.viewportWidth && initializationGeometry.bottom <= initializationGeometry.viewportHeight, `mobile Hermes initialization must remain inside the viewport: ${JSON.stringify(initializationGeometry)}`);
+  await page.screenshot({ path: path.join(artifacts, "user-mobile-hermes-initialization.png"), fullPage: true });
+  await initializationDialog.locator("[data-later]").click();
+  await initializationDialog.waitFor({ state: "detached" });
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator("#panel-l1-tab").click();
   await page.waitForFunction(() => {

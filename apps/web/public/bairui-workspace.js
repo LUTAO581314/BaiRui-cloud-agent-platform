@@ -189,7 +189,7 @@
       const values = await openForm({ heading: "编辑 Agent", fields: [{ name: "name", label: "名称", value: agent.name, required: true, maxLength: 64 }, { name: "description", label: "描述", type: "textarea", value: agent.description, maxLength: 500 }, { name: "soulMarkdown", label: "身份与原则", type: "textarea", value: agent.soulMarkdown, rows: 10, maxLength: 50000 }] });
       if (values) { await bridge.request(agentApi(), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); toast("Agent 资料已保存", "success"); renderAgents(); }
     });
-    content.querySelector("[data-init]")?.addEventListener("click", async () => { await bridge.initializeAgent(agent); toast("初始化请求已提交"); renderAgents(); });
+    content.querySelector("[data-init]")?.addEventListener("click", async () => { if (await bridge.initializeAgent(agent)) { toast("初始化请求已提交"); renderAgents(); } });
     content.querySelector("[data-pause]")?.addEventListener("click", async () => { await bridge.request(agentApi("/lifecycle"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "pause" }) }); toast("暂停命令已提交，等待服务器回执"); renderAgents(); });
     content.querySelector("[data-resume]")?.addEventListener("click", async () => { await bridge.request(agentApi("/lifecycle"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "resume" }) }); toast("恢复命令已提交，等待服务器回执"); renderAgents(); });
     content.querySelector("[data-remove]").addEventListener("click", async () => {

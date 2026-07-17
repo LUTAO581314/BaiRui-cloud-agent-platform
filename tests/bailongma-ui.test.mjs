@@ -68,6 +68,8 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
   assert.match(adapter, /quota_exhausted/);
   assert.match(adapter, /runtime_offline/);
   assert.match(adapter, /\/api\/user\/bootstrap/);
+  for (const evidence of ["初始化 Hermes", "hermesApiKey", "hermesBaseUrl", "hermesModel", "modelMode", "私有密钥", "平台模型", "bairui.initializationPrompt"]) assert.match(adapter, new RegExp(evidence));
+  assert.match(adapter, /submitAgentInitialization\(agent, configuration/);
   assert.doesNotMatch(adapter, /memory-sync/);
   assert.match(adapter, /Object\.defineProperty\(window, "BairuiHostAdapter"/);
   assert.match(adapter, /approval\.request/);

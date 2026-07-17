@@ -236,7 +236,7 @@ export async function startBrowserFixture() {
 
   const providerVault = new SecretEnvelope("remote-browser-provider-key-at-least-32-characters");
   await repository.upsertProviderConfiguration({ organizationId: organization.id, provider: "compatible", baseUrl: "https://models.example.test/v1", model: "fixture/hermes", apiKeyEnvelope: providerVault.seal("fixture-provider-key"), keyHint: "test", updatedBy: admin.id });
-  await repository.upsertModelPolicy({ organizationId: organization.id, allowedModels: ["fixture/hermes"], defaultModel: "fixture/hermes", userCustomKeysAllowed: false, updatedBy: admin.id });
+  await repository.upsertModelPolicy({ organizationId: organization.id, allowedModels: ["fixture/hermes"], defaultModel: "fixture/hermes", userCustomKeysAllowed: true, updatedBy: admin.id });
   const note = createObsidianNote({ title: "Hermes memory mapping", body: "PostgreSQL stores the canonical Obsidian note. See [[Runtime Boundary]].", tags: ["architecture", "memory"], wikilinks: ["Runtime Boundary"], memoryKind: "project", importance: 5, hermesTarget: "memory" });
   await repository.createObsidianNote({ id: "note_remote", ...note, organizationId: organization.id, userId: owner.id, agentId: ownerAgent.id });
   const linked = createObsidianNote({ title: "Runtime Boundary", body: "Hermes receives a bounded projection through signed memory operations.", tags: ["hermes"], memoryKind: "knowledge", importance: 4, hermesTarget: "memory" });

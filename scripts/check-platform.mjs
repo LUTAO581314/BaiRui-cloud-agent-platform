@@ -55,9 +55,11 @@ const required = [
   "packages/db/migrations/016_agent_authorizations.sql",
   "packages/db/migrations/017_memory_projection_outbox.sql",
   "packages/db/migrations/018_durable_channel_delivery.sql",
+  "docs/README.md",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
+  "docs/HERMES_FRONTEND_CAPABILITY_MAP.md",
   "docs/22-platform-route-boundaries.md",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
@@ -128,6 +130,9 @@ const required = [
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
+for (const file of ["docs/00-platform-rebuild-plan.md", "docs/01-server-management-plan.md", "docs/02-license-and-deployment-flow.md", "docs/04-repository-cleanup-policy.md", "docs/07-bairui-framework-alignment.md", "docs/09-capability-matrix.md", "docs/09-operations-runbook.md"]) {
+  if (fs.existsSync(path.join(root, file))) failures.push(`Obsolete platform document must be removed: ${file}`);
+}
 if (fs.existsSync(path.join(root, "docs/06-server-agent-p0.md"))) failures.push("Obsolete P0 server-agent document must be removed");
 if (fs.existsSync(path.join(root, "apps/web/public/user.js"))) failures.push("Legacy handcrafted user frontend must be removed");
 const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -158,6 +163,10 @@ if (installScript.includes(":latest")) failures.push("Product installer must not
 const integrationGuide = fs.readFileSync(path.join(root, "docs/20-platform-agent-integration-guide.md"), "utf8");
 for (const evidence of ["User data plane", "Memory contract", "Control plane and Server Agent", "Agent initialization sequence", "Administrator boundary", "memory_projection_conflict"]) {
   if (!integrationGuide.includes(evidence)) failures.push(`Missing platform-Agent integration guidance: ${evidence}`);
+}
+const hermesFrontendMap = fs.readFileSync(path.join(root, "docs/HERMES_FRONTEND_CAPABILITY_MAP.md"), "utf8");
+for (const evidence of ["abc22cdf1a5c0fe30bf1a226bfe3caf489e8316e", "完整初始化流程", "Owner-scoped Management Bridge", "明确不向普通用户暴露", "HERMES_API_SERVER_KEY", "完整验收标准"]) {
+  if (!hermesFrontendMap.includes(evidence)) failures.push(`Missing Hermes frontend capability guidance: ${evidence}`);
 }
 const server = fs.existsSync(path.join(root, "apps/web/app.mjs")) ? fs.readFileSync(path.join(root, "apps/web/app.mjs"), "utf8") : "";
 for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBERS_MANAGE", "PERMISSIONS.PLATFORM_PROVIDER_SETTINGS_MANAGE", "invalid_agent_credential", "statusCode = 401"]) {

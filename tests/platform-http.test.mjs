@@ -218,6 +218,8 @@ test("users can create and manage only their own isolated Agents", async (t) => 
   });
   assert.equal(update.status, 200);
   assert.equal((await update.json()).agent.name, "Updated Agent");
+  assert.equal((await fetch(`${context.baseUrl}/api/user/agents/${created.id}/initialize`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: "{}" })).status, 404);
+  assert.equal((await fetch(`${context.baseUrl}/api/user/agents/${created.id}/authorizations`, { headers: { cookie: userCookie } })).status, 404);
 });
 
 test("user bootstrap exposes model policy without Provider secrets", async (t) => {
@@ -231,6 +233,7 @@ test("user bootstrap exposes model policy without Provider secrets", async (t) =
   const bootstrap = await (await fetch(`${context.baseUrl}/api/user/bootstrap`, { headers: { cookie: ownerCookie } })).json();
   assert.deepEqual(bootstrap.models.allowedModels, ["example/model"]);
   assert.equal(bootstrap.models.defaultModel, "example/model");
+  assert.equal(bootstrap.authorizationServices.find((item) => item.id === "model-provider").enabled, false);
   assert.equal(bootstrap.memoryFormat, "obsidian-markdown");
   assert.doesNotMatch(JSON.stringify(bootstrap), /apiKey|api_key|Envelope|bootstrap-provider-secret/i);
 
@@ -259,6 +262,44 @@ test("Agent initialization queues a deployment provision command and never repor
   assert.equal(result.runtime.status, "provisioning");
   assert.equal(result.command.action, "deployment.provision");
   assert.equal(result.command.arguments.agent_id, context.agent.id);
+});
+
+test("Agent owners initialize Hermes with an encrypted private model key", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  await context.repository.upsertModelPolicy({ organizationId: "org_a", allowedModels: ["private/gpt"], defaultModel: null, userCustomKeysAllowed: true, updatedBy: "root" });
+  await context.repository.createServer({ id: "server_private_model", organizationId: "org_a", name: "Private model host", status: "healthy" });
+  const ownerCookie = await login(context.baseUrl, "user@example.test");
+  const peerCookie = await login(context.baseUrl, "same-org@example.test");
+  const secret = "agent-private-model-token";
+  const endpoint = `${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`;
+  const payload = { mode: "agent", provider: "custom", baseUrl: "https://private-model.example.test/v1", model: "private/gpt", authType: "bearer_token", apiKey: secret };
+
+  assert.equal((await fetch(endpoint, { method: "POST", headers: { cookie: peerCookie, "content-type": "application/json" }, body: JSON.stringify(payload) })).status, 404);
+  const response = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify(payload) });
+  assert.equal(response.status, 202);
+  const responseText = await response.text();
+  assert.doesNotMatch(responseText, new RegExp(secret));
+
+  const authorizations = await context.repository.listAgentAuthorizations("org_a", "user_a", context.agent.id);
+  assert.equal(authorizations.length, 1);
+  assert.equal(authorizations[0].service, "model-provider");
+  assert.equal(authorizations[0].authType, "bearer_token");
+  assert.equal(authorizations[0].endpointUrl, "https://private-model.example.test/v1");
+  assert.doesNotMatch(JSON.stringify(authorizations[0]), new RegExp(secret));
+  const [revision] = await context.repository.listConfigRevisions("org_a", context.agent.id);
+  assert.deepEqual(revision.configDocument.provider, { provider: "custom", base_url: "https://private-model.example.test/v1", model: "private/gpt" });
+  assert.equal(new SecretEnvelope(providerEncryptionKey).open(revision.secretEnvelope.providerApiKey), secret);
+  assert.equal((await context.repository.getAgent(context.agent.id)).settings.preferredModel, "private/gpt");
+
+  const [leased] = await context.repository.leaseControlCommands({ serverId: "server_private_model", limit: 1, leaseSeconds: 120 });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_private_model", attempt: leased.attempt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_private_model", attempt: leased.attempt, state: "running" });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_private_model", attempt: leased.attempt, state: "failed", errorCode: "container_failed", errorSummary: "Provision failed" });
+  const retry = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ mode: "agent" }) });
+  assert.equal(retry.status, 202);
+  assert.equal((await context.repository.listAgentAuthorizations("org_a", "user_a", context.agent.id)).length, 1);
+  assert.equal((await context.repository.listConfigRevisions("org_a", context.agent.id)).length, 1);
 });
 
 test("a failed Agent initialization can be retried without duplicating configuration", async (t) => {

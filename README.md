@@ -75,50 +75,19 @@ flowchart LR
   Boundary --> Hermes
 ```
 
-## Repository Direction
+## Current Deployable Boundaries
 
-Target structure:
+- `apps/web`: Node ESM Platform BFF, user surface and independent administrator surface.
+- `packages/bailongma-ui`: deterministic build from the pinned BaiLongma source plus explicit BaiRui adaptations.
+- `packages/db`: PostgreSQL repository and versioned SQL migrations.
+- `apps/channel-worker`: durable external-channel worker.
+- `server-agent`: customer-host enrollment, observations and allow-listed operations.
+- `distribution`: immutable one-command product release and verification.
+- `BaiRui-agent`: Runtime Boundary, Hermes Bridge, five-layer modules and upstream registry.
 
-```text
-BaiRui-cloud-agent-platform/
-  apps/
-    web/                 # website, customer console, admin console
-  packages/
-    db/                  # platform database schema and migrations
-    deployment/          # customer deployment bundle generation
-    license/             # license generation and validation helpers
-    server-protocol/     # heartbeat, acceptance, platform protocol
-    ui/                  # shared platform UI components
-  server-agent/
-    installer/
-    agent/
-    systemd/
-  infra/
-    docker/
-    nginx/
-    scripts/
-  docs/
-    00-platform-rebuild-plan.md
-    01-server-management-plan.md
-    02-license-and-deployment-flow.md
-    03-hermes-platform-contract.md
-    07-bairui-framework-alignment.md
-```
-
-## Recommended Technical Direction
-
-Platform:
-
-- Next.js;
-- TypeScript;
-- PostgreSQL;
-- Prisma or Drizzle;
-- Tailwind CSS;
-- shadcn/ui;
-- Auth.js or equivalent auth layer;
-- Docker Compose;
-- GitHub Actions;
-- Playwright.
+The authoritative implementation order is
+`BaiRui-agent/docs/AI-DEVELOPMENT-PLAN.md`. This repository must not introduce a
+second plan or an aspirational framework stack that differs from the code.
 
 Database policy:
 
@@ -153,7 +122,7 @@ PostgreSQL and HTTPS, registers the local Server Agent through the Platform API,
 and preserves the previous release for rollback:
 
 ```sh
-curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.6/install.sh | sudo bash -s -- --domain agent.example.com
+curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.7/install.sh | sudo bash -s -- --domain agent.example.com
 ```
 
 The release manifest binds Platform, Runtime, Hermes, PostgreSQL and Caddy by
@@ -196,11 +165,11 @@ npm run server-agent:acceptance
 - Ed25519 licenses and hash-verified delivery bundles;
 - PostgreSQL migrations, Docker deployment, and GitHub CI container builds.
 
-The current production control path is observation-only. The complete protocol,
-PostgreSQL control model, security boundary, and delivery sequence are defined
-in `docs/10-control-plane-architecture.md` through
-`docs/13-control-plane-operations.md`. A configuration or release is not
-reported as applied until the server agent executes and verifies it.
+The versioned control protocol, PostgreSQL control model, security boundary and
+delivery sequence are defined in `docs/10-control-plane-architecture.md`
+through `docs/17-agent-resource-telemetry.md`. A configuration, operation or
+release is not reported as applied until the Server Agent executes and verifies
+it. See `docs/README.md` for the current document index.
 
 Provider credentials and customer connector tokens remain deployment secrets.
 CI verifies fixtures and authorization boundaries without invoking paid models.
