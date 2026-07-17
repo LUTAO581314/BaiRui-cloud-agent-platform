@@ -426,7 +426,7 @@
 
 .bairui-onboarding {
   position: fixed;
-  z-index: 4000;
+  z-index: 2147483644;
   inset: 0;
   display: grid;
   place-items: center;
@@ -872,6 +872,10 @@ body.bairui-streaming #send-btn {
 .bw-toast-error { border-color: #a84e47; }
 
 @media (max-width: 900px) {
+  .bairui-onboarding-form {
+    max-height: calc(100dvh - 96px);
+  }
+
   .bairui-platform-tools {
     top: 10px;
     right: 10px;
