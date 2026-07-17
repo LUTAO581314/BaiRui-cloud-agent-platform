@@ -135,7 +135,7 @@ if (packageDocument.scripts?.["test:browser:remote"] !== "node tests/browser/rem
 if (packageDocument.scripts?.["bailongma:build"] !== "node scripts/build-bailongma-ui.mjs") failures.push("Missing deterministic BaiLongma build script");
 if (packageDocument.scripts?.["platform:dev"] !== "node scripts/start-platform-dev.mjs") failures.push("Platform development must build BaiLongma before serving it");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
-for (const evidence of ["browser-acceptance:", "playwright install --with-deps chromium", "npm run test:browser:remote", "actions/upload-artifact@v4"]) {
+for (const evidence of ["browser-acceptance:", "playwright install --with-deps chromium", "npm run test:browser:remote", "actions/upload-artifact@v4", "distribution:", "shellcheck distribution/install.sh", "--verify-only"]) {
   if (!workflow.includes(evidence)) failures.push(`Missing remote browser workflow evidence: ${evidence}`);
 }
 const releaseWorkflow = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
