@@ -9,9 +9,9 @@ import { createReleaseManifest, currentVersion, validateReleaseManifest } from "
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const digest = (name) => `ghcr.io/lutao581314/${name}@sha256:${"a".repeat(64)}`;
 const input = {
-  version: "0.1.0-rc.2",
+  version: "0.1.0-rc.3",
   generatedAt: "2026-07-17T00:00:00.000Z",
-  contractsVersion: "1.2.0",
+  contractsVersion: "1.2.1",
   platformCommit: "1".repeat(40),
   agentCommit: "2".repeat(40),
   hermesCommit: "3".repeat(40),
@@ -27,8 +27,10 @@ const input = {
 test("distribution version is a single explicit prerelease", () => {
   const version = currentVersion(root);
   const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(version, "0.1.0-rc.2");
+  const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
+  assert.equal(version, "0.1.0-rc.3");
   assert.equal(packageDocument.version, version);
+  assert.match(installer, new RegExp(`^readonly INSTALLER_VERSION="${version.replaceAll(".", "\\.")}"$`, "m"));
 });
 
 test("release manifest binds all deployable images by digest", () => {
@@ -49,7 +51,16 @@ test("installer and Compose prohibit latest tags and include the complete deploy
   const compose = fs.readFileSync(path.join(root, "distribution/compose.yaml"), "utf8");
   assert.doesNotMatch(installer + compose, /:latest\b/);
   for (const service of ["postgres:", "platform:", "channel-worker:", "caddy:", "server-agent:"]) assert.match(compose, new RegExp(`^  ${service}`, "m"));
-  for (const evidence of ["sha256sum --check --strict", "register_server_agent", "rollback_on_error", "docker pull", "wait_for_platform"]) assert.match(installer, new RegExp(evidence));
+  for (const evidence of ["sha256sum --check --strict", "register_server_agent", "rollback_on_error", "docker pull", "wait_for_platform", "verify_running_images", "Config.Image"]) assert.match(installer, new RegExp(evidence.replace(".", "\\.")));
+});
+
+test("installer force-recreates services after registration and while rolling back", () => {
+  const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
+  assert.match(installer, /compose up -d --wait postgres[\s\S]*compose up -d --no-deps --force-recreate --wait platform[\s\S]*compose up -d --no-deps --force-recreate --wait channel-worker caddy[\s\S]*register_server_agent[\s\S]*compose --profile node up -d --no-deps --force-recreate server-agent[\s\S]*verify_running_images/);
+  const rollback = installer.slice(installer.indexOf("rollback_on_error()"), installer.indexOf("wait_for_platform()"));
+  assert.match(rollback, /--force-recreate platform/);
+  assert.match(rollback, /--force-recreate channel-worker caddy/);
+  assert.match(rollback, /--force-recreate server-agent/);
 });
 
 test("generated license PEM survives the sourceable Compose environment", { skip: process.platform === "win32" }, () => {

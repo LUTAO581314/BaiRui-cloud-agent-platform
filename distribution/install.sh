@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 readonly REPOSITORY="LUTAO581314/BaiRui-cloud-agent-platform"
-readonly INSTALLER_VERSION="0.1.0-rc.2"
+readonly INSTALLER_VERSION="0.1.0-rc.3"
 
 RELEASE_VERSION="$INSTALLER_VERSION"
 DOMAIN=""
@@ -212,7 +212,9 @@ rollback_on_error() {
     cp "$ROLLBACK_DIR/Caddyfile" "$INSTALL_DIR/Caddyfile"
     cp "$ROLLBACK_DIR/release-manifest.json" "$INSTALL_DIR/release-manifest.json"
     cp "$ROLLBACK_DIR/bairui.env" "$CONFIG_DIR/bairui.env"
-    compose --profile node up -d --remove-orphans || true
+    compose up -d --no-deps --force-recreate platform || true
+    compose up -d --no-deps --force-recreate channel-worker caddy || true
+    compose --profile node up -d --no-deps --force-recreate server-agent || true
   fi
   exit "$status"
 }
@@ -224,6 +226,24 @@ wait_for_platform() {
     sleep 2
   done
   fail "Platform readiness did not pass at $url"
+}
+
+assert_container_image() {
+  local service="$1" expected="$2" container_id actual
+  container_id="$(compose ps -q "$service")"
+  [[ -n "$container_id" ]] || fail "$service container is missing"
+  actual="$(docker inspect --format '{{.Config.Image}}' "$container_id")"
+  [[ "$actual" == "$expected" ]] || fail "$service is not running the release manifest image"
+}
+
+verify_running_images() {
+  # shellcheck disable=SC1090,SC1091
+  source "$CONFIG_DIR/bairui.env"
+  assert_container_image postgres "$BAIRUI_POSTGRES_IMAGE"
+  assert_container_image platform "$BAIRUI_PLATFORM_IMAGE"
+  assert_container_image channel-worker "$BAIRUI_PLATFORM_IMAGE"
+  assert_container_image caddy "$BAIRUI_CADDY_IMAGE"
+  assert_container_image server-agent "$BAIRUI_PLATFORM_IMAGE"
 }
 
 register_server_agent() {
@@ -275,12 +295,15 @@ compose pull postgres platform channel-worker caddy
 docker pull "$(jq -r .images.runtime "$INSTALL_DIR/release-manifest.json")"
 docker pull "$(jq -r .images.hermes "$INSTALL_DIR/release-manifest.json")"
 DEPLOYMENT_STARTED=1
-compose up -d --wait postgres platform channel-worker caddy
+compose up -d --wait postgres
+compose up -d --no-deps --force-recreate --wait platform
+compose up -d --no-deps --force-recreate --wait channel-worker caddy
 wait_for_platform
 register_server_agent
-compose --profile node up -d server-agent
+compose --profile node up -d --no-deps --force-recreate server-agent
 sleep 3
 [[ "$(compose ps --status running --services | grep -c '^server-agent$')" == "1" ]] || fail "Server Agent is not running"
+verify_running_images
 compose exec -T platform node -e 'fetch("http://127.0.0.1:3000/ready").then(async r=>{const b=await r.json();if(!r.ok||b.ready!==true||b.backend!=="postgresql")process.exit(1)}).catch(()=>process.exit(1))'
 compose exec -T channel-worker node -e 'fetch("http://127.0.0.1:8790/ready").then(async r=>{const b=await r.json();if(!r.ok||b.ready!==true)process.exit(1)}).catch(()=>process.exit(1))'
 DEPLOYMENT_STARTED=0

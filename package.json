@@ -1,13 +1,13 @@
 {
   "name": "bairui-cloud-agent-platform",
   "private": true,
-  "version": "0.1.0-rc.2",
+  "version": "0.1.0-rc.3",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
-    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v1.2.0",
+    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v1.2.1",
     "@larksuiteoapi/node-sdk": "1.71.1",
     "@tencent-connect/qqbot-connector": "1.1.0",
     "pg": "^8.16.0",

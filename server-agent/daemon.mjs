@@ -52,7 +52,7 @@ export async function runControlDaemon(options = {}) {
       nextResourceAt = Date.now() + resourceIntervalMs;
       try {
         const samples = await client.executor.collectResourceSamples();
-        if (samples.length) await sendResourceSamples({ ...client, samples });
+        await sendResourceSamples({ ...client, samples });
       } catch (error) {
         options.logger?.error?.("Resource telemetry cycle failed", { code: error.code ?? "resource_cycle_failed", message: error.message });
       }

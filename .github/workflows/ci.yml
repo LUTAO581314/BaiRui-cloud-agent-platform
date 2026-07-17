@@ -81,9 +81,7 @@ jobs:
           shellcheck distribution/install.sh
       - name: Build and verify a digest-pinned distribution fixture
         env:
-          BAIRUI_RELEASE_VERSION: 0.1.0-rc.2
           BAIRUI_RELEASE_GENERATED_AT: 2026-07-17T00:00:00.000Z
-          BAIRUI_CONTRACTS_VERSION: 1.2.0
           BAIRUI_PLATFORM_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           BAIRUI_AGENT_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           BAIRUI_HERMES_COMMIT: cccccccccccccccccccccccccccccccccccccccc
@@ -95,11 +93,13 @@ jobs:
           BAIRUI_CADDY_IMAGE: docker.io/library/caddy:2-alpine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
           BAIRUI_DATABASE_MIGRATION: 018_durable_channel_delivery.sql
         run: |
+          export BAIRUI_RELEASE_VERSION="$(tr -d '\r\n' < VERSION)"
+          export BAIRUI_CONTRACTS_VERSION="$(node -p 'new URL(require("./package.json").dependencies["@bairui/contracts"]).pathname.split("/").at(-1).replace(/^v/, "")')"
           mkdir -p dist/bundle
           node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
           node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
           cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
-          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version 0.1.0-rc.2
+          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version "$BAIRUI_RELEASE_VERSION"
 
   postgres-migrations:
     runs-on: ubuntu-latest

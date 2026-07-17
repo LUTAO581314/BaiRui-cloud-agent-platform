@@ -38,3 +38,22 @@ test("control daemon reports fixed resource samples with the server identity", a
   assert.equal(upload.body.samples[0].agentId, "agent_a");
   assert.equal(upload.headers["x-bairui-machine-id"], "server_a");
 });
+
+test("control daemon reports an empty fleet so the server remains healthy", async () => {
+  const requests = [];
+  const fetch = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    if (url.endsWith("/lease")) return Response.json({ commands: [] });
+    if (url.endsWith("/resources")) return Response.json({ accepted: 0, sampleIds: [] }, { status: 202 });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  await runControlDaemon({
+    once: true,
+    env: { BAIRUI_PLATFORM_URL: "https://platform.example.test", BAIRUI_SERVER_ID: "server_a", BAIRUI_SERVER_AGENT_TOKEN: "server-token-that-is-longer-than-thirty-two-characters" },
+    fetch,
+    executor: { execute: async () => ({}), collectResourceSamples: async () => [] },
+    logger: { error() {} }
+  });
+  const upload = requests.find((request) => request.url.endsWith("/resources"));
+  assert.deepEqual(upload.body, { serverId: "server_a", samples: [] });
+});
