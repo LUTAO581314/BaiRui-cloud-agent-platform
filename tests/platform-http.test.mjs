@@ -261,6 +261,26 @@ test("Agent initialization queues a deployment provision command and never repor
   assert.equal(result.command.arguments.agent_id, context.agent.id);
 });
 
+test("a failed Agent initialization can be retried without duplicating configuration", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { ciphertext: "encrypted" }, keyHint: "test", updatedBy: "root" });
+  await context.repository.createServer({ id: "server_retry", organizationId: "org_a", name: "Retry host", status: "healthy" });
+  const cookie = await login(context.baseUrl, "user@example.test");
+  const firstResponse = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(firstResponse.status, 202);
+  const first = await firstResponse.json();
+  const [leased] = await context.repository.leaseControlCommands({ serverId: "server_retry", limit: 1, leaseSeconds: 120 });
+  await context.repository.recordCommandReceipt({ commandId: leased.command_id, serverId: "server_retry", attempt: leased.attempt, state: "failed", errorCode: "docker_unavailable", errorSummary: "Control executor failed (docker_unavailable)" });
+
+  const retryResponse = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/initialize`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(retryResponse.status, 202);
+  const retry = await retryResponse.json();
+  assert.notEqual(retry.command.id, first.command.id);
+  assert.equal(retry.command.arguments.config_revision_id, first.command.arguments.config_revision_id);
+  assert.equal(retry.agent.initializationStatus, "provisioning");
+});
+
 test("signed command lease provisions an Agent route and independent heartbeat identity", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());

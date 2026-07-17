@@ -367,10 +367,14 @@ export class MemoryPlatformRepository {
     const revision = this.#configRevisions.filter((item) => item.organizationId === agent.organizationId).length + 1;
     const disabledSkills = (input.skills ?? []).filter((item) => item.enabled === false).map((item) => item.skillId).sort();
     const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model }, skills: { disabled: disabledSkills } };
-    const config = { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, secretEnvelope: input.secretEnvelope, contentHash: createHash("sha256").update(JSON.stringify(configDocument)).digest("hex"), status: "approved", createdBy: input.requestedBy, createdAt: new Date().toISOString() };
-    this.#configRevisions.push(config);
+    const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
+    const config = this.#configRevisions.find((item) => item.organizationId === agent.organizationId && item.contentHash === contentHash)
+      ?? { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, revision, configDocument, contentHash, createdAt: new Date().toISOString() };
+    Object.assign(config, { secretEnvelope: input.secretEnvelope, status: "approved", createdBy: input.requestedBy });
+    if (!this.#configRevisions.includes(config)) this.#configRevisions.push(config);
     for (const credential of this.#agentRuntimeCredentials) if (credential.runtimeId === runtime.id && credential.status === "active") credential.status = "revoked";
     this.#agentRuntimeCredentials.push({ id: input.agentCredentialId ?? randomUUID(), organizationId: agent.organizationId, userId: agent.ownerUserId, agentId: agent.id, runtimeId: runtime.id, keyHash: input.agentCredentialHash, keyHint: input.agentCredentialHint, status: "active", createdBy: input.requestedBy, createdAt: new Date().toISOString() });
+    for (const previous of this.#controlDeployments) if (previous.agentId === agent.id && previous.status !== "revoked") previous.status = "revoked";
     const deployment = { id: randomUUID(), organizationId: agent.organizationId, serverId: server.id, agentId: agent.id, name: agent.name, environment: "production", status: "enrolling", observedStateVersion: 0, desiredStateVersion: 1, createdAt: new Date().toISOString() };
     this.#controlDeployments.push(deployment);
     const command = { id: randomUUID(), deploymentId: deployment.id, agentId: agent.id, action: "deployment.provision", target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: config.id }, expectedObservationVersion: 0, state: "queued", priority: 100, attempt: 0, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: new Date().toISOString() };

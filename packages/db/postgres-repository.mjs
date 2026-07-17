@@ -255,7 +255,7 @@ export class PostgresPlatformRepository {
           `INSERT INTO agent_components (id, organization_id, agent_id, runtime_id, layer, module_id, status, version, upstream_ref, capabilities, metrics, observed_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            ON CONFLICT (runtime_id, module_id) DO UPDATE SET layer=EXCLUDED.layer, status=EXCLUDED.status, version=EXCLUDED.version, upstream_ref=EXCLUDED.upstream_ref, capabilities=EXCLUDED.capabilities, metrics=EXCLUDED.metrics, observed_at=EXCLUDED.observed_at, updated_at=now()`,
-          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, component.layer, component.moduleId, component.status, component.version ?? null, component.upstreamRef ?? null, component.capabilities ?? [], component.metrics ?? {}, component.observedAt ?? input.observedAt]
+          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, component.layer, component.moduleId, component.status, component.version ?? null, component.upstreamRef ?? null, JSON.stringify(component.capabilities ?? []), component.metrics ?? {}, component.observedAt ?? input.observedAt]
         );
       }
       for (const event of input.events ?? []) {
@@ -501,14 +501,21 @@ export class PostgresPlatformRepository {
       }
       const { rows: serverRows } = await client.query("SELECT * FROM servers WHERE organization_id=$1 AND status IN ('active','healthy') ORDER BY last_seen_at DESC NULLS LAST, created_at LIMIT 1", [agent.organizationId]);
       if (!serverRows[0]) throw Object.assign(new Error("No healthy server is available for this Agent"), { code: "no_agent_capacity", statusCode: 409 });
-      const { rows: revisionRows } = await client.query("SELECT COALESCE(MAX(revision),0)+1 AS next_revision FROM config_revisions WHERE organization_id=$1", [agent.organizationId]);
-      const configId = randomUUID();
       const disabledSkills = (input.skills ?? []).filter((item) => item.enabled === false).map((item) => item.skillId).sort();
       const configDocument = { agent: { id: agent.id, name: agent.name, soul_markdown: agent.soulMarkdown }, runtime: { kind: "hermes", workspace_ref: runtime.workspaceRef }, provider: { provider: input.provider.provider, base_url: input.provider.baseUrl, model: input.provider.model }, skills: { disabled: disabledSkills } };
       const contentHash = createHash("sha256").update(JSON.stringify(configDocument)).digest("hex");
-      await client.query("INSERT INTO config_revisions (id, organization_id, agent_id, revision, config_document, secret_envelope, content_hash, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved',$8)", [configId, agent.organizationId, agent.id, Number(revisionRows[0].next_revision), configDocument, input.secretEnvelope, contentHash, input.requestedBy]);
+      const { rows: existingConfigRows } = await client.query("SELECT * FROM config_revisions WHERE organization_id=$1 AND content_hash=$2 FOR UPDATE", [agent.organizationId, contentHash]);
+      let configId = existingConfigRows[0]?.id;
+      if (configId) {
+        await client.query("UPDATE config_revisions SET secret_envelope=$2, status='approved', created_by=$3 WHERE id=$1", [configId, input.secretEnvelope, input.requestedBy]);
+      } else {
+        const { rows: revisionRows } = await client.query("SELECT COALESCE(MAX(revision),0)+1 AS next_revision FROM config_revisions WHERE organization_id=$1", [agent.organizationId]);
+        configId = randomUUID();
+        await client.query("INSERT INTO config_revisions (id, organization_id, agent_id, revision, config_document, secret_envelope, content_hash, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved',$8)", [configId, agent.organizationId, agent.id, Number(revisionRows[0].next_revision), configDocument, input.secretEnvelope, contentHash, input.requestedBy]);
+      }
       await client.query("UPDATE agent_runtime_credentials SET status='revoked', revoked_at=now() WHERE runtime_id=$1 AND status='active'", [runtime.id]);
       await client.query("INSERT INTO agent_runtime_credentials (id, organization_id, user_id, agent_id, runtime_id, key_hash, key_hint, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)", [input.agentCredentialId ?? randomUUID(), agent.organizationId, agent.ownerUserId, agent.id, runtime.id, input.agentCredentialHash, input.agentCredentialHint, input.requestedBy]);
+      await client.query("UPDATE control_deployments SET status='revoked', updated_at=now() WHERE agent_id=$1 AND status<>'revoked'", [agent.id]);
       const deploymentId = randomUUID();
       await client.query("INSERT INTO control_deployments (id, organization_id, server_id, agent_id, name, environment, status, desired_state_version) VALUES ($1,$2,$3,$4,$5,'production','enrolling',1)", [deploymentId, agent.organizationId, serverRows[0].id, agent.id, agent.name]);
       await client.query("INSERT INTO desired_states (id, deployment_id, version, config_revision_id, module_versions, created_by) VALUES ($1,$2,1,$3,$4,$5)", [randomUUID(), deploymentId, configId, { "core-runtime": "hermes" }, input.requestedBy]);
