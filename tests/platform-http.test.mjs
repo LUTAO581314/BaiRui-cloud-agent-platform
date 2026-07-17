@@ -143,6 +143,23 @@ test("only platform administrators can issue licenses and create releases", asyn
   assert.equal((await fetch(`${context.baseUrl}/api/admin/releases`, { method: "POST", headers: { cookie: rootCookie, "content-type": "application/json" }, body: releaseBody })).status, 201);
 });
 
+test("registration creates an initial Agent with an initialization-ready Runtime record", async (t) => {
+  const context = await setup({ allowRegistration: true });
+  t.after(() => context.server.close());
+  const response = await fetch(`${context.baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ organizationName: "New workspace", email: "new-user@example.test", displayName: "New User", password: "New-User-Password-2026" })
+  });
+  assert.equal(response.status, 201);
+  const user = await context.repository.findUserByEmail("new-user@example.test");
+  const [agent] = await context.repository.listAgents(user.organizationId, user.id);
+  const runtime = await context.repository.getAgentRuntimeByAgent(agent.id);
+  assert.equal(runtime.ownerUserId, user.id);
+  assert.equal(runtime.status, "uninitialized");
+  assert.equal(runtime.workspaceRef, `hermes:${user.organizationId}:${user.id}:${agent.id}`);
+});
+
 test("Agent heartbeat updates the administrator fleet without accepting conversation content", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
