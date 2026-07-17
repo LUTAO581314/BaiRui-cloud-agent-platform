@@ -121,18 +121,20 @@ async function docker(exec, args) {
 function containerResource(role, name, inspect, stats, listed) {
   const memoryParts = typeof stats?.MemUsage === "string" ? stats.MemUsage.split("/").map((item) => item.trim()) : [];
   const labels = inspect?.Config?.Labels && typeof inspect.Config.Labels === "object" ? inspect.Config.Labels : {};
+  const version = safeText(labels["org.opencontainers.image.version"], 200);
+  const startedAt = isoDate(inspect?.State?.StartedAt);
   return {
     role,
     containerId: safeText(inspect?.Id ?? stats?.ID ?? stats?.Container, 128),
     containerName: name,
     status: safeText(inspect?.State?.Status ?? listed?.State, 30) ?? "unknown",
     imageRef: safeText(inspect?.Config?.Image ?? stats?.Image ?? listed?.Image, 500),
-    version: safeText(labels["org.opencontainers.image.version"], 200),
     cpuPercent: parsePercent(stats?.CPUPerc),
     memoryUsedBytes: parseDockerBytes(memoryParts[0]),
     memoryLimitBytes: parseDockerBytes(memoryParts[1]),
     writableBytes: finite(inspect?.SizeRw),
-    startedAt: isoDate(inspect?.State?.StartedAt)
+    ...(version ? { version } : {}),
+    ...(startedAt ? { startedAt } : {})
   };
 }
 
@@ -196,10 +198,10 @@ export async function collectAgentResourceSamples(options = {}) {
       operatingSystem: safeText(hostInfo.OperatingSystem, 300),
       dockerVersion: safeText(hostInfo.ServerVersion, 100),
       cpuCount: Number.isSafeInteger(Number(hostInfo.NCPU)) && Number(hostInfo.NCPU) > 0 ? Number(hostInfo.NCPU) : null,
-      startedAt: started,
       uptimeSeconds: started ? Math.max(0, Math.floor((Date.parse(observedAt) - Date.parse(started)) / 1000)) : null,
       observedAt,
-      containers
+      containers,
+      ...(started ? { startedAt: started } : {})
     };
   });
 }

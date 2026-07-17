@@ -23,7 +23,7 @@ test("resource collector reads only managed containers through fixed Docker argu
     ].join("\n") };
     if (args[0] === "container" && args[1] === "inspect") return { stdout: JSON.stringify([
       { Id: "h".repeat(64), Name: "/bairui-hermes-a", SizeRw: 1024, State: { Status: "running", StartedAt: "2026-07-16T06:00:00.000Z" }, Config: { Image: "hermes:test", Labels: { "org.opencontainers.image.version": "1.2.3" } } },
-      { Id: "r".repeat(64), Name: "/bairui-runtime-a", SizeRw: 2048, State: { Status: "running", StartedAt: "2026-07-16T06:01:00.000Z" }, Config: { Image: "runtime:test", Labels: { "org.opencontainers.image.version": "0.4.0" } } }
+      { Id: "r".repeat(64), Name: "/bairui-runtime-a", SizeRw: 2048, State: { Status: "running", StartedAt: "" }, Config: { Image: "runtime:test", Labels: {} } }
     ]) };
     if (args[0] === "stats") return { stdout: [
       JSON.stringify({ Name: "bairui-hermes-a", CPUPerc: "3.1%", MemUsage: "128MiB / 2GiB" }),
@@ -45,6 +45,8 @@ test("resource collector reads only managed containers through fixed Docker argu
   assert.equal(samples[0].hostStorageUsedBytes, 600 * 4096);
   assert.equal(samples[0].containers[0].role, "hermes");
   assert.equal(samples[0].containers[1].role, "runtime-boundary");
+  assert.equal("version" in samples[0].containers[1], false);
+  assert.equal("startedAt" in samples[0].containers[1], false);
   assert.equal(samples[0].startedAt, "2026-07-16T06:00:00.000Z");
   assert.ok(calls.every((call) => call.file === "docker"));
   assert.ok(calls.every((call) => !call.args.includes("unmanaged-container")));

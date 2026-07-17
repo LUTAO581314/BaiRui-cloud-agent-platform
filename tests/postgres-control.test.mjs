@@ -3,6 +3,43 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { PostgresPlatformRepository } from "../packages/db/postgres-repository.mjs";
 
+test("PostgreSQL reuses an approved configuration when failed provisioning is retried", { skip: process.env.BAIRUI_POSTGRES_INTEGRATION !== "1" }, async () => {
+  const repository = new PostgresPlatformRepository({ connectionString: process.env.DATABASE_URL });
+  const suffix = randomUUID().slice(0, 8);
+  const organizationId = `org_retry_${suffix}`;
+  const userId = `user_retry_${suffix}`;
+  const agentId = `agent_retry_${suffix}`;
+  const serverId = `server_retry_${suffix}`;
+  const request = {
+    agentId,
+    requestedBy: userId,
+    provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" },
+    secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { generation: 1 }, hermesApiServerKey: { generation: 1 }, agentControlToken: { generation: 1 } },
+    agentCredentialHash: "d".repeat(64),
+    agentCredentialHint: "test"
+  };
+  try {
+    await repository.createOrganization({ id: organizationId, name: "Retry" });
+    await repository.createUser({ id: userId, organizationId, email: `${suffix}@retry.test`, displayName: "Retry", passwordHash: "not-used", role: "user" });
+    await repository.createAgent({ id: agentId, organizationId, ownerUserId: userId, name: "Retry Agent" });
+    await repository.createAgentRuntime({ organizationId, ownerUserId: userId, agentId, workspaceRef: `workspace:${agentId}` });
+    await repository.createServer({ id: serverId, organizationId, name: "Retry Host", status: "healthy" });
+    const first = await repository.requestAgentProvisioning(request);
+    const [leased] = await repository.leaseControlCommands({ serverId, limit: 1, leaseSeconds: 120 });
+    await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "accepted" });
+    await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "running" });
+    await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "failed", errorCode: "docker_unavailable", errorSummary: "Control executor failed (docker_unavailable)" });
+    const retry = await repository.requestAgentProvisioning({ ...request, secretEnvelope: { ...request.secretEnvelope, agentControlToken: { generation: 2 } }, agentCredentialHash: "e".repeat(64) });
+    assert.notEqual(retry.command.id, first.command.id);
+    assert.equal(retry.command.arguments.config_revision_id, first.command.arguments.config_revision_id);
+    const deployments = await repository.pool.query("SELECT status,desired_state_version FROM control_deployments WHERE agent_id=$1 ORDER BY created_at", [agentId]);
+    assert.deepEqual(deployments.rows, [{ status: "enrolling", desired_state_version: "2" }]);
+  } finally {
+    await repository.pool.query("DELETE FROM organizations WHERE id=$1", [organizationId]).catch(() => {});
+    await repository.close();
+  }
+});
+
 test("PostgreSQL leases and completes an Agent provision transaction", { skip: process.env.BAIRUI_POSTGRES_INTEGRATION !== "1" }, async () => {
   const repository = new PostgresPlatformRepository({ connectionString: process.env.DATABASE_URL });
   const suffix = randomUUID().slice(0, 8);
@@ -107,9 +144,10 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.equal(await repository.setAgentHotspotBookmark({ organizationId, userId, agentId, hotspotItemId: hotspot.id, bookmarked: true }), true);
     assert.deepEqual(await repository.listAgentHotspotBookmarkIds(organizationId, userId, agentId), [hotspot.id]);
 
-    await repository.saveAgentHeartbeat({ organizationId, userId, agentId, runtimeId, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [], usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "example/model", inputTokens: 3, outputTokens: 4, runCount: 1 } });
+    await repository.saveAgentHeartbeat({ organizationId, userId, agentId, runtimeId, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [{ layer: "core-runtime", moduleId: "hermes", status: "healthy", capabilities: ["sessions", "runs"], metrics: { active_runs: 0 } }], usage: { bucketStart: "2026-07-16T00:00:00.000Z", bucketSeconds: 3600, model: "example/model", inputTokens: 3, outputTokens: 4, runCount: 1 } });
     const usage = await repository.listUsageRollups(organizationId, userId, agentId);
     assert.equal(usage[0].inputTokens, 3);
+    assert.deepEqual((await repository.listAgentComponents(organizationId, agentId))[0].capabilities, ["sessions", "runs"]);
     await repository.saveAgentResourceSamples({ serverId, samples: [{ agentId, runtimeId, deploymentId: provision.deployment.id, sequence: 1, status: "running", cpuPercent: 4.2, memoryUsedBytes: 1024, memoryLimitBytes: 4096, agentStorageUsedBytes: 2048, hostStorageUsedBytes: 8192, hostStorageLimitBytes: 16384, osType: "linux", architecture: "amd64", operatingSystem: "PostgreSQL Test Linux", dockerVersion: "27.1.0", cpuCount: 4, startedAt: "2026-07-16T00:00:00.000Z", uptimeSeconds: 3600, observedAt: new Date().toISOString(), containers: [{ role: "hermes", status: "running", containerId: "container_pg", containerName: "bairui-hermes-pg", imageRef: "hermes:test", version: "1.0.0", cpuPercent: 4.2, memoryUsedBytes: 1024, memoryLimitBytes: 4096, writableBytes: 512, startedAt: "2026-07-16T00:00:00.000Z" }] }] });
     const latestResource = (await repository.latestAgentResourceSamples(organizationId, agentId))[0];
     assert.equal(latestResource.cpuPercent, 4.2);

@@ -12,7 +12,7 @@ installed or rolled back.
 Install an exact release on a clean Ubuntu or Debian host:
 
 ```sh
-curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.5/install.sh | sudo bash -s -- --domain agent.example.com
+curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.6/install.sh | sudo bash -s -- --domain agent.example.com
 ```
 
 The installer:
