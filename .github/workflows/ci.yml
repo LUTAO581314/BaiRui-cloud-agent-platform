@@ -62,6 +62,45 @@ jobs:
           BAIRUI_LICENSE_PRIVATE_KEY: ci-placeholder-only-compose-validation
         run: docker compose -f infra/docker-compose.yml config --quiet
 
+  distribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate installer shell
+        run: |
+          bash -n distribution/install.sh
+          shellcheck distribution/install.sh
+      - name: Build and verify a digest-pinned distribution fixture
+        env:
+          BAIRUI_RELEASE_VERSION: 0.1.0-rc.1
+          BAIRUI_RELEASE_GENERATED_AT: 2026-07-17T00:00:00.000Z
+          BAIRUI_CONTRACTS_VERSION: 1.2.0
+          BAIRUI_PLATFORM_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          BAIRUI_AGENT_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          BAIRUI_HERMES_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+          BAIRUI_BAILONGMA_COMMIT: dddddddddddddddddddddddddddddddddddddddd
+          BAIRUI_PLATFORM_IMAGE: ghcr.io/lutao581314/bairui-platform@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          BAIRUI_RUNTIME_IMAGE: ghcr.io/lutao581314/bairui-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          BAIRUI_HERMES_IMAGE: ghcr.io/lutao581314/bairui-hermes@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          BAIRUI_POSTGRES_IMAGE: docker.io/library/postgres:17-alpine@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          BAIRUI_CADDY_IMAGE: docker.io/library/caddy:2-alpine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          BAIRUI_DATABASE_MIGRATION: 018_durable_channel_delivery.sql
+        run: |
+          mkdir -p dist/bundle
+          node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
+          node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
+          cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
+          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version 0.1.0-rc.1
+
   postgres-migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15

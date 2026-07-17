@@ -1,7 +1,7 @@
 {
   "name": "bairui-cloud-agent-platform",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -37,7 +37,9 @@
     "license:generate": "node packages/license/bin/generate-license.mjs",
     "operations:backup": "node scripts/operations/backup-postgres.mjs",
     "operations:restore": "node scripts/operations/restore-postgres.mjs",
-    "operations:rollback": "node scripts/operations/rollback-compose.mjs"
+    "operations:rollback": "node scripts/operations/rollback-compose.mjs",
+    "distribution:build": "node distribution/bin/build-manifest.mjs",
+    "distribution:verify": "node distribution/bin/verify-manifest.mjs"
   },
   "devDependencies": {
     "playwright": "^1.55.1"

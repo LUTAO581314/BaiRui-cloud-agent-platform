@@ -14,31 +14,23 @@ Planned contents:
 Do not commit real server IPs, credentials, private keys, TLS certificates,
 database passwords, or customer-specific environment files.
 
-## Platform P0 Deployment
+## Deployment ownership
 
-P0 deployment assets live under `infra/platform`.
+Source-level development templates remain in `infra/`. The installable product
+release is owned by `distribution/` and the `BaiRui Product Distribution`
+GitHub workflow.
 
-Files:
+Production rules:
 
-- `env.example`: placeholder environment file.
-- `systemd/bairui-platform.service`: Linux service template.
-- `scripts/deploy-platform.sh`: install dependencies, optionally run database
-  migrations, run tests, and prepare the service template.
+- consume only a GitHub Release with `release-manifest.json` and `SHA256SUMS`;
+- use every container as `image@sha256:digest`;
+- keep generated secrets under `/etc/bairui-agent` with mode `0600`;
+- keep PostgreSQL and Agent data outside the source checkout;
+- run the authenticated Server Agent, not an unauthenticated control port;
+- retain the previous release files before an upgrade.
 
-Default safe run from repository root:
-
-```sh
-sh infra/platform/scripts/deploy-platform.sh
-```
-
-Production run on a prepared Linux server:
+The exact-version installer command is:
 
 ```sh
-sudo install -d -m 0750 /etc/bairui
-sudo cp infra/platform/env.example /etc/bairui/platform.env
-sudo editor /etc/bairui/platform.env
-BAIRUI_INSTALL_SYSTEMD=1 sudo -E sh infra/platform/scripts/deploy-platform.sh
+curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.1/install.sh | sudo bash -s -- --domain agent.example.com
 ```
-
-The script does not commit or generate real secrets. Keep production values in
-`/etc/bairui/platform.env` or an equivalent protected server-side secret store.

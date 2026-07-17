@@ -28,3 +28,18 @@ Channel Worker. It requires:
 The resulting `platform-release-manifest.json` is required evidence for
 staging, production deployment and rollback. This workflow does not substitute
 for the separate real Runtime, Hermes and Provider acceptance gates.
+
+## Product distribution
+
+`BaiRui Product Distribution` is the only workflow allowed to create a product
+version tag and GitHub Release. It consumes successful Platform and Agent image
+digests, verifies Platform provenance and the Cosign-signed Runtime/Hermes SLSA
+attestations, resolves PostgreSQL and Caddy to immutable digests, and emits one
+cross-repository `release-manifest.json`.
+
+The release contains `install.sh`, `bairui-agent.tar.gz`, `SHA256SUMS`, the
+manifest and provenance verification evidence. The installer verifies the
+archive, generates local secrets, applies PostgreSQL migrations, registers the
+Server Agent through the authenticated Platform API and preserves the previous
+release for rollback. A package version in `package.json`, a Git tag, or a GHCR
+tag by itself is not an installable BaiRui release.

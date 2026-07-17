@@ -1,0 +1,179 @@
+name: BaiRui Product Distribution
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Product version without the leading v
+        required: true
+        default: 0.1.0-rc.1
+      platform_image:
+        description: Exact verified Platform image@sha256 digest
+        required: true
+      agent_commit:
+        description: Agent main commit represented by the Runtime image
+        required: true
+      runtime_image:
+        description: Exact Cosign-signed Runtime image@sha256 digest
+        required: true
+      hermes_commit:
+        description: Pinned Hermes upstream commit
+        required: true
+      hermes_image:
+        description: Exact Cosign-signed Hermes image@sha256 digest
+        required: true
+      publish:
+        description: Create the immutable Git tag and GitHub Release
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: read
+  attestations: read
+
+concurrency:
+  group: bairui-distribution-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify-package-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      PLATFORM_IMAGE: ${{ inputs.platform_image }}
+      AGENT_COMMIT: ${{ inputs.agent_commit }}
+      RUNTIME_IMAGE: ${{ inputs.runtime_image }}
+      HERMES_COMMIT: ${{ inputs.hermes_commit }}
+      HERMES_IMAGE: ${{ inputs.hermes_image }}
+      POSTGRES_SOURCE: docker.io/library/postgres:17-alpine
+      CADDY_SOURCE: docker.io/library/caddy:2-alpine
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify source and requested version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$VERSION" = "$(tr -d '\r\n' < VERSION)"
+          test "$VERSION" = "$(node -p 'require("./package.json").version')"
+          [[ "$PLATFORM_IMAGE" =~ ^ghcr\.io/lutao581314/bairui-platform@sha256:[a-f0-9]{64}$ ]]
+          [[ "$RUNTIME_IMAGE" =~ ^ghcr\.io/lutao581314/bairui-runtime@sha256:[a-f0-9]{64}$ ]]
+          [[ "$HERMES_IMAGE" =~ ^ghcr\.io/lutao581314/bairui-hermes@sha256:[a-f0-9]{64}$ ]]
+          [[ "$AGENT_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$HERMES_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          npm run verify
+          bash -n distribution/install.sh
+          shellcheck distribution/install.sh
+      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/login-action@v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Resolve infrastructure images and verify all release images
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolve() {
+            local source="$1" digest
+            digest="$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -r '.digest')"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            printf '%s@%s' "$source" "$digest"
+          }
+          postgres_image="$(resolve "$POSTGRES_SOURCE")"
+          caddy_image="$(resolve "$CADDY_SOURCE")"
+          echo "postgres=$postgres_image" >> "$GITHUB_OUTPUT"
+          echo "caddy=$caddy_image" >> "$GITHUB_OUTPUT"
+          for image in "$PLATFORM_IMAGE" "$RUNTIME_IMAGE" "$HERMES_IMAGE" "$postgres_image" "$caddy_image"; do docker pull "$image"; done
+          test "$(docker image inspect "$PLATFORM_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$RUNTIME_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$AGENT_COMMIT"
+          test "$(docker image inspect "$HERMES_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$HERMES_COMMIT"
+          test "$(docker image inspect "$HERMES_IMAGE" --format '{{index .Config.Labels "io.bairui.agent.revision"}}')" = "$AGENT_COMMIT"
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity "https://github.com/LUTAO581314/BaiRui-agent/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$RUNTIME_IMAGE" > runtime-provenance-verification.json
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity "https://github.com/LUTAO581314/BaiRui-agent/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$HERMES_IMAGE" > hermes-provenance-verification.json
+          gh attestation verify "oci://$PLATFORM_IMAGE" --repo LUTAO581314/BaiRui-cloud-agent-platform > platform-provenance-verification.json
+          test -s runtime-provenance-verification.json
+          test -s hermes-provenance-verification.json
+          test -s platform-provenance-verification.json
+      - name: Build and verify distribution bundle
+        env:
+          BAIRUI_RELEASE_VERSION: ${{ inputs.version }}
+          BAIRUI_CONTRACTS_VERSION: 1.2.0
+          BAIRUI_PLATFORM_COMMIT: ${{ github.sha }}
+          BAIRUI_PLATFORM_IMAGE: ${{ inputs.platform_image }}
+          BAIRUI_AGENT_COMMIT: ${{ inputs.agent_commit }}
+          BAIRUI_RUNTIME_IMAGE: ${{ inputs.runtime_image }}
+          BAIRUI_HERMES_COMMIT: ${{ inputs.hermes_commit }}
+          BAIRUI_HERMES_IMAGE: ${{ inputs.hermes_image }}
+          BAIRUI_POSTGRES_IMAGE: ${{ steps.images.outputs.postgres }}
+          BAIRUI_CADDY_IMAGE: ${{ steps.images.outputs.caddy }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BAIRUI_BAILONGMA_COMMIT="$(git -C upstreams/bailongma rev-parse HEAD)"
+          export BAIRUI_DATABASE_MIGRATION="$(find packages/db/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)"
+          mkdir -p dist/bundle
+          node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
+          node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
+          cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
+          cp distribution/install.sh dist/install.sh
+          chmod 0755 dist/install.sh
+          tar -czf dist/bairui-agent.tar.gz -C dist/bundle .
+          cp dist/bundle/release-manifest.json dist/release-manifest.json
+          cp runtime-provenance-verification.json hermes-provenance-verification.json platform-provenance-verification.json dist/
+          (cd dist && sha256sum bairui-agent.tar.gz install.sh release-manifest.json > SHA256SUMS)
+          BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash dist/install.sh --verify-only --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bairui-agent-distribution-v${{ inputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish immutable GitHub Release
+        if: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists" >&2
+            exit 1
+          fi
+          prerelease=()
+          [[ "$VERSION" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$tag" \
+            dist/bairui-agent.tar.gz \
+            dist/install.sh \
+            dist/release-manifest.json \
+            dist/SHA256SUMS \
+            dist/runtime-provenance-verification.json \
+            dist/hermes-provenance-verification.json \
+            dist/platform-provenance-verification.json \
+            --target "$GITHUB_SHA" \
+            --title "bairui-agent v$VERSION" \
+            "${prerelease[@]}" \
+            --notes "Immutable BaiRui product release. Install only through the attached exact-version installer; all application images are pinned by digest in release-manifest.json."

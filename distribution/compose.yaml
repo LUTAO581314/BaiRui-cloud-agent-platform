@@ -1,0 +1,134 @@
+name: bairui-agent
+
+services:
+  postgres:
+    image: ${BAIRUI_POSTGRES_IMAGE:?BAIRUI_POSTGRES_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bairui
+      POSTGRES_USER: bairui
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bairui -d bairui"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+
+  platform:
+    image: ${BAIRUI_PLATFORM_IMAGE:?BAIRUI_PLATFORM_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://bairui:${POSTGRES_PASSWORD}@postgres:5432/bairui
+      BAIRUI_DATABASE_SSL: "0"
+      BAIRUI_PLATFORM_ORIGIN: ${BAIRUI_PLATFORM_ORIGIN:?BAIRUI_PLATFORM_ORIGIN is required}
+      BAIRUI_SESSION_SECRET: ${BAIRUI_SESSION_SECRET:?BAIRUI_SESSION_SECRET is required}
+      BAIRUI_BOOTSTRAP_ADMIN_EMAIL: ${BAIRUI_BOOTSTRAP_ADMIN_EMAIL:?BAIRUI_BOOTSTRAP_ADMIN_EMAIL is required}
+      BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ${BAIRUI_BOOTSTRAP_ADMIN_PASSWORD:?BAIRUI_BOOTSTRAP_ADMIN_PASSWORD is required}
+      BAIRUI_AGENT_INGEST_TOKEN: ${BAIRUI_AGENT_INGEST_TOKEN:?BAIRUI_AGENT_INGEST_TOKEN is required}
+      BAIRUI_CHANNEL_WORKER_ID: ${BAIRUI_CHANNEL_WORKER_ID:-channel-worker-primary}
+      BAIRUI_CHANNEL_WORKER_TOKEN: ${BAIRUI_CHANNEL_WORKER_TOKEN:?BAIRUI_CHANNEL_WORKER_TOKEN is required}
+      BAIRUI_RUNTIME_URL: http://host.docker.internal:19000
+      BAIRUI_RUNTIME_SHARED_SECRET: ${BAIRUI_RUNTIME_SHARED_SECRET:?BAIRUI_RUNTIME_SHARED_SECRET is required}
+      BAIRUI_PROVIDER_ENCRYPTION_KEY: ${BAIRUI_PROVIDER_ENCRYPTION_KEY:?BAIRUI_PROVIDER_ENCRYPTION_KEY is required}
+      BAIRUI_LICENSE_PRIVATE_KEY: ${BAIRUI_LICENSE_PRIVATE_KEY:?BAIRUI_LICENSE_PRIVATE_KEY is required}
+      BAIRUI_ALLOW_REGISTRATION: ${BAIRUI_ALLOW_REGISTRATION:-0}
+    command: ["sh", "-c", "node packages/db/bin/migrate.mjs && node apps/web/server.mjs"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks: [backend, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  channel-worker:
+    image: ${BAIRUI_PLATFORM_IMAGE:?BAIRUI_PLATFORM_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      platform:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BAIRUI_PLATFORM_URL: http://platform:3000
+      BAIRUI_CHANNEL_WORKER_ID: ${BAIRUI_CHANNEL_WORKER_ID:-channel-worker-primary}
+      BAIRUI_CHANNEL_WORKER_TOKEN: ${BAIRUI_CHANNEL_WORKER_TOKEN:?BAIRUI_CHANNEL_WORKER_TOKEN is required}
+      BAIRUI_CHANNEL_WORKER_CHANNELS: ${BAIRUI_CHANNEL_WORKER_CHANNELS:-feishu,wechat,qq}
+      BAIRUI_CHANNEL_WORKER_HOST: 0.0.0.0
+      BAIRUI_CHANNEL_WORKER_PORT: 8790
+    command: ["node", "apps/channel-worker/server.mjs"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [backend, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  caddy:
+    image: ${BAIRUI_CADDY_IMAGE:?BAIRUI_CADDY_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      platform:
+        condition: service_healthy
+    environment:
+      BAIRUI_SITE_ADDRESS: ${BAIRUI_SITE_ADDRESS:?BAIRUI_SITE_ADDRESS is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [backend, egress]
+    security_opt: [no-new-privileges:true]
+
+  server-agent:
+    profiles: [node]
+    image: ${BAIRUI_PLATFORM_IMAGE:?BAIRUI_PLATFORM_IMAGE is required}
+    user: "0:0"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      BAIRUI_PLATFORM_URL: ${BAIRUI_PLATFORM_ORIGIN:?BAIRUI_PLATFORM_ORIGIN is required}
+      BAIRUI_SERVER_ID: ${BAIRUI_SERVER_ID:?BAIRUI_SERVER_ID is required}
+      BAIRUI_SERVER_AGENT_TOKEN: ${BAIRUI_SERVER_AGENT_TOKEN:?BAIRUI_SERVER_AGENT_TOKEN is required}
+      BAIRUI_AGENT_INSTANCES_ROOT: /var/lib/bairui/agents
+      BAIRUI_BACKUP_ROOT: /var/lib/bairui/backups
+      BAIRUI_BACKUP_ENCRYPTION_KEY: ${BAIRUI_BACKUP_ENCRYPTION_KEY:?BAIRUI_BACKUP_ENCRYPTION_KEY is required}
+      BAIRUI_RUNTIME_IMAGE: ${BAIRUI_RUNTIME_IMAGE:?BAIRUI_RUNTIME_IMAGE is required}
+      HERMES_IMAGE: ${BAIRUI_HERMES_IMAGE:?BAIRUI_HERMES_IMAGE is required}
+      BAIRUI_RUNTIME_ADVERTISE_HOST: host.docker.internal
+      BAIRUI_RUNTIME_PORT_START: ${BAIRUI_RUNTIME_PORT_START:-19000}
+      BAIRUI_RUNTIME_PORT_END: ${BAIRUI_RUNTIME_PORT_END:-19999}
+      BAIRUI_HERMES_DATA_UID: "10000"
+    command: ["node", "server-agent/daemon.mjs"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BAIRUI_AGENT_DATA_ROOT:-/var/lib/bairui/agents}:/var/lib/bairui/agents
+      - ${BAIRUI_BACKUP_DATA_ROOT:-/var/lib/bairui/backups}:/var/lib/bairui/backups
+    networks: [egress]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  backend:
+    internal: true
+  egress:

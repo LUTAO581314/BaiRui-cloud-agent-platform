@@ -147,21 +147,25 @@ Server management:
 
 ## Current Platform Deployment
 
-Prepare protected production variables from `infra/.env.example`, then deploy:
+Install only a verified product release. The exact-version command installs
+Docker when needed, verifies the release checksum and image digests, configures
+PostgreSQL and HTTPS, registers the local Server Agent through the Platform API,
+and preserves the previous release for rollback:
 
 ```sh
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
+curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.1/install.sh | sudo bash -s -- --domain agent.example.com
 ```
 
-The platform binds only to `127.0.0.1:3000`. Put
-`infra/nginx/bairui.conf` in front of it for HTTPS. The container waits for
-PostgreSQL and applies migrations before starting the web process.
-The Channel Worker binds to `127.0.0.1:8790`; Nginx sends only the public
-`/callbacks/wechat/` path to it. See
+The release manifest binds Platform, Runtime, Hermes, PostgreSQL and Caddy by
+digest. Source checkout and `docker compose --build` are development paths and
+must not be used as production release evidence. See
+[`distribution/README.md`](distribution/README.md) for the distribution model
+and
 [`docs/23-durable-channel-bridge.md`](docs/23-durable-channel-bridge.md) for the
 credential, callback, health and delivery contract.
 
-After startup, check `GET /ready` before customer deployment or acceptance.
+After startup, `GET /ready` must report `backend: postgresql`; a successful
+HTTP response without these dependency checks is not acceptance evidence.
 
 Generate a customer deployment bundle:
 
