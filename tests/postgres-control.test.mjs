@@ -32,8 +32,8 @@ test("PostgreSQL reuses an approved configuration when failed provisioning is re
     const retry = await repository.requestAgentProvisioning({ ...request, secretEnvelope: { ...request.secretEnvelope, agentControlToken: { generation: 2 } }, agentCredentialHash: "e".repeat(64) });
     assert.notEqual(retry.command.id, first.command.id);
     assert.equal(retry.command.arguments.config_revision_id, first.command.arguments.config_revision_id);
-    const deployments = await repository.pool.query("SELECT status FROM control_deployments WHERE agent_id=$1 ORDER BY created_at", [agentId]);
-    assert.deepEqual(deployments.rows.map((row) => row.status), ["revoked", "enrolling"]);
+    const deployments = await repository.pool.query("SELECT status,desired_state_version FROM control_deployments WHERE agent_id=$1 ORDER BY created_at", [agentId]);
+    assert.deepEqual(deployments.rows, [{ status: "enrolling", desired_state_version: "2" }]);
   } finally {
     await repository.pool.query("DELETE FROM organizations WHERE id=$1", [organizationId]).catch(() => {});
     await repository.close();

@@ -374,9 +374,10 @@ export class MemoryPlatformRepository {
     if (!this.#configRevisions.includes(config)) this.#configRevisions.push(config);
     for (const credential of this.#agentRuntimeCredentials) if (credential.runtimeId === runtime.id && credential.status === "active") credential.status = "revoked";
     this.#agentRuntimeCredentials.push({ id: input.agentCredentialId ?? randomUUID(), organizationId: agent.organizationId, userId: agent.ownerUserId, agentId: agent.id, runtimeId: runtime.id, keyHash: input.agentCredentialHash, keyHint: input.agentCredentialHint, status: "active", createdBy: input.requestedBy, createdAt: new Date().toISOString() });
-    for (const previous of this.#controlDeployments) if (previous.agentId === agent.id && previous.status !== "revoked") previous.status = "revoked";
-    const deployment = { id: randomUUID(), organizationId: agent.organizationId, serverId: server.id, agentId: agent.id, name: agent.name, environment: "production", status: "enrolling", observedStateVersion: 0, desiredStateVersion: 1, createdAt: new Date().toISOString() };
-    this.#controlDeployments.push(deployment);
+    const deployment = this.#controlDeployments.find((item) => item.agentId === agent.id)
+      ?? { id: randomUUID(), organizationId: agent.organizationId, agentId: agent.id, environment: "production", observedStateVersion: 0, desiredStateVersion: 0, createdAt: new Date().toISOString() };
+    Object.assign(deployment, { serverId: server.id, name: agent.name, status: "enrolling", desiredStateVersion: deployment.desiredStateVersion + 1 });
+    if (!this.#controlDeployments.includes(deployment)) this.#controlDeployments.push(deployment);
     const command = { id: randomUUID(), deploymentId: deployment.id, agentId: agent.id, action: "deployment.provision", target: { module_id: "bairui.supervisor", instance_id: agent.id }, arguments: { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: config.id }, expectedObservationVersion: 0, state: "queued", priority: 100, attempt: 0, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: new Date().toISOString() };
     this.#controlCommands.push(command);
     Object.assign(runtime, { deploymentId: deployment.id, configRevisionId: config.id, status: "provisioning", updatedAt: new Date().toISOString() });

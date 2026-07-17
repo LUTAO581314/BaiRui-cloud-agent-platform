@@ -515,15 +515,22 @@ export class PostgresPlatformRepository {
       }
       await client.query("UPDATE agent_runtime_credentials SET status='revoked', revoked_at=now() WHERE runtime_id=$1 AND status='active'", [runtime.id]);
       await client.query("INSERT INTO agent_runtime_credentials (id, organization_id, user_id, agent_id, runtime_id, key_hash, key_hint, status, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)", [input.agentCredentialId ?? randomUUID(), agent.organizationId, agent.ownerUserId, agent.id, runtime.id, input.agentCredentialHash, input.agentCredentialHint, input.requestedBy]);
-      await client.query("UPDATE control_deployments SET status='revoked', updated_at=now() WHERE agent_id=$1 AND status<>'revoked'", [agent.id]);
-      const deploymentId = randomUUID();
-      await client.query("INSERT INTO control_deployments (id, organization_id, server_id, agent_id, name, environment, status, desired_state_version) VALUES ($1,$2,$3,$4,$5,'production','enrolling',1)", [deploymentId, agent.organizationId, serverRows[0].id, agent.id, agent.name]);
-      await client.query("INSERT INTO desired_states (id, deployment_id, version, config_revision_id, module_versions, created_by) VALUES ($1,$2,1,$3,$4,$5)", [randomUUID(), deploymentId, configId, { "core-runtime": "hermes" }, input.requestedBy]);
+      let deploymentId = runtime.deploymentId;
+      let desiredStateVersion = 1;
+      if (deploymentId) {
+        const { rows: deploymentRows } = await client.query("UPDATE control_deployments SET server_id=$2, name=$3, status='enrolling', desired_state_version=desired_state_version+1, updated_at=now() WHERE id=$1 AND agent_id=$4 RETURNING *", [deploymentId, serverRows[0].id, agent.name, agent.id]);
+        if (!deploymentRows[0]) throw Object.assign(new Error("Agent deployment is unavailable"), { code: "agent_deployment_unavailable", statusCode: 409 });
+        desiredStateVersion = Number(deploymentRows[0].desired_state_version);
+      } else {
+        deploymentId = randomUUID();
+        await client.query("INSERT INTO control_deployments (id, organization_id, server_id, agent_id, name, environment, status, desired_state_version) VALUES ($1,$2,$3,$4,$5,'production','enrolling',1)", [deploymentId, agent.organizationId, serverRows[0].id, agent.id, agent.name]);
+      }
+      await client.query("INSERT INTO desired_states (id, deployment_id, version, config_revision_id, module_versions, created_by) VALUES ($1,$2,$3,$4,$5,$6)", [randomUUID(), deploymentId, desiredStateVersion, configId, { "core-runtime": "hermes" }, input.requestedBy]);
       const commandId = randomUUID();
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 15 * 60_000);
       const args = { agent_id: agent.id, workspace_ref: runtime.workspaceRef, config_revision_id: configId };
-      await client.query("INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, expected_observation_version, state, expires_at, requested_by) VALUES ($1,$2,$3,'deployment.provision','bairui.supervisor',$4,$5,0,'queued',$6,$7)", [commandId, deploymentId, `${deploymentId}/provision/${configId}`, agent.id, args, expiresAt.toISOString(), input.requestedBy]);
+      await client.query("INSERT INTO control_commands (id, deployment_id, idempotency_key, action, target_module_id, target_instance_id, arguments, expected_observation_version, state, expires_at, requested_by) VALUES ($1,$2,$3,'deployment.provision','bairui.supervisor',$4,$5,0,'queued',$6,$7)", [commandId, deploymentId, `${deploymentId}/provision/${configId}/${desiredStateVersion}`, agent.id, args, expiresAt.toISOString(), input.requestedBy]);
       await client.query("UPDATE agent_runtimes SET deployment_id=$2, config_revision_id=$3, status='provisioning', updated_at=now() WHERE id=$1", [runtime.id, deploymentId, configId]);
       const { rows: updatedAgents } = await client.query("UPDATE agents SET initialization_status='provisioning', desired_runtime_state='running', status='provisioning', updated_at=now() WHERE id=$1 RETURNING *", [agent.id]);
       const { rows: updatedRuntimes } = await client.query("SELECT * FROM agent_runtimes WHERE id=$1", [runtime.id]);
