@@ -55,6 +55,7 @@ const required = [
   "packages/db/migrations/016_agent_authorizations.sql",
   "packages/db/migrations/017_memory_projection_outbox.sql",
   "packages/db/migrations/018_durable_channel_delivery.sql",
+  "docs/README.md",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
@@ -129,6 +130,9 @@ const required = [
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
+for (const file of ["docs/00-platform-rebuild-plan.md", "docs/01-server-management-plan.md", "docs/02-license-and-deployment-flow.md", "docs/04-repository-cleanup-policy.md", "docs/07-bairui-framework-alignment.md", "docs/09-capability-matrix.md", "docs/09-operations-runbook.md"]) {
+  if (fs.existsSync(path.join(root, file))) failures.push(`Obsolete platform document must be removed: ${file}`);
+}
 if (fs.existsSync(path.join(root, "docs/06-server-agent-p0.md"))) failures.push("Obsolete P0 server-agent document must be removed");
 if (fs.existsSync(path.join(root, "apps/web/public/user.js"))) failures.push("Legacy handcrafted user frontend must be removed");
 const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
