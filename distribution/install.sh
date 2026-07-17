@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 readonly REPOSITORY="LUTAO581314/BaiRui-cloud-agent-platform"
-readonly INSTALLER_VERSION="0.1.0-rc.4"
+readonly INSTALLER_VERSION="0.1.0-rc.5"
 
 RELEASE_VERSION="$INSTALLER_VERSION"
 DOMAIN=""
