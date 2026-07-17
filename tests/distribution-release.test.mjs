@@ -54,7 +54,7 @@ test("installer and Compose prohibit latest tags and include the complete deploy
 
 test("generated license PEM survives the sourceable Compose environment", { skip: process.platform === "win32" }, () => {
   const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
-  const assignment = installer.match(/^BAIRUI_LICENSE_PRIVATE_KEY=.*$/m)?.[0];
+  const assignment = installer.match(/^BAIRUI_LICENSE_PRIVATE_KEY=.*$/gm)?.find((line) => line.includes("$license_key"));
   assert.equal(assignment, "BAIRUI_LICENSE_PRIVATE_KEY='$license_key'");
 
   const script = String.raw`set -euo pipefail
