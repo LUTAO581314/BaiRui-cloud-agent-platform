@@ -13,7 +13,10 @@ RUN node scripts/build-bailongma-ui.mjs
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN addgroup -S bairui && adduser -S -G bairui bairui
+RUN addgroup -S bairui \
+    && adduser -S -G bairui bairui \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY apps ./apps

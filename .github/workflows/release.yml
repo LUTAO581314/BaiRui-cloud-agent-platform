@@ -1,0 +1,157 @@
+name: Platform Immutable Release
+
+on:
+  workflow_run:
+    workflows: ["Platform CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit or ref to release
+        required: true
+        default: main
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: platform-release-${{ github.event.workflow_run.head_sha || inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  PLATFORM_IMAGE: ghcr.io/lutao581314/bairui-platform
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.workflow_run.head_sha }}
+
+jobs:
+  platform-image:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.metadata.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      bailongma_commit: ${{ steps.metadata.outputs.bailongma_commit }}
+      migration: ${{ steps.metadata.outputs.migration }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: true
+      - id: metadata
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image=$PLATFORM_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "bailongma_commit=$(git -C upstreams/bailongma rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "migration=$(find packages/db/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/login-action@v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.PLATFORM_IMAGE }}:sha-${{ steps.metadata.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.metadata.outputs.commit }}
+            org.opencontainers.image.title=bairui-agent Platform
+            io.bairui.contracts.version=1.2.0
+            io.bairui.migration=${{ steps.metadata.outputs.migration }}
+            io.bairui.bailongma.revision=${{ steps.metadata.outputs.bailongma_commit }}
+          cache-from: type=gha,scope=bairui-platform
+          cache-to: type=gha,mode=max,scope=bairui-platform
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.PLATFORM_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ env.PLATFORM_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: bairui-platform-sbom-${{ steps.metadata.outputs.commit }}.spdx.json
+          output-file: ./bairui-platform.spdx.json
+          upload-artifact-retention: 30
+          upload-release-assets: false
+      - uses: actions/attest-build-provenance@v4.1.1
+        with:
+          subject-name: ${{ env.PLATFORM_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  postgres-platform-integration:
+    needs: [platform-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - uses: docker/login-action@v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start exact Platform digest with PostgreSQL and Channel Worker
+        env:
+          BAIRUI_PLATFORM_IMAGE: ${{ needs.platform-image.outputs.image }}@${{ needs.platform-image.outputs.digest }}
+          POSTGRES_PASSWORD: ci-database-password
+          BAIRUI_PLATFORM_ORIGIN: https://platform.example.test
+          BAIRUI_SESSION_SECRET: ci-session-secret-at-least-32-characters
+          BAIRUI_BOOTSTRAP_ADMIN_EMAIL: admin@example.test
+          BAIRUI_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password-at-least-12
+          BAIRUI_AGENT_INGEST_TOKEN: ci-agent-ingest-token
+          BAIRUI_CHANNEL_WORKER_ID: channel-worker-release
+          BAIRUI_CHANNEL_WORKER_TOKEN: ci-channel-worker-token-at-least-32-characters
+          BAIRUI_RUNTIME_SHARED_SECRET: ci-runtime-secret-at-least-32-characters
+          BAIRUI_PROVIDER_ENCRYPTION_KEY: ci-provider-encryption-key-at-least-32-characters
+          BAIRUI_LICENSE_PRIVATE_KEY: ci-placeholder-only-release-validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="bairui-platform-release-${GITHUB_RUN_ID}"
+          cleanup() { docker compose -p "$project" -f infra/docker-compose.yml down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker compose -p "$project" -f infra/docker-compose.yml pull platform channel-worker
+          docker compose -p "$project" -f infra/docker-compose.yml up -d --no-build --wait --wait-timeout 300
+          platform_ready="$(curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:3000/ready)"
+          worker_ready="$(curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:8790/ready)"
+          jq -e '.ready == true and .backend == "postgresql"' <<<"$platform_ready"
+          jq -e '.ready == true and .adapters == 0' <<<"$worker_ready"
+          migration="$(docker compose -p "$project" -f infra/docker-compose.yml exec -T postgres sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U bairui -d bairui -Atqc "select name from schema_migrations order by name desc limit 1"')"
+          test "$migration" = "${{ needs.platform-image.outputs.migration }}"
+          table_count="$(docker compose -p "$project" -f infra/docker-compose.yml exec -T postgres sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U bairui -d bairui -Atqc "select count(*) from information_schema.tables where table_schema='"'"'public'"'"' and table_name in ('"'"'channel_inbox'"'"','"'"'channel_outbox'"'"','"'"'channel_delivery_receipts'"'"','"'"'channel_worker_credentials'"'"')"')"
+          test "$table_count" = "4"
+          jq -n \
+            --arg platform_commit "${{ needs.platform-image.outputs.commit }}" \
+            --arg platform_image "${{ needs.platform-image.outputs.image }}@${{ needs.platform-image.outputs.digest }}" \
+            --arg bailongma_commit "${{ needs.platform-image.outputs.bailongma_commit }}" \
+            --arg contracts_version "1.2.0" \
+            --arg migration "$migration" \
+            --argjson platform_ready "$platform_ready" \
+            --argjson worker_ready "$worker_ready" \
+            '{platform_commit:$platform_commit,platform_image:$platform_image,bailongma_commit:$bailongma_commit,contracts_version:$contracts_version,migration:$migration,platform_ready:$platform_ready,channel_worker_ready:$worker_ready}' \
+            > platform-release-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-release-manifest-${{ needs.platform-image.outputs.commit }}
+          path: platform-release-manifest.json
+          if-no-files-found: error
+          retention-days: 30
