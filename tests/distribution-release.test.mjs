@@ -9,7 +9,7 @@ import { createReleaseManifest, currentVersion, validateReleaseManifest } from "
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const digest = (name) => `ghcr.io/lutao581314/${name}@sha256:${"a".repeat(64)}`;
 const input = {
-  version: "0.1.0-rc.4",
+  version: "0.1.0-rc.5",
   generatedAt: "2026-07-17T00:00:00.000Z",
   contractsVersion: "1.2.1",
   platformCommit: "1".repeat(40),
@@ -28,7 +28,7 @@ test("distribution version is a single explicit prerelease", () => {
   const version = currentVersion(root);
   const packageDocument = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
-  assert.equal(version, "0.1.0-rc.4");
+  assert.equal(version, "0.1.0-rc.5");
   assert.equal(packageDocument.version, version);
   assert.match(installer, new RegExp(`^readonly INSTALLER_VERSION="${version.replaceAll(".", "\\.")}"$`, "m"));
 });

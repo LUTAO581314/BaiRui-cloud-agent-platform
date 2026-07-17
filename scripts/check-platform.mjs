@@ -199,6 +199,8 @@ if (!bailongmaServer.includes('path.join(repoRoot, "build", "bailongma-ui")')) f
 if (bailongmaServer.includes('path.join(repoRoot, "upstreams", "bailongma")')) failures.push("Runtime must not transform or serve the BaiLongma source tree directly");
 const platformDockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 for (const evidence of ["/usr/local/lib/node_modules/npm", "/usr/local/lib/node_modules/corepack"]) if (!platformDockerfile.includes(evidence)) failures.push(`Platform image must remove unused package manager content: ${evidence}`);
+if (!platformDockerfile.includes("apk add --no-cache docker-cli")) failures.push("Platform image must include the Docker CLI required by Server Agent");
+if (!workflow.includes("Validate Server Agent Docker client")) failures.push("Container CI must execute the Server Agent Docker client from the production image");
 const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/build.mjs"), "utf8");
 for (const evidence of [".bairui-build.json", "transformBailongmaHostApp", "transformBailongmaHostChat", "transformBailongmaHostVoiceWake", "BUILD_INTEGRITY_FILES"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);

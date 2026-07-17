@@ -48,6 +48,8 @@ jobs:
           submodules: true
       - name: Build production platform image
         run: docker build -t bairui-platform:${{ github.sha }} .
+      - name: Validate Server Agent Docker client
+        run: docker run --rm --user 0:0 -v /var/run/docker.sock:/var/run/docker.sock --entrypoint docker bairui-platform:${{ github.sha }} version --format '{{.Server.Version}}'
       - name: Validate production composition
         env:
           POSTGRES_PASSWORD: ci-database-password
