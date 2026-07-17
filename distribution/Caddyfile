@@ -1,0 +1,7 @@
+{$BAIRUI_SITE_ADDRESS} {
+  encode zstd gzip
+
+  @wechat path /callbacks/wechat/*
+  reverse_proxy @wechat channel-worker:8790
+  reverse_proxy platform:3000
+}

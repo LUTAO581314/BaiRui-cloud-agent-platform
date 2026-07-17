@@ -11,6 +11,15 @@ if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw ne
 const required = [
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
+  ".github/workflows/distribution.yml",
+  "VERSION",
+  "distribution/README.md",
+  "distribution/Caddyfile",
+  "distribution/compose.yaml",
+  "distribution/install.sh",
+  "distribution/release-manifest.mjs",
+  "distribution/bin/build-manifest.mjs",
+  "distribution/bin/verify-manifest.mjs",
   "apps/web/app.mjs",
   "apps/web/http.mjs",
   "apps/web/routes/auth.mjs",
@@ -80,6 +89,7 @@ const required = [
   "tests/memory-projection-worker.test.mjs",
   "tests/channel-adapters.test.mjs",
   "tests/channel-delivery.test.mjs",
+  "tests/distribution-release.test.mjs",
   "tests/http-routing.test.mjs",
   "tests/browser/fixture-server.mjs",
   "tests/browser/remote-acceptance.mjs",
@@ -133,6 +143,18 @@ for (const evidence of ["workflow_run:", "Platform CI", "ghcr.io/lutao581314/bai
   if (!releaseWorkflow.includes(evidence)) failures.push(`Immutable Platform release workflow is missing ${evidence}`);
 }
 if (releaseWorkflow.includes(":latest")) failures.push("Immutable Platform release workflow must not publish or consume latest tags");
+const distributionWorkflow = fs.readFileSync(path.join(root, ".github/workflows/distribution.yml"), "utf8");
+for (const evidence of ["BaiRui Product Distribution", "release-manifest.json", "cosign verify-attestation", "gh attestation verify", "SHA256SUMS", "gh release create", "--verify-only"]) {
+  if (!distributionWorkflow.includes(evidence)) failures.push(`Product distribution workflow is missing ${evidence}`);
+}
+if (distributionWorkflow.includes(":latest")) failures.push("Product distribution workflow must not consume latest image tags");
+const productVersion = fs.readFileSync(path.join(root, "VERSION"), "utf8").trim();
+if (packageDocument.version !== productVersion) failures.push("VERSION and package.json must identify the same product version");
+const installScript = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
+for (const evidence of ["sha256sum --check --strict", "register_server_agent", "rollback_on_error", "wait_for_platform"]) {
+  if (!installScript.includes(evidence)) failures.push(`Product installer is missing ${evidence}`);
+}
+if (installScript.includes(":latest")) failures.push("Product installer must not consume latest image tags");
 const integrationGuide = fs.readFileSync(path.join(root, "docs/20-platform-agent-integration-guide.md"), "utf8");
 for (const evidence of ["User data plane", "Memory contract", "Control plane and Server Agent", "Agent initialization sequence", "Administrator boundary", "memory_projection_conflict"]) {
   if (!integrationGuide.includes(evidence)) failures.push(`Missing platform-Agent integration guidance: ${evidence}`);
