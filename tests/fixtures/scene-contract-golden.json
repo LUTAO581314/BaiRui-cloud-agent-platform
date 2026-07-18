@@ -1,0 +1,110 @@
+{
+  "ownerScope": {
+    "organization_id": "org_scene_golden",
+    "user_id": "user_scene_golden",
+    "agent_id": "agent_scene_golden",
+    "runtime_id": "runtime_scene_golden",
+    "workspace_id": "workspace_scene_golden"
+  },
+  "scene": {
+    "sceneId": "brain",
+    "revision": 3,
+    "view": {
+      "surfaces": [
+        {"id": "chat", "kind": "chat", "order": 0, "focus": true},
+        {"id": "memory", "kind": "memory", "order": 1, "focus": false}
+      ],
+      "navigation": {"surface": "chat"}
+    },
+    "updatedAt": "2026-07-18T00:00:03.000Z"
+  },
+  "event": {
+    "sceneId": "brain",
+    "baseRevision": 3,
+    "revision": 4,
+    "operations": [{"op": "replace", "path": "/navigation/surface", "value": "memory"}],
+    "createdAt": "2026-07-18T00:00:04.000Z"
+  },
+  "intentInput": {
+    "sceneId": "brain",
+    "action": "command",
+    "payload": {"operation": "diagnostics.status", "input": {"include": "summary"}},
+    "trace": "trace_scene_golden",
+    "intentId": "intent_scene_golden_0001",
+    "createdAt": "2026-07-18T00:00:05.000Z"
+  },
+  "snapshot": {
+    "schema_version": "2.0",
+    "scene_id": "brain",
+    "owner_scope": {
+      "organization_id": "org_scene_golden",
+      "user_id": "user_scene_golden",
+      "agent_id": "agent_scene_golden",
+      "runtime_id": "runtime_scene_golden",
+      "workspace_id": "workspace_scene_golden"
+    },
+    "revision": 3,
+    "view": {
+      "surfaces": [
+        {"id": "chat", "kind": "chat", "order": 0, "focus": true},
+        {"id": "memory", "kind": "memory", "order": 1, "focus": false}
+      ],
+      "navigation": {"surface": "chat"}
+    },
+    "generated_at": "2026-07-18T00:00:03.000Z",
+    "trace": {"correlation_id": "trace_scene_golden"}
+  },
+  "patch": {
+    "schema_version": "2.0",
+    "scene_id": "brain",
+    "owner_scope": {
+      "organization_id": "org_scene_golden",
+      "user_id": "user_scene_golden",
+      "agent_id": "agent_scene_golden",
+      "runtime_id": "runtime_scene_golden",
+      "workspace_id": "workspace_scene_golden"
+    },
+    "base_revision": 3,
+    "revision": 4,
+    "operations": [{"op": "replace", "path": "/navigation/surface", "value": "memory"}],
+    "generated_at": "2026-07-18T00:00:04.000Z",
+    "trace": {"correlation_id": "trace_scene_golden"}
+  },
+  "intent": {
+    "schema_version": "2.0",
+    "scene_id": "brain",
+    "owner_scope": {
+      "organization_id": "org_scene_golden",
+      "user_id": "user_scene_golden",
+      "agent_id": "agent_scene_golden",
+      "runtime_id": "runtime_scene_golden",
+      "workspace_id": "workspace_scene_golden"
+    },
+    "intent_id": "intent_scene_golden_0001",
+    "action": "command",
+    "payload": {"operation": "diagnostics.status", "input": {"include": "summary"}},
+    "created_at": "2026-07-18T00:00:05.000Z",
+    "trace": {"correlation_id": "trace_scene_golden"}
+  },
+  "messages": {
+    "snapshot": {
+      "v": 1,
+      "type": "scene",
+      "rev": 3,
+      "view": {
+        "surfaces": [
+          {"id": "chat", "kind": "chat", "order": 0, "focus": true},
+          {"id": "memory", "kind": "memory", "order": 1, "focus": false}
+        ],
+        "navigation": {"surface": "chat"}
+      }
+    },
+    "patch": {
+      "v": 1,
+      "type": "scene.patch",
+      "base": 3,
+      "rev": 4,
+      "operations": [{"op": "replace", "path": "/navigation/surface", "value": "memory"}]
+    }
+  }
+}
