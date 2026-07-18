@@ -165,7 +165,7 @@
     content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
     try {
       const renderer = workspaceRegistry.get(view)?.render;
-      if (renderer) await renderer();
+      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast });
     } catch (error) { showError(error); }
   }
 
@@ -463,7 +463,7 @@
     };
     for (const [id, [order, renderView]] of Object.entries(views)) {
       const label = NAV.find(([key]) => key === id)?.[1] || id;
-      workspaceRegistry.register({ id, label, order, render: renderView });
+      if (!workspaceRegistry.get(id)) workspaceRegistry.register({ id, label, order, render: renderView });
     }
   }
 

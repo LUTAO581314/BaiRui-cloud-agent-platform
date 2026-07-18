@@ -118,6 +118,7 @@ const required = [
   "apps/web/public/bairui-bailongma.css",
   "apps/web/public/bairui-bailongma.js",
   "apps/web/public/bairui-workspace.js",
+  "apps/web/public/bairui-workspace-usage.js",
   "apps/web/public/bairui-scene-bootstrap.js",
   "docs/10-control-plane-architecture.md",
   "docs/11-control-plane-protocol.md",
@@ -216,6 +217,7 @@ const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/bu
 for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD_INTEGRITY_FILES", "sourceCommit", "patchManifestSha256", "appliedPatches"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
 }
+if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
 const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
 for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
   if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
@@ -234,6 +236,10 @@ for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register",
   if (!workspaceAdapter.includes(evidence)) failures.push("Missing BaiRui workspace extension registry evidence: " + evidence);
 }
 if (workspaceAdapter.includes("document.body.appendChild(root)")) failures.push("BaiRui workspace must not append a second root directly to document.body");
+const usageExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-usage.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"usage\"", "agentApi(\"/usage\")", "bw-metrics"]) {
+  if (!usageExtension.includes(evidence)) failures.push("Missing modular usage workspace extension evidence: " + evidence);
+}
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
