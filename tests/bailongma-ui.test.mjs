@@ -91,12 +91,16 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
   const agents = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-agents.js"), "utf8");
   const channels = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-channels.js"), "utf8");
   const hotspots = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-hotspots.js"), "utf8");
+  const memory = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-memory.js"), "utf8");
+  const skills = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-skills.js"), "utf8");
+  const usage = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-usage.js"), "utf8");
+  const workspaceSources = [workspace, conversations, agents, channels, hotspots, memory, skills, usage].join("\n");
   assert.match(conversations, /renderConversations/);
   assert.match(agents, /renderAgents/);
   assert.match(channels, /renderChannels/);
   assert.match(hotspots, /renderHotspots/);
   for (const view of ["memory", "skills", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
-  for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
+  for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspaceSources, new RegExp(route.replace("/", "\\/")));
   assert.match(workspace, /Hermes MEMORY\.md/);
   assert.match(workspace, /Hermes USER\.md/);
   assert.match(workspace, /Obsidian 主记忆库/);
