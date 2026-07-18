@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  CHANNEL_PROTOCOL_VERSION,
   validateChannelBindingInventory,
   validateChannelBindingInventoryRequest,
   validateChannelCredentialResolution,
+  validateChannelCredentialResolutionRequest,
   validateChannelDeliveryBatch,
   validateChannelDeliveryLeaseRequest,
   validateChannelDeliveryReceipt,
@@ -50,12 +52,13 @@ export class ChannelPlatformClient {
     return result;
   }
 
-  async resolveBinding(bindingId) {
-    return validateChannelCredentialResolution(await this.request(`/api/internal/channels/bindings/${encodeURIComponent(bindingId)}/resolve`, {}));
+  async resolveBinding(bindingId, ownerScope, traceId = randomUUID()) {
+    const request = validateChannelCredentialResolutionRequest({ schema_version: CHANNEL_PROTOCOL_VERSION, worker_id: this.machineId, binding_id: bindingId, owner_scope: ownerScope, trace: { correlation_id: traceId } });
+    return validateChannelCredentialResolution(await this.request(`/api/internal/channels/bindings/${encodeURIComponent(bindingId)}/resolve`, request));
   }
 
   async inventory({ workerId = this.machineId, channels, traceId = randomUUID() }) {
-    const request = validateChannelBindingInventoryRequest({ schema_version: "1.0", worker_id: workerId, channels, trace: { correlation_id: traceId } });
+    const request = validateChannelBindingInventoryRequest({ schema_version: CHANNEL_PROTOCOL_VERSION, worker_id: workerId, channels, trace: { correlation_id: traceId } });
     return validateChannelBindingInventory(await this.request("/api/internal/channels/bindings", request));
   }
 
@@ -64,7 +67,7 @@ export class ChannelPlatformClient {
   }
 
   async lease({ workerId, channels, bindingIds = [], limit = 10, leaseSeconds = 60, traceId = randomUUID() }) {
-    const request = validateChannelDeliveryLeaseRequest({ schema_version: "1.0", worker_id: workerId, channels, binding_ids: bindingIds, limit, lease_seconds: leaseSeconds, requested_at: new Date().toISOString(), trace: { correlation_id: traceId } });
+    const request = validateChannelDeliveryLeaseRequest({ schema_version: CHANNEL_PROTOCOL_VERSION, worker_id: workerId, channels, binding_ids: bindingIds, limit, lease_seconds: leaseSeconds, requested_at: new Date().toISOString(), trace: { correlation_id: traceId } });
     return validateChannelDeliveryBatch(await this.request("/api/internal/channels/deliveries/lease", request));
   }
 

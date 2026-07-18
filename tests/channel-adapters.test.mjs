@@ -10,6 +10,12 @@ import { ChannelPlatformClient } from "../packages/channels/platform-client.mjs"
 import { deriveMachineKey, verifyMachineRequest } from "../packages/security/machine-request.mjs";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const ownerScope = Object.freeze({
+  organization_id: "org_channel",
+  user_id: "user_channel",
+  agent_id: "agent_channel",
+  workspace_id: "workspace_channel"
+});
 
 function platform(bindingId, agentId = "agent_channel") {
   const calls = { health: [], ingress: [], receipts: [] };
@@ -17,10 +23,10 @@ function platform(bindingId, agentId = "agent_channel") {
     agentId,
     calls,
     async health(value) { calls.health.push(value); return value; },
-    async ingress(value) { calls.ingress.push(value); return { schema_version: "1.0", ingress_id: value.ingress_id, status: "accepted", acknowledged_at: new Date().toISOString(), trace: value.trace }; },
+    async ingress(value) { calls.ingress.push(value); return { schema_version: "2.0", owner_scope: value.owner_scope, ingress_id: value.ingress_id, status: "accepted", acknowledged_at: new Date().toISOString(), trace: value.trace }; },
     async receipt(value) { calls.receipts.push(value); return {}; },
-    async resolveBinding(id) { return { binding: { id, agent_id: agentId, channel: "feishu" }, credential: { values: { appId: "app_feishu", appSecret: "secret_feishu" } } }; },
-    async lease() { return { schema_version: "1.0", lease_id: "lease_empty", worker_id: "worker", deliveries: [], leased_until: new Date(Date.now() + 60_000).toISOString(), trace: { correlation_id: "trace_empty" } }; }
+    async resolveBinding(id, requestedScope) { return { binding: { id, owner_scope: requestedScope, channel: "feishu" }, credential: { values: { appId: "app_feishu", appSecret: "secret_feishu" } } }; },
+    async lease() { return { schema_version: "2.0", lease_id: "lease_empty", worker_id: "worker", deliveries: [], leased_until: new Date(Date.now() + 60_000).toISOString(), trace: { correlation_id: "trace_empty" } }; }
   };
 }
 
@@ -40,7 +46,7 @@ test("Feishu reports connected only after SDK readiness and normalizes inbound m
     if (String(url).includes("tenant_access_token")) return Response.json({ code: 0, tenant_access_token: "token_feishu", expire: 7200 });
     return Response.json({ code: 0, data: { message_id: "reply_feishu" } });
   };
-  const adapter = new FeishuChannelAdapter({ binding: { id: "binding_feishu", workerId: "worker_feishu" }, credentials: { appId: "app_feishu", appSecret: "secret_feishu" }, platform: client, fetch, loadSdk: async () => ({ WSClient, EventDispatcher, LoggerLevel: { warn: 2 } }) });
+  const adapter = new FeishuChannelAdapter({ binding: { id: "binding_feishu", workerId: "worker_feishu", ownerScope }, credentials: { appId: "app_feishu", appSecret: "secret_feishu" }, platform: client, fetch, loadSdk: async () => ({ WSClient, EventDispatcher, LoggerLevel: { warn: 2 } }) });
   await adapter.start();
   assert.equal(client.calls.health.some((item) => item.status === "connected"), false);
   await wsOptions.onReady();
@@ -63,7 +69,7 @@ test("WeChat verifies callback signatures, suppresses replays, and gates connect
   const fetch = async (url) => String(url).includes("stable_token")
     ? Response.json({ access_token: "token_wechat", expires_in: 7200 })
     : Response.json({ errcode: 0, msgid: 42 });
-  const adapter = new WechatOfficialChannelAdapter({ binding: { id: "binding_wechat", workerId: "worker_wechat" }, credentials: { appId: "app_wechat", appSecret: "secret_wechat", token: "verify_wechat" }, platform: client, fetch });
+  const adapter = new WechatOfficialChannelAdapter({ binding: { id: "binding_wechat", workerId: "worker_wechat", ownerScope }, credentials: { appId: "app_wechat", appSecret: "secret_wechat", token: "verify_wechat" }, platform: client, fetch });
   await adapter.start();
   assert.equal(client.calls.health.at(-1).status, "pending");
   const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -112,7 +118,7 @@ test("QQ performs official Gateway identify, normalizes C2C ingress, and sends p
     if (String(url).endsWith("/gateway")) return Response.json({ url: "wss://gateway.qq.test" });
     return Response.json({ id: "reply_qq" });
   };
-  const adapter = new QQChannelAdapter({ binding: { id: "binding_qq", workerId: "worker_qq" }, credentials: { appId: "app_qq", appSecret: "secret_qq" }, platform: client, fetch, webSocketFactory: () => socket });
+  const adapter = new QQChannelAdapter({ binding: { id: "binding_qq", workerId: "worker_qq", ownerScope }, credentials: { appId: "app_qq", appSecret: "secret_qq" }, platform: client, fetch, webSocketFactory: () => socket });
   await adapter.start();
   socket.emit("message", JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }));
   assert.equal(socket.sent[0].op, 2);
@@ -132,10 +138,10 @@ test("QQ performs official Gateway identify, normalizes C2C ingress, and sends p
 
 test("Channel Worker resolves credentials, delegates deliveries, and emits durable receipts", async () => {
   const client = platform("binding_worker");
-  client.resolveBinding = async (id) => ({ binding: { id, agent_id: client.agentId, channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
-  client.lease = async () => ({ schema_version: "1.0", lease_id: "lease_worker", worker_id: "worker_test", leased_until: new Date(Date.now() + 60_000).toISOString(), trace: { correlation_id: "trace_worker" }, deliveries: [{ outbound_id: "out_worker", binding_id: "binding_worker", channel: "feishu", channel_account_id: "app", conversation: { channel_conversation_id: "chat", kind: "group" }, content: { kind: "text", text: "reply" }, attachments: [], attempt: 1, lease_token: "lease_token", available_at: new Date().toISOString(), trace: { correlation_id: "trace_worker" } }] });
+  client.resolveBinding = async (id, requestedScope) => ({ binding: { id, owner_scope: requestedScope, channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
+  client.lease = async () => ({ schema_version: "2.0", lease_id: "lease_worker", worker_id: "worker_test", leased_until: new Date(Date.now() + 60_000).toISOString(), trace: { correlation_id: "trace_worker" }, deliveries: [{ owner_scope: { ...ownerScope, conversation_id: "runtime_conversation_worker" }, outbound_id: "out_worker", binding_id: "binding_worker", channel: "feishu", channel_account_id: "app", conversation: { channel_conversation_id: "chat", kind: "group" }, content: { kind: "text", text: "reply" }, attachments: [], attempt: 1, lease_token: "lease_token", available_at: new Date().toISOString(), trace: { correlation_id: "trace_worker" } }] });
   const adapter = { binding: { id: "binding_worker", channel: "feishu" }, async start() {}, async deliver() { return { status: "delivered", channelMessageId: "vendor_worker" }; }, async stop() {} };
-  const worker = new ChannelWorker({ platform: client, workerId: "worker_test", bindings: [{ id: "binding_worker", channel: "feishu" }], adapterFactories: { feishu: () => adapter }, intervalMs: 60_000 });
+  const worker = new ChannelWorker({ platform: client, workerId: "worker_test", bindings: [{ id: "binding_worker", channel: "feishu", ownerScope }], adapterFactories: { feishu: () => adapter }, intervalMs: 60_000 });
   await worker.start();
   const deliveries = await worker.runOnce();
   assert.equal(deliveries.length, 1);
@@ -147,9 +153,9 @@ test("Channel Worker resolves credentials, delegates deliveries, and emits durab
 test("Channel Worker hot reloads adapters when inventory generations change", async () => {
   const client = platform("binding_reload");
   client.machineId = "worker_reload";
-  let inventory = [{ id: "binding_reload", channel: "feishu", connection_generation: 1 }];
+  let inventory = [{ id: "binding_reload", owner_scope: ownerScope, channel: "feishu", connection_generation: 1 }];
   client.inventory = async () => ({ bindings: inventory });
-  client.resolveBinding = async (id) => ({ binding: { id, agent_id: "agent_channel", channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
+  client.resolveBinding = async (id, requestedScope) => ({ binding: { id, owner_scope: requestedScope, channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
   let starts = 0;
   let stops = 0;
   const worker = new ChannelWorker({ platform: client, workerId: "worker_reload", channels: ["feishu"], adapterFactories: { feishu: ({ binding }) => ({ binding, async start() { starts += 1; }, async stop() { stops += 1; }, async deliver() { return { status: "delivered" }; } }) }, intervalMs: 60_000, inventoryIntervalMs: 60_000 });
@@ -169,8 +175,8 @@ test("Channel Worker hot reloads adapters when inventory generations change", as
 test("Channel Worker retries an adapter that fails during startup", async () => {
   const client = platform("binding_retry");
   client.machineId = "worker_retry";
-  client.inventory = async () => ({ bindings: [{ id: "binding_retry", channel: "feishu", connection_generation: 1 }] });
-  client.resolveBinding = async (id) => ({ binding: { id, agent_id: "agent_channel", channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
+  client.inventory = async () => ({ bindings: [{ id: "binding_retry", owner_scope: ownerScope, channel: "feishu", connection_generation: 1 }] });
+  client.resolveBinding = async (id, requestedScope) => ({ binding: { id, owner_scope: requestedScope, channel: "feishu" }, credential: { values: { appId: "app", appSecret: "secret" } } });
   let starts = 0;
   const worker = new ChannelWorker({
     platform: client,
@@ -206,7 +212,7 @@ test("Channel Platform client signs inventory requests with the dedicated Worker
   let captured;
   const fetch = async (url, options) => {
     captured = { url: String(url), options };
-    return Response.json({ schema_version: "1.0", worker_id: "worker_client", bindings: [], generated_at: new Date().toISOString(), trace: { correlation_id: "trace_client" } });
+    return Response.json({ schema_version: "2.0", worker_id: "worker_client", bindings: [], generated_at: new Date().toISOString(), trace: { correlation_id: "trace_client" } });
   };
   const client = new ChannelPlatformClient({ platformUrl: "https://platform.test", machineId: "worker_client", token, fetch });
   const result = await client.inventory({ channels: ["feishu"], traceId: "trace_client" });

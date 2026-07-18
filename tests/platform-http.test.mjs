@@ -9,6 +9,7 @@ import { ROLES } from "../packages/auth/authorization.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
 import { signedMachinePost, sendCommandReceipt } from "../server-agent/control-client.mjs";
 import { deriveMachineKey, signMachineRequest } from "../packages/security/machine-request.mjs";
+import { workspaceIdFromRef } from "../packages/server-protocol/runtime-client.mjs";
 import { createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
 
 const sessionSecret = "http-test-session-secret-that-is-longer-than-32-characters";
@@ -391,10 +392,13 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const authorization = (await authorizationResponse.json()).authorization;
   assert.doesNotMatch(JSON.stringify(authorization), new RegExp(personalSecret));
   const resolvePath = `/api/internal/runtime/agents/${context.agent.id}/authorizations/${authorization.id}/resolve`;
-  const resolved = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: resolvePath, payload: {} });
+  const resolutionRequest = { schema_version: "2.0", owner_scope: { organization_id: "org_a", user_id: "user_a", agent_id: context.agent.id, runtime_id: context.runtime.id, workspace_id: workspaceIdFromRef(context.runtime.workspaceRef) }, authorization_id: authorization.id, expected_service: "firecrawl", trace: { correlation_id: "credential_resolution_http" } };
+  const resolved = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: resolvePath, payload: resolutionRequest });
   assert.equal(resolved.status, 200);
   assert.equal((await resolved.json()).credential.secret, personalSecret);
-  const wrongMachine = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: resolvePath, payload: {} });
+  const wrongWorkspaceResolution = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: resolvePath, payload: { ...resolutionRequest, owner_scope: { ...resolutionRequest.owner_scope, workspace_id: "workspace_other" } } });
+  assert.equal(wrongWorkspaceResolution.status, 404);
+  const wrongMachine = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: resolvePath, payload: resolutionRequest });
   assert.equal(wrongMachine.status, 401);
 
   const channelSecret = "channel-worker-only-secret";
@@ -406,37 +410,53 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const channelBinding = (await channelBindingResponse.json()).binding;
   assert.equal(channelBinding.status, "pending");
   assert.doesNotMatch(JSON.stringify(channelBinding), new RegExp(channelSecret));
+  const channelOwnerScope = {
+    organization_id: "org_a",
+    user_id: "user_a",
+    agent_id: context.agent.id,
+    workspace_id: workspaceIdFromRef(context.runtime.workspaceRef)
+  };
   const channelResolvePath = `/api/internal/channels/bindings/${channelBinding.id}/resolve`;
-  const channelCredentialResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: channelResolvePath, payload: {} });
+  const channelResolutionRequest = { schema_version: "2.0", worker_id: channelWorkerId, binding_id: channelBinding.id, owner_scope: channelOwnerScope, trace: { correlation_id: "channel_credential_http" } };
+  const channelCredentialResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: channelResolvePath, payload: channelResolutionRequest });
   assert.equal(channelCredentialResponse.status, 200);
   assert.equal((await channelCredentialResponse.json()).credential.values.appSecret, channelSecret);
-  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: channelResolvePath, payload: {} })).status, 401);
+  assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: channelResolvePath, payload: channelResolutionRequest })).status, 401);
+  const crossAgentResolution = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: channelResolvePath, payload: { ...channelResolutionRequest, owner_scope: { ...channelOwnerScope, agent_id: "agent_other" } } });
+  assert.equal(crossAgentResolution.status, 404);
+  const crossWorkspaceResolution = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: channelResolvePath, payload: { ...channelResolutionRequest, owner_scope: { ...channelOwnerScope, workspace_id: "workspace_other" } } });
+  assert.equal(crossWorkspaceResolution.status, 404);
 
-  const channelInventory = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/bindings", payload: { schema_version: "1.0", worker_id: channelWorkerId, channels: ["feishu", "wechat", "qq"], trace: { correlation_id: "channel_inventory_http" } } });
+  const channelInventory = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/bindings", payload: { schema_version: "2.0", worker_id: channelWorkerId, channels: ["feishu", "wechat", "qq"], trace: { correlation_id: "channel_inventory_http" } } });
   assert.equal(channelInventory.status, 200);
   const inventoryBody = await channelInventory.json();
   assert.equal(inventoryBody.bindings[0].id, channelBinding.id);
+  assert.deepEqual(inventoryBody.bindings[0].owner_scope, channelOwnerScope);
   assert.doesNotMatch(JSON.stringify(inventoryBody), new RegExp(channelSecret));
 
   const channelTrace = { correlation_id: "channel_trace_http" };
-  const channelIngress = { schema_version: "1.0", ingress_id: "channel_ingress_http", binding_id: channelBinding.id, channel: "feishu", channel_account_id: "app_channel", message_id: "vendor_message_http", sender: { channel_user_id: "ou_http" }, conversation: { channel_conversation_id: "oc_http", kind: "group" }, content: { kind: "text", text: "hello" }, attachments: [], received_at: new Date().toISOString(), trace: channelTrace };
+  const channelIngress = { schema_version: "2.0", owner_scope: channelOwnerScope, ingress_id: "channel_ingress_http", binding_id: channelBinding.id, channel: "feishu", channel_account_id: "app_channel", message_id: "vendor_message_http", sender: { channel_user_id: "ou_http" }, conversation: { channel_conversation_id: "oc_http", kind: "group" }, content: { kind: "text", text: "hello" }, attachments: [], received_at: new Date().toISOString(), trace: channelTrace };
+  const crossAgentIngress = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/ingress", payload: { ...channelIngress, ingress_id: "channel_ingress_cross_agent", message_id: "vendor_message_cross_agent", owner_scope: { ...channelOwnerScope, agent_id: "agent_other" } } });
+  assert.equal(crossAgentIngress.status, 404);
   const ingressResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/ingress", payload: channelIngress });
   assert.equal(ingressResponse.status, 202);
   assert.equal((await ingressResponse.json()).status, "accepted");
   const duplicateIngress = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/ingress", payload: channelIngress });
   assert.equal((await duplicateIngress.json()).status, "duplicate");
   const [channelInbox] = await context.repository.leaseChannelIngress({ limit: 1, leaseSeconds: 30, leaseId: "channel_http_inbox_lease" });
-  await context.repository.completeChannelIngress({ id: channelInbox.id, leaseToken: channelInbox.leaseToken, outbound: { id: "channel_outbound_http", content: { kind: "text", text: "world" } } });
+  const channelConversation = await context.repository.ensureChannelConversation({ organizationId: "org_a", userId: "user_a", agentId: context.agent.id, bindingId: channelBinding.id, channel: "feishu", channelConversationId: channelInbox.conversation.channel_conversation_id, conversationKind: channelInbox.conversation.kind, runtimeConversationId: "runtime_conversation_http" });
+  await context.repository.completeChannelIngress({ id: channelInbox.id, leaseToken: channelInbox.leaseToken, outbound: { id: "channel_outbound_http", conversation: { ...channelInbox.conversation, runtime_conversation_id: channelConversation.runtimeConversationId }, content: { kind: "text", text: "world" } } });
 
-  const deliveryLeasePayload = { schema_version: "1.0", worker_id: "channel_worker_http", channels: ["feishu"], binding_ids: [channelBinding.id], limit: 10, lease_seconds: 30, requested_at: new Date().toISOString(), trace: channelTrace };
+  const deliveryLeasePayload = { schema_version: "2.0", worker_id: "channel_worker_http", channels: ["feishu"], binding_ids: [channelBinding.id], limit: 10, lease_seconds: 30, requested_at: new Date().toISOString(), trace: channelTrace };
   const channelLeaseResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/deliveries/lease", payload: deliveryLeasePayload });
   assert.equal(channelLeaseResponse.status, 200);
   const channelDelivery = (await channelLeaseResponse.json()).deliveries[0];
   assert.equal(channelDelivery.outbound_id, "channel_outbound_http");
-  const channelHealth = { schema_version: "1.0", binding_id: channelBinding.id, channel: "feishu", worker_id: "channel_worker_http", sequence: 1, status: "connected", capabilities: ["receive", "send", "websocket"], adapter_version: "test", observed_at: new Date().toISOString() };
+  assert.deepEqual(channelDelivery.owner_scope, { ...channelOwnerScope, conversation_id: channelConversation.runtimeConversationId });
+  const channelHealth = { schema_version: "2.0", owner_scope: channelOwnerScope, binding_id: channelBinding.id, channel: "feishu", worker_id: "channel_worker_http", sequence: 1, status: "connected", capabilities: ["receive", "send", "websocket"], adapter_version: "test", observed_at: new Date().toISOString() };
   assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/health", payload: { ...channelHealth, message: "must-not-pass" } })).status, 400);
   assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/health", payload: channelHealth })).status, 202);
-  const deliveryReceipt = { schema_version: "1.0", outbound_id: channelDelivery.outbound_id, binding_id: channelDelivery.binding_id, lease_token: channelDelivery.lease_token, status: "delivered", attempt: channelDelivery.attempt, channel_message_id: "vendor_reply_http", observed_at: new Date().toISOString(), trace: channelTrace };
+  const deliveryReceipt = { schema_version: "2.0", owner_scope: channelDelivery.owner_scope, outbound_id: channelDelivery.outbound_id, binding_id: channelDelivery.binding_id, lease_token: channelDelivery.lease_token, status: "delivered", attempt: channelDelivery.attempt, channel_message_id: "vendor_reply_http", observed_at: new Date().toISOString(), trace: channelTrace };
   assert.equal((await signedMachinePost({ platformUrl: context.baseUrl, machineId: channelWorkerId, token: channelWorkerToken, path: "/api/internal/channels/delivery-receipts", payload: deliveryReceipt })).status, 202);
   const connectedBinding = await context.repository.getChannelBindingById(channelBinding.id);
   assert.equal(connectedBinding.status, "connected");

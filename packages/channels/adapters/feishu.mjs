@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CHANNEL_PROTOCOL_VERSION } from "@bairui/contracts";
 import { adapterErrorCode, jsonResponse, retryAfterMs, stableIdentifier, submitIngress } from "./utilities.mjs";
 
 const DOMAINS = Object.freeze({ feishu: "https://open.feishu.cn", lark: "https://open.larksuite.com" });
@@ -40,7 +41,8 @@ export class FeishuChannelAdapter {
 
   async report(status, capabilities, error = null) {
     return this.platform.health({
-      schema_version: "1.0",
+      schema_version: CHANNEL_PROTOCOL_VERSION,
+      owner_scope: this.binding.ownerScope,
       binding_id: this.binding.id,
       channel: "feishu",
       worker_id: this.binding.workerId,
@@ -74,7 +76,8 @@ export class FeishuChannelAdapter {
     if (!message.message_id || !senderId || !message.chat_id || !text) return;
     const messageId = stableIdentifier("feishu-message", message.message_id);
     await submitIngress(this.platform, {
-      schema_version: "1.0",
+      schema_version: CHANNEL_PROTOCOL_VERSION,
+      owner_scope: this.binding.ownerScope,
       ingress_id: stableIdentifier("feishu-ingress", `feishu:${this.binding.id}:${message.message_id}`),
       binding_id: this.binding.id,
       channel: "feishu",

@@ -314,7 +314,7 @@ export class PostgresPlatformRepository {
           `INSERT INTO alerts (id, organization_id, agent_id, runtime_id, code, severity, status, title, summary, first_seen_at, last_seen_at)
            VALUES ($1,$2,$3,$4,'runtime.health',$5,'open',$6,$7,$8,$8)
            ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged') DO UPDATE SET severity=EXCLUDED.severity, title=EXCLUDED.title, summary=EXCLUDED.summary, last_seen_at=EXCLUDED.last_seen_at`,
-          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, input.status === "unhealthy" ? "critical" : "medium", input.status === "unhealthy" ? "Agent Runtime ???" : "Agent Runtime ??", `Runtime ?????${input.status}`, input.observedAt]
+          [randomUUID(), input.organizationId, input.agentId, input.runtimeId, input.status === "unhealthy" ? "critical" : "medium", input.status === "unhealthy" ? "Agent Runtime 不健康" : "Agent Runtime 降级", `Runtime 上报状态：${input.status}`, input.observedAt]
         );
       } else if (input.status === "healthy") {
         await client.query("UPDATE alerts SET status='resolved', resolved_at=COALESCE(resolved_at,now()) WHERE agent_id=$1 AND runtime_id=$2 AND code IN ('runtime.health','runtime.offline') AND status IN ('open','acknowledged')", [input.agentId, input.runtimeId]);
@@ -432,9 +432,9 @@ export class PostgresPlatformRepository {
 
   async evaluateResourceAlerts(client, resource) {
     const checks = [
-      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU ?????"],
-      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent ???????"],
-      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent ?????????"]
+      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU 使用率过高"],
+      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent 内存使用率过高"],
+      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent 主机存储使用率过高"]
     ];
     for (const [code, value, threshold, severity, title] of checks) {
       if (Number.isFinite(value) && value >= threshold) {
@@ -443,7 +443,7 @@ export class PostgresPlatformRepository {
            VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$9)
            ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged')
            DO UPDATE SET severity=EXCLUDED.severity, title=EXCLUDED.title, summary=EXCLUDED.summary, last_seen_at=EXCLUDED.last_seen_at`,
-          [randomUUID(), resource.organizationId, resource.agentId, resource.runtimeId, code, severity, title, `????? ${value.toFixed(1)}%??? ${threshold}%`, resource.observedAt]
+          [randomUUID(), resource.organizationId, resource.agentId, resource.runtimeId, code, severity, title, `当前使用率 ${value.toFixed(1)}%，阈值 ${threshold}%`, resource.observedAt]
         );
       } else {
         await client.query("UPDATE alerts SET status='resolved', resolved_at=COALESCE(resolved_at,now()) WHERE agent_id=$1 AND runtime_id=$2 AND code=$3 AND status IN ('open','acknowledged')", [resource.agentId, resource.runtimeId, code]);
@@ -527,10 +527,10 @@ export class PostgresPlatformRepository {
       if (stale) {
         const { rows: alertRows } = await this.pool.query(
           `INSERT INTO alerts (id, organization_id, agent_id, runtime_id, code, severity, status, title, summary, first_seen_at, last_seen_at)
-           VALUES ($1,$2,$3,$4,'runtime.offline','high','open','Agent Runtime ??',$5,now(),now())
+           VALUES ($1,$2,$3,$4,'runtime.offline','high','open','Agent Runtime 离线',$5,now(),now())
            ON CONFLICT (agent_id, code) WHERE status IN ('open','acknowledged') DO UPDATE SET last_seen_at=now(), summary=EXCLUDED.summary
            RETURNING *`,
-          [randomUUID(), row.organization_id, row.agent_id, row.runtime_id, `?? ${Math.round(staleAfterMs / 1000)} ??????`]
+          [randomUUID(), row.organization_id, row.agent_id, row.runtime_id, `超过 ${Math.round(staleAfterMs / 1000)} 秒未收到心跳`]
         );
         results.push(mapAlert(alertRows[0]));
       } else {
@@ -1596,13 +1596,16 @@ export class PostgresPlatformRepository {
       if (!inbox) return null;
       let outbound = null;
       if (input.outbound) {
+        const { rows: conversationRows } = await client.query("SELECT runtime_conversation_id FROM channel_conversations WHERE binding_id=$1 AND channel_conversation_id=$2", [inbox.bindingId, inbox.conversation.channel_conversation_id]);
+        if (!conversationRows[0]) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
+        const outboundConversation = { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: conversationRows[0].runtime_conversation_id };
         const result = await client.query(
           `INSERT INTO channel_outbox
             (id, organization_id, user_id, agent_id, binding_id, inbox_id, channel, channel_account_id, conversation, content, attachments, reply_to_message_id, trace)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            ON CONFLICT (inbox_id) DO UPDATE SET updated_at=channel_outbox.updated_at
            RETURNING *`,
-          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, input.outbound.conversation ?? inbox.conversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
+          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, outboundConversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
         );
         outbound = mapChannelOutbound(result.rows[0]);
       }
@@ -1658,6 +1661,11 @@ export class PostgresPlatformRepository {
       [input.agentId ?? null, input.organizationId ?? null, input.channels, bindingIds, limit, input.workerId, leaseId, leaseSeconds]
     );
     return { leaseId, deliveries: rows.map(mapChannelOutbound) };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    const { rows } = await this.pool.query("SELECT * FROM channel_outbox WHERE id=$1", [outboundId]);
+    return mapChannelOutbound(rows[0]);
   }
 
   async recordChannelDeliveryReceipt(input) {

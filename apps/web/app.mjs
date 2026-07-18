@@ -50,6 +50,7 @@ import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
 import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
+import { workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
 
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
@@ -62,11 +63,11 @@ const CONTAINER_RESOURCE_STATUSES = new Set(["running", "paused", "restarting", 
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
 const USER_AUTHORIZATION_SERVICES = Object.freeze({
-  firecrawl: { name: "Firecrawl", purpose: "????" },
-  searxng: { name: "SearXNG", purpose: "????" },
-  funasr: { name: "FunASR", purpose: "????" },
-  mineru: { name: "MinerU", purpose: "????" },
-  "model-provider": { name: "???? Provider", purpose: "??????", policy: "userCustomKeysAllowed" }
+  firecrawl: { name: "Firecrawl", purpose: "网页抓取" },
+  searxng: { name: "SearXNG", purpose: "网页搜索" },
+  funasr: { name: "FunASR", purpose: "语音识别" },
+  mineru: { name: "MinerU", purpose: "文档解析" },
+  "model-provider": { name: "个人模型 Provider", purpose: "个人模型调用", policy: "userCustomKeysAllowed" }
 });
 const USER_AUTHORIZATION_TYPES = new Set(["api_key", "bearer_token"]);
 const AUTHORIZATION_METADATA_KEYS = new Set(["provider", "model", "region", "projectId"]);
@@ -88,17 +89,17 @@ function numericMetrics(value) {
   return Object.fromEntries(Object.entries(value).filter(([key, item]) => /^[a-z][a-z0-9_.-]{0,63}$/.test(key) && Number.isFinite(item)).slice(0, 100));
 }
 const INTEGRATION_CATALOG = Object.freeze([
-  { id: "hermes", name: "Hermes Agent", layer: "?????", importType: "submodule", status: "runtime-connected" },
-  { id: "openclaw", name: "OpenClaw", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "bailongma", name: "BaiLongma", layer: "???? / UI", importType: "submodule", status: "ui-adapted" },
-  { id: "everos", name: "EverOS", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "mineru", name: "MinerU", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "funasr", name: "FunASR", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "trendradar", name: "TrendRadar", layer: "?????", importType: "submodule", status: "adapter-ready" },
-  { id: "mirofish", name: "MiroFish", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "searxng", name: "SearXNG", layer: "?????", importType: "registry-only", status: "adapter-needs-service" },
-  { id: "sonic", name: "Sonic", layer: "?????", importType: "submodule", status: "registered" },
-  { id: "firecrawl", name: "Firecrawl", layer: "?????", importType: "submodule", status: "adapter-needs-key" }
+  { id: "hermes", name: "Hermes Agent", layer: "核心运行层", importType: "submodule", status: "runtime-connected" },
+  { id: "openclaw", name: "OpenClaw", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "bailongma", name: "BaiLongma", layer: "渠道桥接 / UI", importType: "submodule", status: "ui-adapted" },
+  { id: "everos", name: "EverOS", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "mineru", name: "MinerU", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "funasr", name: "FunASR", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "trendradar", name: "TrendRadar", layer: "服务集成层", importType: "submodule", status: "adapter-ready" },
+  { id: "mirofish", name: "MiroFish", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "searxng", name: "SearXNG", layer: "服务集成层", importType: "registry-only", status: "adapter-needs-service" },
+  { id: "sonic", name: "Sonic", layer: "服务集成层", importType: "submodule", status: "registered" },
+  { id: "firecrawl", name: "Firecrawl", layer: "服务集成层", importType: "submodule", status: "adapter-needs-key" }
 ]);
 
 function sessionMessage(body) {
@@ -1366,11 +1367,12 @@ export function createPlatformApp(options) {
         catch { return json(response, 404, { error: "authorization_not_available" }); }
         const runtime = await repository.getAgentRuntimeByAgent(agent.id);
         const requestedScope = resolutionRequest.owner_scope;
-        if (!runtime || requestedScope.organization_id !== agent.organizationId || requestedScope.user_id !== agent.ownerUserId || requestedScope.agent_id !== agent.id || requestedScope.runtime_id !== runtime.id) {
+        if (!runtime || requestedScope.organization_id !== agent.organizationId || requestedScope.user_id !== agent.ownerUserId || requestedScope.agent_id !== agent.id || requestedScope.runtime_id !== runtime.id || requestedScope.workspace_id !== workspaceIdFromRef(runtime.workspaceRef)) {
           return json(response, 404, { error: "authorization_not_available" });
         }
+        if (resolutionRequest.authorization_id !== authorizationId) return json(response, 404, { error: "authorization_not_available" });
         const authorization = await repository.getAgentAuthorization(agent.organizationId, agent.ownerUserId, agent.id, authorizationId);
-        if (!authorization || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
+        if (!authorization || authorization.service !== resolutionRequest.expected_service || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
         const credential = JSON.parse(providerVault.open(authorization.credentialEnvelope));
         await repository.markAgentAuthorizationUsed(authorization.id);
         await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: null, action: "agent.authorization.resolve", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, runtimeCredentialId: machine.credential.id, service: authorization.service } });

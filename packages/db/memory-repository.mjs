@@ -262,7 +262,7 @@ export class MemoryPlatformRepository {
     const healthAlert = this.#alerts.find((item) => item.agentId === agent.id && item.code === "runtime.health" && ["open", "acknowledged"].includes(item.status));
     if (["degraded", "unhealthy"].includes(input.status)) {
       const alert = healthAlert ?? { id: randomUUID(), organizationId: input.organizationId, agentId: agent.id, runtimeId: runtime.id, code: "runtime.health", status: "open", firstSeenAt: input.observedAt, createdAt: receivedAt };
-      Object.assign(alert, { severity: input.status === "unhealthy" ? "critical" : "medium", title: input.status === "unhealthy" ? "Agent Runtime ???" : "Agent Runtime ??", summary: `Runtime ?????${input.status}`, lastSeenAt: input.observedAt });
+      Object.assign(alert, { severity: input.status === "unhealthy" ? "critical" : "medium", title: input.status === "unhealthy" ? "Agent Runtime 不健康" : "Agent Runtime 降级", summary: `Runtime 上报状态：${input.status}`, lastSeenAt: input.observedAt });
       if (!healthAlert) this.#alerts.push(alert);
     } else if (input.status === "healthy") {
       for (const alert of this.#alerts.filter((item) => item.agentId === agent.id && ["runtime.health", "runtime.offline"].includes(item.code) && ["open", "acknowledged"].includes(item.status))) Object.assign(alert, { status: "resolved", resolvedAt: receivedAt });
@@ -322,15 +322,15 @@ export class MemoryPlatformRepository {
 
   #evaluateResourceAlerts(resource) {
     const checks = [
-      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU ?????"],
-      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent ???????"],
-      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent ?????????"]
+      ["resource.cpu.high", resource.cpuPercent === null ? null : resource.cpuPercent / Math.max(1, resource.cpuCount ?? 1), 90, "high", "Agent CPU 使用率过高"],
+      ["resource.memory.high", resource.memoryLimitBytes > 0 ? resource.memoryUsedBytes / resource.memoryLimitBytes * 100 : null, 90, "high", "Agent 内存使用率过高"],
+      ["resource.storage.high", resource.hostStorageLimitBytes > 0 ? resource.hostStorageUsedBytes / resource.hostStorageLimitBytes * 100 : null, 90, "critical", "Agent 主机存储使用率过高"]
     ];
     for (const [code, value, threshold, severity, title] of checks) {
       const active = this.#alerts.find((item) => item.agentId === resource.agentId && item.code === code && ["open", "acknowledged"].includes(item.status));
       if (Number.isFinite(value) && value >= threshold) {
         const alert = active ?? { id: randomUUID(), organizationId: resource.organizationId, agentId: resource.agentId, runtimeId: resource.runtimeId, code, status: "open", firstSeenAt: resource.observedAt, createdAt: resource.receivedAt };
-        Object.assign(alert, { severity, title, summary: `????? ${value.toFixed(1)}%??? ${threshold}%`, lastSeenAt: resource.observedAt });
+        Object.assign(alert, { severity, title, summary: `当前使用率 ${value.toFixed(1)}%，阈值 ${threshold}%`, lastSeenAt: resource.observedAt });
         if (!active) this.#alerts.push(alert);
       } else if (active) Object.assign(active, { status: "resolved", resolvedAt: resource.receivedAt });
     }
@@ -379,8 +379,8 @@ export class MemoryPlatformRepository {
       }
       const stale = !runtime.lastHeartbeatAt || Date.parse(runtime.lastHeartbeatAt) < cutoff;
       if (stale) {
-        const alert = existing ?? { id: randomUUID(), organizationId: runtime.organizationId, agentId: runtime.agentId, runtimeId: runtime.id, code: "runtime.offline", severity: "high", status: "open", title: "Agent Runtime ??", firstSeenAt: new Date().toISOString(), createdAt: new Date().toISOString() };
-        Object.assign(alert, { summary: `?? ${Math.round(staleAfterMs / 1000)} ??????`, lastSeenAt: new Date().toISOString() });
+        const alert = existing ?? { id: randomUUID(), organizationId: runtime.organizationId, agentId: runtime.agentId, runtimeId: runtime.id, code: "runtime.offline", severity: "high", status: "open", title: "Agent Runtime 离线", firstSeenAt: new Date().toISOString(), createdAt: new Date().toISOString() };
+        Object.assign(alert, { summary: `超过 ${Math.round(staleAfterMs / 1000)} 秒未收到心跳`, lastSeenAt: new Date().toISOString() });
         if (!existing) this.#alerts.push(alert);
         results.push(alert);
       } else if (existing) Object.assign(existing, { status: "resolved", resolvedAt: new Date().toISOString() });
@@ -1113,9 +1113,11 @@ export class MemoryPlatformRepository {
     let outbound = this.#channelOutbox.find((item) => item.inboxId === inbox.id) ?? null;
     const now = new Date().toISOString();
     if (input.outbound && !outbound) {
+      const channelConversation = this.#channelConversations.find((item) => item.bindingId === inbox.bindingId && item.channelConversationId === inbox.conversation.channel_conversation_id);
+      if (!channelConversation) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
       outbound = {
         id: input.outbound.id ?? randomUUID(), organizationId: inbox.organizationId, userId: inbox.userId, agentId: inbox.agentId, bindingId: inbox.bindingId, inboxId: inbox.id,
-        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: input.outbound.conversation ?? inbox.conversation, content: input.outbound.content,
+        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: channelConversation.runtimeConversationId }, content: input.outbound.content,
         attachments: input.outbound.attachments ?? [], replyToMessageId: input.outbound.replyToMessageId ?? inbox.externalMessageId, trace: input.outbound.trace ?? inbox.trace,
         state: "pending", attempts: 0, maxAttempts: input.outbound.maxAttempts ?? 8, availableAt: now, workerId: null, leaseToken: null, leaseExpiresAt: null,
         channelMessageId: null, lastErrorCode: null, deliveredAt: null, createdAt: now, updatedAt: now
@@ -1147,6 +1149,10 @@ export class MemoryPlatformRepository {
       .slice(0, Math.max(1, Math.min(Number(input.limit) || 10, 100)));
     for (const item of deliveries) Object.assign(item, { state: "leased", attempts: item.attempts + 1, workerId: input.workerId, leaseToken: `${leaseId}:${item.id}`, leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
     return { leaseId, deliveries };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    return this.#channelOutbox.find((item) => item.id === outboundId) ?? null;
   }
 
   async recordChannelDeliveryReceipt(input) {

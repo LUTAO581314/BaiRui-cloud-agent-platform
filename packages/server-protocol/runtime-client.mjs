@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
+  DATA_PROTOCOL_VERSION,
+  RUNTIME_PROTOCOL_VERSION,
   validateIntegrationRequestEnvelope,
   validateRuntimeOperationEnvelope,
   validateRuntimeRequestEnvelope,
@@ -83,6 +85,7 @@ export class BairuiRuntimeClient {
       ...(channelContext.conversationKind ? { conversation_kind: channelContext.conversationKind } : {})
     };
     const payload = {
+      schema_version: RUNTIME_PROTOCOL_VERSION,
       request: {
         request_id: requestId,
         request_type: "message",
@@ -119,6 +122,7 @@ export class BairuiRuntimeClient {
     const ownerScope = principal && agent ? this.ownerScope(principal, agent, runtime) : { ...this.systemOwnerScope };
     const requestId = randomUUID();
     return this.signedPost("/v1/integrations/requests", validateIntegrationRequestEnvelope({
+      schema_version: DATA_PROTOCOL_VERSION,
       request: {
         request_id: requestId,
         ...(ownerScope ? { owner_scope: ownerScope } : {}),
@@ -156,7 +160,7 @@ export class BairuiRuntimeClient {
   operationEnvelope({ principal, agent, operation, input = {}, runtime }) {
     this.validateAgent(principal, agent);
     return {
-      schema_version: "2.0",
+      schema_version: RUNTIME_PROTOCOL_VERSION,
       operation,
       owner_scope: this.ownerScope(principal, agent, runtime, input.session_id ?? input.conversation_id),
       actor: { user_id: principal.userId, roles: [principal.role] },
