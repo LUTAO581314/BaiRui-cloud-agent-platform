@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
 import { createPlatformServer } from "../apps/web/app.mjs";
+import { createAgentInitializationProvider } from "../apps/web/services/agent-initialization.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
 import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
@@ -85,6 +86,76 @@ async function login(baseUrl, email) {
   assert.equal(response.status, 200);
   return response.headers.get("set-cookie").split(";")[0];
 }
+
+test("Agent initialization keeps provider envelopes internal and returns opaque authorization metadata", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  await context.repository.upsertModelPolicy({ organizationId: "org_a", allowedModels: ["private/model"], defaultModel: "private/model", userCustomKeysAllowed: true, updatedBy: "root" });
+  const initializeProvider = createAgentInitializationProvider({ repository: context.repository, providerVault: context.providerVault });
+  const principal = { organizationId: "org_a", userId: "user_a", role: ROLES.USER };
+  const secret = "private-provider-key-for-agent-a";
+
+  await assert.rejects(
+    () => initializeProvider({ ...principal, userId: "user_b" }, context.agent, { mode: "agent", provider: "custom", baseUrl: "https://models.example.test/v1", model: "private/model", apiKey: secret }),
+    (error) => error.statusCode === 404 && error.message === "agent_not_found"
+  );
+
+  const initialized = await initializeProvider(principal, context.agent, { mode: "agent", provider: "custom", baseUrl: "https://models.example.test/v1", model: "private/model", apiKey: secret });
+  assert.deepEqual(Object.keys(initialized.provider), ["provider", "baseUrl", "model", "keyHint"]);
+  assert.equal(initialized.authorization.credentialEnvelope, undefined);
+  assert.equal(initialized.authorization.credentialHint, undefined);
+  assert.equal(initialized.authorization.configured, true);
+  assert.equal(context.providerVault.open(initialized.provider.apiKeyEnvelope), secret);
+  assert.doesNotMatch(JSON.stringify(initialized), new RegExp(secret));
+
+  await context.repository.updateAgent(context.agent.id, { initializationStatus: "provisioning" });
+  await assert.rejects(
+    () => initializeProvider(principal, context.agent, { mode: "agent", provider: "custom", baseUrl: "https://models.example.test/v1", model: "private/model", apiKey: "replacement-key" }),
+    (error) => error.statusCode === 409 && error.message === "agent_initialization_in_progress"
+  );
+});
+
+test("model.set requires policy and Runtime discovery before updating Agent preferences", async (t) => {
+  const calls = [];
+  const context = await setup({
+    runtimeClient: {
+      operation: async ({ operation, input }) => {
+        calls.push({ operation, input });
+        if (operation === "discovery.models") return { data: [{ id: "example/model" }] };
+        return { model: input.model ?? input.body?.model ?? "example/model", status: "applied" };
+      }
+    }
+  });
+  t.after(() => context.server.close());
+  await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: { ciphertext: "opaque" }, keyHint: "test", updatedBy: "root" });
+  await context.repository.saveAgentHeartbeat({ organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", observedAt: new Date().toISOString(), components: [] });
+  const ownerCookie = await login(context.baseUrl, "owner@example.test");
+  const endpoint = `${context.baseUrl}/api/user/agents/${context.agent.id}/hermes/operations/model.set`;
+
+  const denied = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ model: "not-allowed/model" }) });
+  assert.equal(denied.status, 400);
+  assert.equal((await denied.json()).error, "model_not_allowed");
+  assert.equal(calls.length, 0);
+
+  const applied = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ model: "example/model" }) });
+  assert.equal(applied.status, 200);
+  assert.equal((await context.repository.getAgent(context.agent.id)).settings.preferredModel, "example/model");
+  assert.deepEqual(calls.map((call) => call.operation), ["discovery.models", "model.set"]);
+});
+
+test("Agent-scoped Hermes operations reject peers and raw credential material", async (t) => {
+  const context = await setup();
+  t.after(() => context.server.close());
+  const ownerCookie = await login(context.baseUrl, "owner@example.test");
+  const peerCookie = await login(context.baseUrl, "peer@example.test");
+  const endpoint = `${context.baseUrl}/api/user/agents/${context.agent.id}/hermes/operations/provider.catalog`;
+
+  assert.equal((await fetch(endpoint, { headers: { cookie: peerCookie } })).status, 404);
+  const rejected = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ apiKey: "must-use-an-authorization-reference" }) });
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).error, "opaque_credentials_required");
+  assert.equal((await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ authorization_id: "opaque-reference" }) })).status, 200);
+});
 
 test("Agent workspaces isolate memory, skills, channels, hotspots and usage", async (t) => {
   const context = await setup();
