@@ -230,7 +230,9 @@ for (const evidence of ["createBairuiExtensionHost", "data-bairui-extension-host
   if (!appShellTransform.includes(evidence)) failures.push("Missing native BaiLongma extension slot evidence: " + evidence);
 }
 const workspaceAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace.js"), "utf8");
-if (!workspaceAdapter.includes('document.querySelector("[data-bairui-extension-host]")')) failures.push("BaiRui workspace must mount through the native BaiLongma extension host");
+for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register", "workspaceRegistry.get(view)", "bairui:workspace-registry-changed", "document.querySelector(\"[data-bairui-extension-host]\")"]) {
+  if (!workspaceAdapter.includes(evidence)) failures.push("Missing BaiRui workspace extension registry evidence: " + evidence);
+}
 if (workspaceAdapter.includes("document.body.appendChild(root)")) failures.push("BaiRui workspace must not append a second root directly to document.body");
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
