@@ -3,9 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   CONTROL_APPROVAL_ACTIONS,
   validateCredentialResolution,
-  validateCredentialResolutionRequest,
-  validateResourceReport,
-  validateRuntimeHeartbeat
+  validateCredentialResolutionRequest
 } from "@bairui/contracts";
 import {
   PERMISSIONS,
@@ -22,7 +20,6 @@ import {
 } from "../../packages/auth/session.mjs";
 import { loginPage, adminPage } from "./views.mjs";
 import {
-  constantTokenMatch,
   html,
   json,
   readJson,
@@ -48,6 +45,7 @@ import { parseTavernCharacterCard } from "../../packages/character-card/tavern-c
 import { createAuthRoutes } from "./routes/auth.mjs";
 import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
+import { createInternalControlRoutes } from "./routes/internal-control.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
 import { createWorkspaceAssetRoutes } from "./routes/workspace-assets.mjs";
 import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
@@ -55,12 +53,6 @@ import { workspaceIdFromRef } from "../../packages/server-protocol/runtime-clien
 
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
-const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
-const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
-const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
-const RESOURCE_STATUSES = new Set(["running", "degraded", "offline", "unknown"]);
-const CONTAINER_RESOURCE_ROLES = new Set(["hermes", "hermes-dashboard", "runtime-boundary"]);
-const CONTAINER_RESOURCE_STATUSES = new Set(["running", "paused", "restarting", "exited", "dead", "created", "removing", "unknown"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
 const USER_AUTHORIZATION_SERVICES = Object.freeze({
@@ -84,11 +76,79 @@ const IMMUTABLE_IMAGE = /^(?:ghcr\.io|docker\.io)\/[A-Za-z0-9_.\/-]+@sha256:[a-f
 const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const AGENT_RUN_STATUSES = new Set(["started", "queued", "running", "waiting_for_approval", "stopping", "completed", "failed", "cancelled", "unknown"]);
 const TERMINAL_AGENT_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const OWNER_CONFIG_FIELDS = new Set(["agent", "runtime", "provider", "skills", "owner_change"]);
+const OWNER_AGENT_FIELDS = new Set(["id", "name", "soul_markdown"]);
+const OWNER_RUNTIME_FIELDS = new Set(["kind", "workspace_ref"]);
+const OWNER_PROVIDER_FIELDS = new Set(["provider", "base_url", "model"]);
+const OWNER_SKILLS_FIELDS = new Set(["disabled"]);
 
-function numericMetrics(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([key, item]) => /^[a-z][a-z0-9_.-]{0,63}$/.test(key) && Number.isFinite(item)).slice(0, 100));
+function isSecretField(key) {
+  const normalized = String(key).replaceAll("_", "").replaceAll("-", "").toLowerCase();
+  if (["keyhint", "keymasked", "credentialhint", "credentialmasked"].includes(normalized)) return false;
+  return normalized === "secret" || normalized === "secrets" || normalized === "token" || normalized.endsWith("secret") || normalized.endsWith("token") || normalized.endsWith("password") || normalized.endsWith("apikey") || normalized.endsWith("apikeyenvelope") || normalized.endsWith("privatekey") || normalized.endsWith("credential") || normalized.endsWith("credentials") || normalized.endsWith("credentialenvelope") || normalized.endsWith("credentialhash") || normalized === "keyhash";
 }
+
+function publicSurface(value, depth = 0) {
+  if (value === null || value === undefined || typeof value !== "object") return value;
+  if (depth > 20) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map((item) => publicSurface(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !isSecretField(key)).map(([key, item]) => [key, publicSurface(item, depth + 1)]));
+}
+
+function auditMetadata(value, depth = 0) {
+  if (value === null || value === undefined || typeof value !== "object") return value;
+  if (depth > 20) return null;
+  if (Array.isArray(value)) return value.map((item) => auditMetadata(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !isSecretField(key) && !["reason", "body", "content", "input", "output", "document"].includes(String(key).replaceAll("-", "_").toLowerCase())).map(([key, item]) => [key, auditMetadata(item, depth + 1)]));
+}
+
+function publicConfigRevision(revision) {
+  if (!revision) return null;
+  return publicSurface(revision);
+}
+
+function publicControlCommand(command) {
+  return publicSurface(command);
+}
+
+function publicControlApproval(approval) {
+  return publicSurface(approval);
+}
+
+function publicSnapshot(snapshot) {
+  return publicSurface(snapshot);
+}
+
+function assertObjectFields(value, fields, name) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !fields.has(key))) throw Object.assign(new Error(`${name} contains unsupported fields`), { statusCode: 409, code: "invalid_user_config_scope" });
+}
+
+function validateOwnerConfigurationDocument(document, expectedScope = null, requireOwnerChange = false) {
+  assertObjectFields(document, OWNER_CONFIG_FIELDS, "Owner configuration");
+  if (document.agent !== undefined) {
+    assertObjectFields(document.agent, OWNER_AGENT_FIELDS, "Owner identity");
+    if (typeof document.agent.id !== "string" || typeof document.agent.name !== "string" || typeof document.agent.soul_markdown !== "string") throw Object.assign(new Error("Owner identity is invalid"), { statusCode: 409, code: "invalid_user_config_scope" });
+  }
+  if (document.runtime !== undefined) assertObjectFields(document.runtime, OWNER_RUNTIME_FIELDS, "Owner runtime");
+  if (document.provider !== undefined) assertObjectFields(document.provider, OWNER_PROVIDER_FIELDS, "Owner provider");
+  if (document.skills !== undefined) {
+    assertObjectFields(document.skills, OWNER_SKILLS_FIELDS, "Owner skills");
+    if (!Array.isArray(document.skills.disabled) || document.skills.disabled.some((item) => typeof item !== "string" || !SKILL_ID.test(item))) throw Object.assign(new Error("Owner skill configuration is invalid"), { statusCode: 409, code: "invalid_user_config_scope" });
+  }
+  if (document.owner_change !== undefined) {
+    assertObjectFields(document.owner_change, new Set(["scope", "generation"]), "Owner change");
+    if (!["skills", "identity"].includes(document.owner_change.scope) || !Number.isSafeInteger(document.owner_change.generation) || document.owner_change.generation < 1) throw Object.assign(new Error("Owner configuration scope is invalid"), { statusCode: 409, code: "invalid_user_config_scope" });
+    if (expectedScope && document.owner_change.scope !== expectedScope) throw Object.assign(new Error("Owner configuration scope is invalid"), { statusCode: 409, code: "invalid_user_config_scope" });
+  } else if (requireOwnerChange) throw Object.assign(new Error("Owner configuration scope is missing"), { statusCode: 409, code: "invalid_user_config_scope" });
+  return document;
+}
+
+function safeErrorCode(value) {
+  return typeof value === "string" ? value.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 200) || "request_failed" : "request_failed";
+}
+
+
 const INTEGRATION_CATALOG = Object.freeze([
   { id: "hermes", name: "Hermes Agent", layer: "核心运行层", importType: "submodule", status: "runtime-connected" },
   { id: "openclaw", name: "OpenClaw", layer: "服务集成层", importType: "submodule", status: "registered" },
@@ -146,51 +206,6 @@ function publicProviderChannel(channel) {
 function boundedInteger(value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= minimum && number <= maximum ? number : null;
-}
-
-function optionalResourceNumber(value, maximum = Number.MAX_SAFE_INTEGER, integer = false) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0 || number > maximum || (integer && !Number.isSafeInteger(number))) return undefined;
-  return number;
-}
-
-function resourceText(value, maximum) {
-  return typeof value === "string" && value.trim() ? value.replace(/[\0\r\n]/g, " ").trim().slice(0, maximum) : null;
-}
-
-function resourceSample(value) {
-  const identifier = (item) => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(item) ? item : null;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const agentId = identifier(value.agentId);
-  const runtimeId = identifier(value.runtimeId);
-  const deploymentId = identifier(value.deploymentId);
-  if (!agentId || !runtimeId || !deploymentId || !Number.isSafeInteger(value.sequence) || value.sequence < 1 || !RESOURCE_STATUSES.has(value.status) || !Number.isFinite(Date.parse(value.observedAt))) return null;
-  const numeric = {
-    cpuPercent: optionalResourceNumber(value.cpuPercent, 100_000),
-    memoryUsedBytes: optionalResourceNumber(value.memoryUsedBytes, Number.MAX_SAFE_INTEGER, true),
-    memoryLimitBytes: optionalResourceNumber(value.memoryLimitBytes, Number.MAX_SAFE_INTEGER, true),
-    agentStorageUsedBytes: optionalResourceNumber(value.agentStorageUsedBytes, Number.MAX_SAFE_INTEGER, true),
-    hostStorageUsedBytes: optionalResourceNumber(value.hostStorageUsedBytes, Number.MAX_SAFE_INTEGER, true),
-    hostStorageLimitBytes: optionalResourceNumber(value.hostStorageLimitBytes, Number.MAX_SAFE_INTEGER, true),
-    cpuCount: optionalResourceNumber(value.cpuCount, 1_000_000, true),
-    uptimeSeconds: optionalResourceNumber(value.uptimeSeconds, Number.MAX_SAFE_INTEGER, true)
-  };
-  if (Object.values(numeric).some((item) => item === undefined)) return null;
-  const rawContainers = Array.isArray(value.containers) ? value.containers.slice(0, 16) : [];
-  const containers = rawContainers.map((container) => {
-    if (!container || !CONTAINER_RESOURCE_ROLES.has(container.role) || !CONTAINER_RESOURCE_STATUSES.has(container.status)) return null;
-    const values = {
-      cpuPercent: optionalResourceNumber(container.cpuPercent, 100_000),
-      memoryUsedBytes: optionalResourceNumber(container.memoryUsedBytes, Number.MAX_SAFE_INTEGER, true),
-      memoryLimitBytes: optionalResourceNumber(container.memoryLimitBytes, Number.MAX_SAFE_INTEGER, true),
-      writableBytes: optionalResourceNumber(container.writableBytes, Number.MAX_SAFE_INTEGER, true)
-    };
-    if (Object.values(values).some((item) => item === undefined)) return null;
-    return { role: container.role, status: container.status, containerId: resourceText(container.containerId, 128), containerName: resourceText(container.containerName, 128), imageRef: resourceText(container.imageRef, 500), version: resourceText(container.version, 200), ...values, startedAt: Number.isFinite(Date.parse(container.startedAt)) ? new Date(container.startedAt).toISOString() : null };
-  });
-  if (containers.some((container) => !container) || new Set(containers.map((container) => container.role)).size !== containers.length) return null;
-  return { agentId, runtimeId, deploymentId, sequence: value.sequence, status: value.status, ...numeric, osType: resourceText(value.osType, 80), architecture: resourceText(value.architecture, 80), operatingSystem: resourceText(value.operatingSystem, 300), dockerVersion: resourceText(value.dockerVersion, 100), startedAt: Number.isFinite(Date.parse(value.startedAt)) ? new Date(value.startedAt).toISOString() : null, observedAt: new Date(value.observedAt).toISOString(), containers };
 }
 
 function resourceFreshness(resource, staleAfterMs) {
@@ -302,10 +317,8 @@ function publicFleetAgent(agent) {
   return metadata;
 }
 
-function configurationApplication(application) {
-  return application?.command
-    ? { state: application.command.state, commandId: application.command.id, configRevisionId: application.revision.id }
-    : { state: "pending_initialization", commandId: null, configRevisionId: null };
+function pendingOwnerConfiguration() {
+  return { state: "pending_control_authority", commandId: null, configRevisionId: null };
 }
 
 function agentRunError(value) {
@@ -324,6 +337,7 @@ export function createPlatformApp(options) {
     allowRegistration = false,
     agentIngestToken,
     runtimeClient,
+    controlAuthority,
     providerVault,
     licensePrivateKey,
     logger = console
@@ -331,7 +345,6 @@ export function createPlatformApp(options) {
   if (!repository) throw new TypeError("repository is required");
   if (!sessionSecret || sessionSecret.length < 32) throw new TypeError("sessionSecret must contain at least 32 characters");
   if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
-  const runtimeRouteHosts = new Set(["host.docker.internal", "127.0.0.1", "localhost", ...(options.runtimeRouteHosts ?? [])]);
   const runtimeStaleAfterMs = Math.max(30_000, Number(options.runtimeStaleAfterMs) || 120_000);
   const resourceStaleAfterMs = Math.max(30_000, Number(options.resourceStaleAfterMs) || 120_000);
   const readiness = options.readiness ?? (() => repository.readiness?.({ requiredMigration: options.requiredMigration }) ?? Promise.resolve({ ready: false, status: "readiness_unavailable" }));
@@ -379,6 +392,15 @@ export function createPlatformApp(options) {
     return { configured: Boolean(legacy?.apiKeyEnvelope || configuredChannels.length), allowedModels, defaultModel, userCustomKeysAllowed: policy?.userCustomKeysAllowed !== false, dailyTokenLimit: policy?.dailyTokenLimit ?? null, monthlyBudgetUsd: policy?.monthlyBudgetUsd ?? null };
   }
   const agentInitializationProvider = createAgentInitializationProvider({ repository, providerVault });
+
+  async function assertOwnerConfigurationReady(agent, scope) {
+    const runtime = await repository.getAgentRuntimeByAgent(agent.id);
+    if (!runtime?.configRevisionId) return;
+    const revisions = await repository.listConfigRevisions(agent.organizationId, agent.id);
+    const current = revisions.find((revision) => revision.id === runtime.configRevisionId);
+    if (!current) throw Object.assign(new Error("Agent configuration is unavailable"), { statusCode: 409, code: "agent_configuration_unavailable" });
+    validateOwnerConfigurationDocument(current.configDocument, scope);
+  }
 
   async function agentOperationalView(principal, agent, runtimeInput) {
     const runtime = runtimeInput ?? await repository.getAgentRuntimeByAgent(agent.id);
@@ -475,33 +497,6 @@ export function createPlatformApp(options) {
     return { token, keyHash: deriveMachineKey(token), keyHint: token.slice(-4) };
   }
 
-  function runtimeEndpointRef(value) {
-    if (typeof value !== "string" || value.length > 2000) return null;
-    let parsed;
-    try { parsed = new URL(value); } catch { return null; }
-    if (parsed.protocol !== "http:" || !runtimeRouteHosts.has(parsed.hostname) || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || !parsed.port) return null;
-    return parsed.toString().replace(/\/$/, "");
-  }
-
-  function revealLease(command) {
-    if (command.action === "config.apply-user") return { ...command, config: command.config ? { document: command.config.document } : null };
-    if (!command.config?.secret_envelope) return { ...command, config: command.config ? { document: command.config.document } : null };
-    if (!providerVault) throw Object.assign(new Error("Secret storage is unavailable"), { statusCode: 503, code: "secret_storage_unavailable" });
-    const envelope = command.config.secret_envelope;
-    return {
-      ...command,
-      config: {
-        document: command.config.document,
-        secrets: {
-          provider_api_key: providerVault.open(envelope.providerApiKey),
-          hermes_api_server_key: providerVault.open(envelope.hermesApiServerKey),
-          runtime_shared_secret: providerVault.open(envelope.runtimeSharedSecret),
-          agent_control_token: providerVault.open(envelope.agentControlToken)
-        }
-      }
-    };
-  }
-
   async function pipeRuntimeStream(response, upstream) {
     response.writeHead(200, {
       "content-type": upstream.headers.get("content-type") ?? "text/event-stream; charset=utf-8",
@@ -556,6 +551,7 @@ export function createPlatformApp(options) {
     immutableImage: IMMUTABLE_IMAGE
   });
   const routeInternalChannels = createInternalChannelRoutes({ repository, providerVault, authenticateMachine });
+  const routeInternalControl = createInternalControlRoutes({ repository, controlAuthority, authenticateMachine, agentIngestToken, publicSnapshot });
   const routeWorkspaceAssets = createWorkspaceAssetRoutes({
     authenticate: principalFor,
     scripts: {
@@ -618,6 +614,7 @@ export function createPlatformApp(options) {
       }
       if (await routeWorkspaceAssets({ method, url, request, response })) return;
       if (await routeInternalChannels({ method, url, request, response })) return;
+      if (await routeInternalControl({ method, url, request, response })) return;
 
       const principal = await principalFor(request);
       if (method === "GET" && url.pathname === "/bailongma-ui/src/ui/scene-shell/bootstrap.js") {
@@ -732,9 +729,10 @@ export function createPlatformApp(options) {
         }
         const updated = await repository.updateAgent(agent.id, patch);
         const identityChanged = Object.hasOwn(patch, "name") || Object.hasOwn(patch, "soulMarkdown");
-        const application = identityChanged ? configurationApplication(await repository.requestAgentIdentityConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId })) : null;
+        if (identityChanged) await assertOwnerConfigurationReady(agent, "identity");
+        const application = identityChanged ? pendingOwnerConfiguration() : null;
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.profile.update", targetType: "agent", targetId: agent.id, metadata: { fields: Object.keys(patch), ...(application ? { application } : {}) } });
-        return json(response, 200, { agent: updated, application });
+        return json(response, 200, { agent: publicSurface(updated), application: publicSurface(application) });
       }
       const characterCardMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/character-card$/);
       if (characterCardMatch && method === "POST") {
@@ -747,6 +745,7 @@ export function createPlatformApp(options) {
         const cardView = { name: imported.card.name, spec: imported.card.spec, specVersion: imported.card.specVersion, loreNotes: imported.loreNotes.length, soulChars: imported.agent.soulMarkdown.length, digest: imported.digest };
         if (body.previewOnly === true) return json(response, 200, { card: cardView, mapping: { soul: ["description", "personality", "scenario", "system_prompt", "post_history_instructions"], obsidianOnly: ["first_mes", "alternate_greetings", "mes_example", "creator_notes", "character_book"], executableExtensions: "ignored" } });
         if (body.confirmUntrustedPrompts !== true) return json(response, 400, { error: "character_card_confirmation_required" });
+        await assertOwnerConfigurationReady(agent, "identity");
         const settings = { ...(agent.settings ?? {}), characterCard: imported.provenance };
         const updated = await repository.updateAgent(agent.id, { ...imported.agent, settings });
         const noteInputs = [imported.sourceNote, ...imported.loreNotes];
@@ -755,9 +754,9 @@ export function createPlatformApp(options) {
           const note = createObsidianNote({ ...noteInput, memoryKind: "knowledge" });
           notes.push(await repository.createObsidianNote({ ...note, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id }));
         }
-        const application = configurationApplication(await repository.requestAgentIdentityConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId }));
+        const application = pendingOwnerConfiguration();
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.character-card.import", targetType: "agent", targetId: agent.id, metadata: { digest: imported.digest, spec: imported.card.spec, loreNotes: imported.loreNotes.length, application } });
-        return json(response, 202, { agent: updated, card: cardView, notes: { stored: notes.length, hermesActive: 0 }, memorySync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)), application });
+        return json(response, 202, { agent: publicSurface(updated), card: cardView, notes: { stored: notes.length, hermesActive: 0 }, memorySync: publicMemoryProjectionStatus(await repository.getMemoryProjectionStatus(principal.organizationId, principal.userId, agent.id)), application: publicSurface(application) });
       }
       const initializeAgentMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/initialize$/);
       if (initializeAgentMatch && method === "POST") {
@@ -876,10 +875,10 @@ export function createPlatformApp(options) {
         const skillId = decodeURIComponent(skillsMatch[2]).slice(0, 200);
         if (!SKILL_ID.test(skillId)) return json(response, 400, { error: "invalid_skill_id" });
         const preference = await repository.upsertAgentSkillPreference({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, skillId, enabled: body.enabled, applyStatus: "pending" });
-        const application = await repository.requestAgentSkillConfiguration({ organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, requestedBy: principal.userId });
-        const applicationView = configurationApplication(application);
+        await assertOwnerConfigurationReady(agent, "skills");
+        const applicationView = pendingOwnerConfiguration();
         await repository.recordAudit({ organizationId: principal.organizationId, actorUserId: principal.userId, action: "agent.skill.preference.update", targetType: "agent", targetId: agent.id, metadata: { skillId, enabled: body.enabled, applyStatus: "pending", application: applicationView } });
-        return json(response, 202, { preference, application: applicationView });
+        return json(response, 202, { preference: publicSurface(preference), application: publicSurface(applicationView) });
       }
 
       const channelsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/channels(?:\/([^/]+))?$/);
@@ -1392,98 +1391,6 @@ export function createPlatformApp(options) {
         const resolved = validateCredentialResolution({ schema_version: "2.0", owner_scope: requestedScope, authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
         return json(response, 200, resolved);
       }
-      if (method === "POST" && url.pathname === "/api/internal/control-plane/snapshots") {
-        const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-        if (!constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
-        const body = await readJson(request);
-        if (!body.organizationId || !body.serverId || !body.snapshot?.schemaVersion) return json(response, 400, { error: "invalid_snapshot" });
-        if (!await repository.getOrganization(body.organizationId)) return json(response, 404, { error: "organization_not_found" });
-        const saved = await repository.saveControlPlaneSnapshot({ organizationId: body.organizationId, serverId: body.serverId, status: body.snapshot.status ?? "unknown", payload: body.snapshot });
-        await repository.recordServerHeartbeat({
-          id: body.serverId,
-          organizationId: body.organizationId,
-          status: body.snapshot.status ?? "unknown",
-          runtimeVersion: body.snapshot.heartbeat?.runtimeBoundaryVersion ?? null
-        });
-        return json(response, 202, { id: saved.id });
-      }
-      if (method === "POST" && url.pathname === "/api/internal/control-plane/heartbeats") {
-        const signed = await readSignedJson(request);
-        const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-        const machine = await authenticateMachine(request, url, signed.raw, "agent-runtime");
-        if ((!machine || machine.machineId !== signed.body.agentId) && !constantTokenMatch(bearer, agentIngestToken)) return json(response, 401, { error: "invalid_agent_credential" });
-        let body;
-        try { body = validateRuntimeHeartbeat(signed.body); }
-        catch { return json(response, 400, { error: "invalid_agent_heartbeat" }); }
-        const [agent, runtime] = await Promise.all([repository.getAgent(body.agentId), repository.getAgentRuntimeByAgent(body.agentId)]);
-        if (!agent || !runtime || runtime.id !== body.runtimeId || agent.organizationId !== body.organizationId || agent.ownerUserId !== body.userId) return json(response, 404, { error: "agent_runtime_not_found" });
-        const components = Array.isArray(body.components) ? body.components.slice(0, 100).map((component) => ({
-          layer: component.layer,
-          moduleId: typeof component.moduleId === "string" ? component.moduleId.slice(0, 200) : "",
-          status: component.status,
-          version: typeof component.version === "string" ? component.version.slice(0, 200) : null,
-          upstreamRef: typeof component.upstreamRef === "string" ? component.upstreamRef.slice(0, 200) : null,
-          capabilities: Array.isArray(component.capabilities) ? component.capabilities.filter((item) => typeof item === "string").slice(0, 100) : [],
-          metrics: numericMetrics(component.metrics),
-          observedAt: Number.isFinite(Date.parse(component.observedAt)) ? component.observedAt : body.observedAt
-        })).filter((component) => CONTROL_LAYERS.has(component.layer) && component.moduleId && COMPONENT_STATUSES.has(component.status)) : [];
-        const events = Array.isArray(body.events) ? body.events.slice(0, 100).map((event) => ({
-          layer: CONTROL_LAYERS.has(event.layer) ? event.layer : null,
-          componentId: typeof event.componentId === "string" ? event.componentId.slice(0, 200) : null,
-          eventType: typeof event.eventType === "string" ? event.eventType.slice(0, 200) : "",
-          severity: TELEMETRY_SEVERITIES.has(event.severity) ? event.severity : "info",
-          traceId: typeof event.traceId === "string" ? event.traceId.slice(0, 200) : null,
-          metrics: numericMetrics(event.metrics),
-          occurredAt: Number.isFinite(Date.parse(event.occurredAt)) ? event.occurredAt : body.observedAt
-        })).filter((event) => event.eventType) : [];
-        const usage = body.usage && typeof body.usage === "object" && Number.isFinite(Date.parse(body.usage.bucketStart)) && [60, 300, 3600, 86400].includes(body.usage.bucketSeconds) ? {
-          bucketStart: body.usage.bucketStart, bucketSeconds: body.usage.bucketSeconds,
-          model: typeof body.usage.model === "string" ? body.usage.model.slice(0, 200) : "unknown",
-          inputTokens: Math.max(0, Number(body.usage.inputTokens) || 0), outputTokens: Math.max(0, Number(body.usage.outputTokens) || 0),
-          estimatedCostUsd: Math.max(0, Number(body.usage.estimatedCostUsd) || 0), runCount: Math.max(0, Number(body.usage.runCount) || 0),
-          failedRunCount: Math.max(0, Number(body.usage.failedRunCount) || 0), latencySumMs: Math.max(0, Number(body.usage.latencySumMs) || 0)
-        } : null;
-        const saved = await repository.saveAgentHeartbeat({ organizationId: body.organizationId, userId: body.userId, agentId: body.agentId, runtimeId: body.runtimeId, sequence: body.sequence, status: body.status, runtimeVersion: typeof body.runtimeVersion === "string" ? body.runtimeVersion.slice(0, 200) : null, boundaryVersion: typeof body.boundaryVersion === "string" ? body.boundaryVersion.slice(0, 200) : null, configRevisionId: typeof body.configRevisionId === "string" ? body.configRevisionId : null, queueDepth: Math.max(0, Number(body.queueDepth) || 0), activeRuns: Math.max(0, Number(body.activeRuns) || 0), failedRuns: Math.max(0, Number(body.failedRuns) || 0), observedAt: body.observedAt, components, events, usage });
-        return json(response, 202, { id: saved.id });
-      }
-
-      if (method === "POST" && url.pathname === "/api/internal/control-plane/resources") {
-        const signed = await readSignedJson(request);
-        const machine = await authenticateMachine(request, url, signed.raw, "server");
-        if (!machine || signed.body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
-        let body;
-        try { body = validateResourceReport(signed.body); }
-        catch { return json(response, 400, { error: "invalid_resource_samples" }); }
-        const samples = body.samples.map(resourceSample);
-        if (samples.some((sample) => !sample)) return json(response, 400, { error: "invalid_resource_sample" });
-        const server = (await repository.listServers()).find((item) => item.id === machine.machineId);
-        if (!server) return json(response, 404, { error: "server_not_found" });
-        const saved = samples.length ? await repository.saveAgentResourceSamples({ serverId: machine.machineId, samples }) : [];
-        await repository.recordServerHeartbeat({ id: machine.machineId, organizationId: server.organizationId, status: "healthy", runtimeVersion: saved[0]?.dockerVersion ?? server.runtimeVersion ?? null });
-        return json(response, 202, { accepted: saved.length, sampleIds: saved.map((sample) => sample.id) });
-      }
-
-      if (method === "POST" && url.pathname === "/api/internal/control-plane/commands/lease") {
-        const signed = await readSignedJson(request);
-        const machine = await authenticateMachine(request, url, signed.raw, "server");
-        if (!machine || signed.body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
-        const commands = await repository.leaseControlCommands({ serverId: machine.machineId, limit: Number(signed.body.limit) || 10, leaseSeconds: Number(signed.body.leaseSeconds) || 60 });
-        return json(response, 200, { commands: commands.map(revealLease) });
-      }
-      const commandReceiptMatch = url.pathname.match(/^\/api\/internal\/control-plane\/commands\/([^/]+)\/receipts$/);
-      if (commandReceiptMatch && method === "POST") {
-        const signed = await readSignedJson(request);
-        const machine = await authenticateMachine(request, url, signed.raw, "server");
-        const body = signed.body;
-        if (!machine || body.serverId !== machine.machineId) return json(response, 401, { error: "invalid_server_credential" });
-        if (!Number.isSafeInteger(body.attempt) || body.attempt < 1 || !["accepted", "running", "succeeded", "failed", "cancelled", "expired"].includes(body.state)) return json(response, 400, { error: "invalid_command_receipt" });
-        const endpointRef = body.runtimeEndpointRef === undefined ? null : runtimeEndpointRef(body.runtimeEndpointRef);
-        if (body.runtimeEndpointRef !== undefined && !endpointRef) return json(response, 400, { error: "invalid_runtime_endpoint" });
-        const receipt = await repository.recordCommandReceipt({ commandId: commandReceiptMatch[1], serverId: machine.machineId, attempt: body.attempt, state: body.state, errorCode: typeof body.errorCode === "string" ? body.errorCode.slice(0, 200) : null, errorSummary: typeof body.errorSummary === "string" ? body.errorSummary.slice(0, 1000) : null, runtimeEndpointRef: endpointRef, resultSummary: numericMetrics(body.resultSummary), evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs.filter((item) => typeof item === "string").slice(0, 20) : [] });
-        if (!receipt) return json(response, 404, { error: "command_lease_not_found" });
-        return json(response, 202, { receipt });
-      }
-
       return json(response, 404, { error: "not_found" });
     } catch (error) {
       const statusCode = error.statusCode ?? 500;

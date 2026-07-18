@@ -33,6 +33,13 @@ Forbidden:
 - uploading connector tokens;
 - exposing an unauthenticated public control port.
 
+Canonical command polling is Agent-owner scoped. The daemon requires
+`BAIRUI_ORGANIZATION_ID`, `BAIRUI_USER_ID`, `BAIRUI_AGENT_ID`,
+`BAIRUI_SERVER_ID`, and `BAIRUI_SERVER_AGENT_TOKEN`; a server-wide unscoped
+lease request is rejected. Lease payloads carry only opaque configuration,
+release, evidence, and secret references. Resolved secret values stay inside a
+local injected resolver and never enter receipts or logs.
+
 Formal customer deployments should use VPS or VM isolation with Docker Compose
 inside the customer environment.
 

@@ -228,7 +228,7 @@ test("owners preview and import character cards without exposing prompts or acti
   const imported = await fetch(endpoint, { method: "POST", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ card, confirmUntrustedPrompts: true }) });
   assert.equal(imported.status, 202);
   const result = await imported.json();
-  assert.equal(result.application.state, "pending_initialization");
+  assert.equal(result.application.state, "pending_control_authority");
   assert.deepEqual(result.notes, { stored: 2, hermesActive: 0 });
   const storedAgent = await context.repository.getAgent(context.agent.id);
   assert.equal(storedAgent.name, "Research Ada");
@@ -247,7 +247,7 @@ test("owners preview and import character cards without exposing prompts or acti
   assert.doesNotMatch(JSON.stringify(fleetAgent), /Private greeting|Private lore|Precise/);
 });
 
-test("skill preferences flow through provision and owner-scoped config receipts", async (t) => {
+test("owner preferences persist without issuing quarantined config.apply-user commands", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
   const ownerCookie = await login(context.baseUrl, "owner@example.test");
@@ -256,7 +256,7 @@ test("skill preferences flow through provision and owner-scoped config receipts"
 
   const disabledResponse = await fetch(`${base}/skills/browser%2Fuse`, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ enabled: false }) });
   assert.equal(disabledResponse.status, 202);
-  assert.equal((await disabledResponse.json()).application.state, "pending_initialization");
+  assert.equal((await disabledResponse.json()).application.state, "pending_control_authority");
   const preferences = await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id);
   const provision = await context.repository.requestAgentProvisioning({ agentId: context.agent.id, requestedBy: "user_a", provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" }, skills: preferences, secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { encrypted: true }, hermesApiServerKey: { encrypted: true }, agentControlToken: { encrypted: true } }, agentCredentialHash: "a".repeat(64), agentCredentialHint: "test" });
   const [provisionCommand] = await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 });
@@ -269,28 +269,13 @@ test("skill preferences flow through provision and owner-scoped config receipts"
 
   const enabledResponse = await fetch(`${base}/skills/browser%2Fuse`, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) });
   const enabled = await enabledResponse.json();
-  assert.equal(enabled.application.state, "queued");
-  const [applyCommand] = await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 });
-  assert.equal(applyCommand.action, "config.apply-user");
-  assert.equal(applyCommand.approval_id, undefined);
-  assert.equal(applyCommand.config.secret_envelope, undefined);
-  assert.deepEqual(applyCommand.arguments, { config_revision_id: enabled.application.configRevisionId });
-  assert.deepEqual(applyCommand.config.document.skills.disabled, []);
-  const applyReceipt = { commandId: applyCommand.command_id, serverId: "server_skill", attempt: applyCommand.attempt };
-  await context.repository.recordCommandReceipt({ ...applyReceipt, state: "accepted" });
-  await context.repository.recordCommandReceipt({ ...applyReceipt, state: "running" });
-  await context.repository.recordCommandReceipt({ ...applyReceipt, state: "succeeded" });
-  assert.equal((await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id))[0].applyStatus, "applied");
+  assert.equal(enabled.application.state, "pending_control_authority");
+  assert.equal(enabled.application.commandId, null);
+  assert.deepEqual(await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 }), []);
+  assert.equal((await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id))[0].applyStatus, "pending");
 
   const identityResponse = await fetch(base, { method: "PATCH", headers: { cookie: ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Hermes Ada", soulMarkdown: "# Identity\n\nEvidence first." }) });
   assert.equal(identityResponse.status, 200);
-  assert.equal((await identityResponse.json()).application.state, "queued");
-  const [identityCommand] = await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 });
-  assert.equal(identityCommand.config.document.owner_change.scope, "identity");
-  assert.deepEqual(identityCommand.config.document.agent, { id: context.agent.id, name: "Hermes Ada", soul_markdown: "# Identity\n\nEvidence first." });
-  const identityReceipt = { commandId: identityCommand.command_id, serverId: "server_skill", attempt: identityCommand.attempt };
-  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "accepted" });
-  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "running" });
-  await context.repository.recordCommandReceipt({ ...identityReceipt, state: "succeeded" });
-  assert.equal((await context.repository.listAgentSkillPreferences("org_a", "user_a", context.agent.id))[0].applyStatus, "applied");
+  assert.equal((await identityResponse.json()).application.state, "pending_control_authority");
+  assert.deepEqual(await context.repository.leaseControlCommands({ serverId: "server_skill", limit: 5, leaseSeconds: 120 }), []);
 });
