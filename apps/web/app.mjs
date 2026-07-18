@@ -608,6 +608,11 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.bairuiWorkspaceUsageScript);
       }
+      if (method === "GET" && url.pathname === "/assets/bairui-workspace-memory.js") {
+        if (!options.bairuiWorkspaceMemoryScript) return json(response, 404, { error: "not_found" });
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
+        return response.end(options.bairuiWorkspaceMemoryScript);
+      }
 
       if (await routeInternalChannels({ method, url, request, response })) return;
 
