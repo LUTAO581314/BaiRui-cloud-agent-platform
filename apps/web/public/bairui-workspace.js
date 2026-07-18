@@ -2,57 +2,84 @@
   const bridge = window.bairuiPlatform;
   if (!bridge) return;
 
-  const workspaceRegistry = (() => {
-    if (window.BairuiWorkspaceRegistry) return window.BairuiWorkspaceRegistry;
-    const entries = new Map();
-    const api = {
-      register(definition) {
-        if (!definition || !/^[a-z][a-z0-9-]*$/.test(definition.id || "") || typeof definition.render !== "function") throw new Error("invalid_workspace_extension");
-        entries.set(definition.id, Object.freeze({ id: definition.id, label: String(definition.label || definition.id), order: Number(definition.order) || 100, render: definition.render }));
-        window.dispatchEvent(new CustomEvent("bairui:workspace-registry-changed"));
-      },
-      get(id) { return entries.get(id) || null; },
-      list() { return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)); }
-    };
-    Object.defineProperty(window, "BairuiWorkspaceRegistry", { value: Object.freeze(api), configurable: false, enumerable: false, writable: false });
-    return api;
-  })();
+  const entries = new Map();
+  const workspaceRegistry = {
+    register(definition) {
+      if (!definition || !/^[a-z][a-z0-9-]*$/.test(definition.id || "") || typeof definition.render !== "function") {
+        throw new Error("invalid_workspace_extension");
+      }
+      entries.set(definition.id, Object.freeze({
+        id: definition.id,
+        label: String(definition.label || definition.id),
+        order: Number(definition.order) || 100,
+        render: definition.render,
+        dispose: typeof definition.dispose === "function" ? definition.dispose : null
+      }));
+      window.dispatchEvent(new CustomEvent("bairui:workspace-registry-changed"));
+    },
+    get(id) {
+      return entries.get(id) || null;
+    },
+    list() {
+      return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+    }
+  };
+  Object.defineProperty(window, "BairuiWorkspaceRegistry", {
+    value: Object.freeze(workspaceRegistry),
+    configurable: false,
+    enumerable: false,
+    writable: false
+  });
 
-  const NAV = [
-    ["chat", "对话"], ["conversations", "会话"], ["agents", "Agent"], ["memory", "记忆"],
-    ["skills", "技能"], ["channels", "渠道"], ["hotspots", "热点"], ["runs", "运行"],
-    ["jobs", "任务"], ["usage", "用量"], ["hermes", "能力中心"], ["settings", "设置"]
-  ];
-  function navigationEntries() {
-    const entries = new Map(NAV.map(([id, label], order) => [id, { id, label, order, render: null }]));
-    for (const extension of workspaceRegistry.list()) entries.set(extension.id, extension);
-    return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
-  }
-  const STATUS_LABELS = {
+  const STATUS_LABELS = Object.freeze({
     ready: "正常", active: "正常", connected: "已连接", applied: "已生效", pending: "待应用",
     provisioning: "初始化中", starting: "启动中", suspended: "已暂停", stopped: "已停止",
     initializing: "初始化中", uninitialized: "未初始化", offline: "Runtime 离线", upgrading: "升级中",
     model_unconfigured: "模型未配置", quota_exhausted: "额度已用尽", deleting: "删除中", deleted: "已删除",
-    failed: "失败", degraded: "降级", unavailable: "不可用", unconfigured: "未配置", disabled: "已停用", unknown: "未知"
-  };
-  Object.assign(STATUS_LABELS, {
-    started: "已启动", queued: "排队中", running: "运行中", waiting_for_approval: "等待审批",
-    stopping: "停止中", completed: "已完成", cancelled: "已取消", scheduled: "已计划",
-    paused: "已暂停", ok: "成功", error: "失败", stored: "已安全保存", revoked: "已吊销"
+    failed: "失败", degraded: "降级", unavailable: "不可用", unconfigured: "未配置", disabled: "已停用",
+    unknown: "未知", started: "已启动", queued: "排队中", running: "运行中",
+    waiting_for_approval: "等待审批", stopping: "停止中", completed: "已完成", cancelled: "已取消",
+    scheduled: "已计划", paused: "已暂停", ok: "成功", error: "失败", stored: "已安全保存",
+    revoked: "已吊销", configured: "已配置", available: "可用", materialized: "已同步", excluded: "未投影",
+    conflict: "冲突"
   });
-  const workspaceState = { view: "conversations", runId: null, runStream: null };
+  const ERROR_LABELS = Object.freeze({
+    runtime_unavailable: "Agent Runtime 当前不可用",
+    runtime_route_unavailable: "Agent 还没有可用的运行环境",
+    model_not_allowed: "该模型不在管理员允许范围内",
+    model_not_configured: "管理员尚未配置可用模型",
+    quota_exhausted: "当前用量额度已耗尽",
+    runtime_offline: "Agent Runtime 已离线",
+    agent_not_ready: "Agent 当前尚未就绪",
+    Forbidden: "当前账户没有执行此操作的权限",
+    agent_not_initialized: "Agent 尚未初始化",
+    no_agent_capacity: "当前没有可用服务器容量",
+    memory_projection_unavailable: "当前 Runtime 版本尚未支持 Hermes 记忆同步",
+    memory_projection_conflict: "Hermes 记忆在同步期间发生变化，请重新同步"
+  });
+
+  const workspaceState = { view: "conversations", renderRevision: 0 };
   let root;
+  let nav;
   let content;
   let title;
+  let agentLabel;
+  let modal;
+  let activeExtension;
+  let lastFocused;
 
   function escapeHtml(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+    return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[character]);
   }
 
   function formatTime(value) {
     if (!value) return "--";
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "--" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+    return Number.isNaN(date.getTime())
+      ? "--"
+      : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
   }
 
   function status(value, label) {
@@ -71,101 +98,126 @@
   function normalizeList(value, keys = []) {
     if (Array.isArray(value)) return value;
     for (const key of keys) if (Array.isArray(value?.[key])) return value[key];
-    if (Array.isArray(value?.data)) return value.data;
-    return [];
+    return Array.isArray(value?.data) ? value.data : [];
+  }
+
+  function createElement(tag, options = {}) {
+    const element = document.createElement(tag);
+    if (options.className) element.className = options.className;
+    if (options.text !== undefined) element.textContent = String(options.text);
+    if (options.type) element.type = options.type;
+    for (const [name, value] of Object.entries(options.attributes || {})) {
+      if (value !== null && value !== undefined) element.setAttribute(name, String(value));
+    }
+    for (const child of options.children || []) if (child) element.appendChild(child);
+    return element;
+  }
+
+  function loadingNode() {
+    return createElement("div", {
+      className: "bw-loading",
+      children: [createElement("span", { attributes: { "aria-hidden": "true" } }), document.createTextNode("正在读取真实状态")]
+    });
+  }
+
+  function fitDialogToVisualViewport(dialog) {
+    const zoom = Number.parseFloat(document.documentElement.style.zoom) || Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    dialog.style.maxWidth = `${Math.max(1, (window.innerWidth - 28) / zoom)}px`;
+    dialog.style.maxHeight = `${Math.max(1, (window.innerHeight - 32) / zoom)}px`;
   }
 
   function showError(error) {
-    const labels = {
-      runtime_unavailable: "Agent Runtime 当前不可用",
-      runtime_route_unavailable: "Agent 还没有可用的运行环境",
-      model_not_allowed: "该模型不在管理员允许范围内",
-      model_not_configured: "管理员尚未配置可用模型",
-      quota_exhausted: "当前用量额度已耗尽",
-      runtime_offline: "Agent Runtime 已离线",
-      agent_not_ready: "Agent 当前尚未就绪",
-      Forbidden: "当前账户没有执行此操作的权限",
-      agent_not_initialized: "Agent 尚未初始化",
-      no_agent_capacity: "当前没有可用服务器容量",
-      memory_projection_unavailable: "当前 Runtime 版本尚未支持 Hermes 记忆同步",
-      memory_projection_conflict: "Hermes 记忆在同步期间发生变化，请重新同步"
-    };
-    content.innerHTML = `<div class="bw-empty bw-error"><strong>无法加载</strong><p>${escapeHtml(labels[error.message] || error.message || "未知错误")}</p><button type="button" data-retry>重试</button></div>`;
-    content.querySelector("[data-retry]")?.addEventListener("click", () => render(workspaceState.view));
+    const retry = createElement("button", { className: "settings-save-btn", text: "重试", type: "button" });
+    retry.addEventListener("click", () => render(workspaceState.view));
+    content.replaceChildren(createElement("div", {
+      className: "bw-empty bw-error",
+      children: [
+        createElement("strong", { text: "无法加载" }),
+        createElement("p", { text: ERROR_LABELS[error?.message] || error?.message || "未知错误" }),
+        retry
+      ]
+    }));
   }
 
   function toast(message, tone = "info") {
-    const item = document.createElement("div");
-    item.className = `bw-toast bw-toast-${tone}`;
-    item.textContent = message;
+    const item = createElement("div", {
+      className: `bairui-extension-toast tone-${tone}`,
+      text: message,
+      attributes: { role: tone === "error" ? "alert" : "status" }
+    });
     document.body.appendChild(item);
     requestAnimationFrame(() => item.classList.add("visible"));
-    setTimeout(() => { item.classList.remove("visible"); setTimeout(() => item.remove(), 200); }, 3200);
+    setTimeout(() => {
+      item.classList.remove("visible");
+      setTimeout(() => item.remove(), 200);
+    }, 3200);
   }
 
   function openForm({ heading, submitLabel = "保存", fields = [], danger = false }) {
     return new Promise((resolve) => {
-      const dialog = document.createElement("dialog");
-      dialog.className = "bw-dialog";
-      const form = document.createElement("form");
-      form.method = "dialog";
-      form.innerHTML = `<header><h2>${escapeHtml(heading)}</h2><button type="button" data-close aria-label="关闭" title="关闭">×</button></header><div class="bw-dialog-fields"></div><footer><button type="button" data-cancel>取消</button><button type="submit" class="${danger ? "danger" : "primary"}">${escapeHtml(submitLabel)}</button></footer>`;
-      const container = form.querySelector(".bw-dialog-fields");
+      const dialog = createElement("dialog", {
+        className: "settings-modal bairui-extension-dialog",
+        attributes: { "aria-labelledby": "bairui-extension-dialog-title" }
+      });
+      const form = createElement("form", { className: "bairui-extension-dialog-form" });
+      const closeButton = createElement("button", { className: "settings-close", text: "×", type: "button", attributes: { "aria-label": "关闭" } });
+      const header = createElement("header", {
+        className: "settings-header",
+        children: [createElement("strong", { className: "settings-title", text: heading, attributes: { id: "bairui-extension-dialog-title" } }), closeButton]
+      });
+      const fieldContainer = createElement("div", { className: "settings-content bairui-extension-dialog-content" });
       for (const field of fields) {
-        const label = document.createElement("label");
-        label.textContent = field.label;
-        const input = field.type === "textarea" ? document.createElement("textarea") : field.type === "select" ? document.createElement("select") : document.createElement("input");
+        const input = field.type === "textarea"
+          ? createElement("textarea", { className: "settings-input" })
+          : field.type === "select"
+            ? createElement("select", { className: "settings-select" })
+            : createElement("input", { className: "settings-input" });
         input.name = field.name;
         if (field.type && !["textarea", "select"].includes(field.type)) input.type = field.type;
         if (field.type === "textarea") input.rows = field.rows || 6;
-        if (field.required) input.required = true;
+        input.required = Boolean(field.required);
         if (field.placeholder) input.placeholder = field.placeholder;
         if (field.maxLength) input.maxLength = field.maxLength;
-        if (field.type === "select") for (const option of field.options || []) input.add(new Option(option.label, option.value, false, option.value === field.value));
-        else input.value = field.value ?? "";
-        label.appendChild(input);
-        container.appendChild(label);
+        if (field.type === "select") {
+          for (const option of field.options || []) input.add(new Option(option.label, option.value, false, option.value === field.value));
+        } else {
+          input.value = field.value ?? "";
+        }
+        fieldContainer.appendChild(createElement("label", {
+          className: "settings-row bairui-extension-field",
+          children: [createElement("span", { className: "settings-label", text: field.label }), input]
+        }));
       }
+      const cancelButton = createElement("button", { className: "settings-save-btn", text: "取消", type: "button" });
+      const submitButton = createElement("button", {
+        className: "settings-save-btn",
+        text: submitLabel,
+        type: "submit",
+        attributes: danger ? { "data-tone": "danger" } : {}
+      });
+      const footer = createElement("footer", { className: "settings-row-action bairui-extension-dialog-actions", children: [cancelButton, submitButton] });
+      form.append(header, fieldContainer, footer);
       dialog.appendChild(form);
       document.body.appendChild(dialog);
-      const close = () => { dialog.close(); dialog.remove(); resolve(null); };
-      form.querySelector("[data-close]").addEventListener("click", close);
-      form.querySelector("[data-cancel]").addEventListener("click", close);
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const values = Object.fromEntries(new FormData(form));
+      fitDialogToVisualViewport(dialog);
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
         dialog.close();
         dialog.remove();
-        resolve(values);
+        resolve(value);
+      };
+      closeButton.addEventListener("click", () => finish(null));
+      cancelButton.addEventListener("click", () => finish(null));
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); finish(null); });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        finish(Object.fromEntries(new FormData(form)));
       });
-      dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
       dialog.showModal();
-      form.querySelector("input, textarea, select")?.focus();
+      form.querySelector("input, textarea, select, button")?.focus();
     });
-  }
-
-  function openWorkspace(view = workspaceState.view) {
-    root.hidden = false;
-    document.body.classList.add("bairui-workspace-open");
-    render(view);
-  }
-
-  function closeWorkspace() {
-    root.hidden = true;
-    document.body.classList.remove("bairui-workspace-open");
-    window.dispatchEvent(new CustomEvent("bairui:chat-layout"));
-  }
-
-  async function render(view) {
-    if (view === "chat") return closeWorkspace();
-    workspaceState.view = view;
-    root.querySelectorAll("[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
-    title.textContent = navigationEntries().find((item) => item.id === view)?.label || "工作区";
-    content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
-    try {
-      const renderer = workspaceRegistry.get(view)?.render;
-      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm, noteBody, download, closeWorkspace });
-    } catch (error) { showError(error); }
   }
 
   function noteBody(note) {
@@ -184,228 +236,114 @@
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
-  async function renderMemory() {
-    const result = await bridge.request(agentApi("/memory-notes"));
-    const notes = result.notes || [];
-    const projection = result.projection || { memory: { charCount: 0, limit: 2200, notes: 0 }, user: { charCount: 0, limit: 1375, notes: 0 }, excluded: 0 };
-    const sync = result.sync || { status: "idle" };
-    const kindLabels = { knowledge: "知识", fact: "事实", preference: "偏好", constraint: "约束", procedure: "流程", person: "人物", project: "项目", event: "事件" };
-    const targetLabels = { auto: "自动分配", memory: "MEMORY.md", user: "USER.md", none: "仅 Obsidian" };
-    const syncLabels = { pending: "待同步", materialized: "已进入 Hermes", excluded: "容量外", conflict: "有冲突", failed: "同步失败" };
-    const jobLabels = { idle: "空闲", pending: "已排队", processing: "同步中", retry: "等待重试", completed: "已完成", dead: "同步失败" };
-    const capacity = (target, label) => { const value = projection[target] || {}; const percent = Math.min(100, Math.round((Number(value.charCount) || 0) / Math.max(1, Number(value.limit) || 1) * 100)); return `<section class="bw-memory-meter"><header><div><strong>${label}</strong><span>${value.notes || 0} 条活跃记忆</span></div><b>${value.charCount || 0} / ${value.limit || 0}</b></header><div><i style="width:${percent}%"></i></div></section>`; };
-    content.innerHTML = `<div class="bw-memory-summary">${capacity("memory", "Hermes MEMORY.md")}${capacity("user", "Hermes USER.md")}<section class="bw-memory-sync"><strong>Obsidian 主记忆库</strong><span>${notes.length} 篇 · ${projection.excluded || 0} 篇未进入 Hermes 活跃上下文 · ${jobLabels[sync.status] || sync.status}</span><button type="button" data-sync>同步 Hermes</button></section></div><div class="bw-toolbar"><input type="search" placeholder="搜索标题和正文"><div class="bw-actions"><button type="button" data-import>导入 .md</button><button type="button" data-export>导出全部</button><button type="button" class="primary" data-new>＋ 新记忆</button></div></div><input type="file" accept=".md,text/markdown" multiple hidden data-files><div class="bw-list" data-list></div>`;
-    const list = content.querySelector("[data-list]");
-    const draw = (items) => { list.innerHTML = items.length ? items.map((note) => `<article class="bw-row bw-memory-row"><div><div class="bw-memory-title"><strong>${escapeHtml(note.title)}</strong><span class="bw-memory-kind">${kindLabels[note.memoryKind] || note.memoryKind}</span><span class="bw-memory-importance">重要度 ${note.importance || 3}</span></div><span>${escapeHtml((note.frontmatter?.tags || []).join(" · "))}${note.frontmatter?.tags?.length ? " · " : ""}${targetLabels[note.hermesTarget] || note.hermesTarget} · ${formatTime(note.updatedAt)}</span><p>${escapeHtml(noteBody(note).slice(0, 180))}</p></div><div class="bw-actions">${status(note.hermesSyncStatus || "pending", syncLabels[note.hermesSyncStatus] || note.hermesSyncStatus)}<button type="button" data-edit="${note.id}">编辑</button><button type="button" data-download="${note.id}" title="导出">↓</button><button type="button" data-delete="${note.id}" class="danger-icon" title="删除">×</button></div></article>`).join("") : '<div class="bw-empty">还没有记忆笔记</div>'; };
-    draw(notes);
-    content.querySelector("input[type=search]").addEventListener("input", async (event) => { const data = await bridge.request(agentApi(`/memory-notes?query=${encodeURIComponent(event.target.value)}`)); draw(data.notes || []); });
-    const editNote = async (note) => {
-      const values = await openForm({ heading: note ? "编辑记忆" : "新建记忆", fields: [{ name: "title", label: "标题", value: note?.title || "", required: true, maxLength: 200 }, { name: "memoryKind", label: "记忆类型", type: "select", value: note?.memoryKind || "knowledge", options: (result.memoryKinds || Object.keys(kindLabels)).map((value) => ({ value, label: kindLabels[value] || value })) }, { name: "importance", label: "重要度", type: "select", value: String(note?.importance || 3), options: [1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: `${value} - ${{ 1: "低", 2: "一般", 3: "常用", 4: "重要", 5: "关键" }[value]}` })) }, { name: "hermesTarget", label: "Hermes 活跃记忆", type: "select", value: note?.hermesTarget || "auto", options: (result.hermesTargets || Object.keys(targetLabels)).map((value) => ({ value, label: targetLabels[value] || value })) }, { name: "tags", label: "标签（逗号分隔）", value: (note?.frontmatter?.tags || []).join(",") }, { name: "body", label: "Markdown 正文", type: "textarea", value: note ? noteBody(note) : "", required: true, rows: 14 }] });
-      if (!values) return;
-      const payload = { title: values.title, body: values.body, memoryKind: values.memoryKind, importance: Number(values.importance), hermesTarget: values.hermesTarget, tags: values.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean) };
-      const saved = await bridge.request(agentApi(`/memory-notes${note ? `/${encodeURIComponent(note.id)}` : ""}`), { method: note ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-      toast("记忆已保存，后台同步已排队", "success");
-      renderMemory();
+  function context() {
+    return {
+      bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm,
+      noteBody, download, normalizeList, statusLabels: STATUS_LABELS, workspaceState, closeWorkspace
     };
-    content.querySelector("[data-sync]").addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { await bridge.request(agentApi("/memory-sync"), { method: "POST" }); toast("后台同步任务已排队", "success"); setTimeout(renderMemory, 1200); } catch (error) { toast(error.message, "error"); event.currentTarget.disabled = false; } });
-    content.querySelector("[data-new]").addEventListener("click", () => editNote(null));
-    list.addEventListener("click", async (event) => {
-      const button = event.target.closest("button"); if (!button) return;
-      const id = button.dataset.edit || button.dataset.download || button.dataset.delete;
-      const note = notes.find((item) => item.id === id);
-      if (button.dataset.edit) return editNote(note);
-      if (button.dataset.download) return download(`${note.slug || "note"}.md`, note.markdown);
-      if (button.dataset.delete && await openForm({ heading: "删除记忆", submitLabel: "确认删除", danger: true, fields: [] })) { await bridge.request(agentApi(`/memory-notes/${encodeURIComponent(id)}`), { method: "DELETE" }); renderMemory(); }
-    });
-    const fileInput = content.querySelector("[data-files]");
-    content.querySelector("[data-import]").addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", async () => {
-      for (const file of fileInput.files) {
-        const markdown = await file.text();
-        const heading = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || file.name.replace(/\.md$/i, "");
-        await bridge.request(agentApi("/memory-notes"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: heading, body: noteBody({ markdown }), memoryKind: "knowledge", importance: 3, hermesTarget: "auto" }) });
-      }
-      toast("Markdown 已导入", "success"); renderMemory();
-    });
-    content.querySelector("[data-export]").addEventListener("click", () => download(`${activeAgent().name}-obsidian-export.md`, notes.map((note) => note.markdown).join("\n\n---\n\n")));
   }
 
-  async function renderSkills() {
-    const [result, runtime, authorizationResult] = await Promise.all([
-      bridge.request(agentApi("/skills")),
-      bridge.request(agentApi("/runtime/discovery")).catch((error) => ({ discovery: {}, error: error.message })),
-      bridge.request(agentApi("/authorizations")).catch(() => ({ services: [], authorizations: [] }))
-    ]);
-    const skills = normalizeList(result.discovery?.data, ["skills"]);
-    const preferences = new Map((result.preferences || []).map((item) => [item.skillId, item]));
-    const discovery = runtime.discovery || {};
-    const healthState = discovery["health.detailed"] || { status: "unavailable" };
-    const health = healthState.data || {};
-    const capabilityState = discovery["discovery.capabilities"] || { status: "unavailable" };
-    const capabilities = capabilityState.data || {};
-    const featureEntries = Object.entries(capabilities.features || {}).filter(([, value]) => typeof value === "boolean");
-    const toolsetState = discovery["discovery.toolsets"] || { status: "unavailable" };
-    const toolsets = normalizeList(toolsetState.data, ["toolsets"]);
-    const authorizations = authorizationResult.authorizations || [];
-    const serviceLabels = Object.fromEntries((authorizationResult.services || []).map((item) => [item.id, item.name]));
-    const runtimeVersion = health.version || activeAgent().runtime?.hermesVersion || "unknown";
-    content.innerHTML = `<div class="bw-runtime-summary"><div><span>Hermes</span><strong>${escapeHtml(runtimeVersion)}</strong></div><div><span>健康</span>${status(healthState.status === "available" ? health.status || "ready" : "unavailable")}</div><div><span>Gateway</span><strong>${escapeHtml(health.gateway_state || "unknown")}</strong></div><div><span>活跃 Agent</span><strong>${Number(health.active_agents || 0)}</strong></div></div>
-      <section class="bw-capability-section"><div class="bw-section-head"><div><h3>Runtime Capabilities</h3><p>由当前 Hermes /v1/capabilities 实时返回</p></div>${status(capabilityState.status)}</div><div class="bw-capability-grid">${featureEntries.length ? featureEntries.map(([name, enabled]) => `<div><span>${escapeHtml(name.replaceAll("_", " "))}</span>${status(enabled ? "ready" : "disabled", enabled ? "支持" : "不支持")}</div>`).join("") : '<div class="bw-empty">Runtime 暂未返回能力清单</div>'}</div></section>
-      <section class="bw-capability-section"><div class="bw-section-head"><div><h3>Hermes Toolsets</h3><p>展示工具集、配置状态和实际工具组成</p></div>${status(toolsetState.status)}</div><div class="bw-list">${toolsets.length ? toolsets.map((toolset) => `<article class="bw-row"><div><strong>${escapeHtml(toolset.label || toolset.name)}</strong><span>${escapeHtml(toolset.description || toolset.name)} · ${Number(toolset.tools?.length || 0)} 个工具</span><p>${escapeHtml((toolset.tools || []).join(" · "))}</p></div><div class="bw-actions">${status(toolset.enabled ? "ready" : "disabled", toolset.enabled ? "已启用" : "未启用")}${status(toolset.configured ? "configured" : "unconfigured", toolset.configured ? "已授权" : "待配置")}</div></article>`).join("") : '<div class="bw-empty">Runtime 暂未返回 Toolsets</div>'}</div></section>
-      <section class="bw-capability-section"><div class="bw-section-head"><div><h3>Hermes 技能</h3><p>${result.discovery?.status === "available" ? "来自当前 Agent Runtime" : "Runtime 不可用，显示已保存偏好"}</p></div>${status(result.discovery?.status)}</div><div class="bw-list">${skills.length ? skills.map((skill) => { const value = typeof skill === "string" ? { name: skill } : skill; const id = value.id || value.name; const pref = preferences.get(id); const enabled = pref ? pref.enabled : value.enabled !== false; return `<article class="bw-row"><div><strong>${escapeHtml(value.name || id)}</strong><span>${escapeHtml(value.description || id)} · ${escapeHtml(value.category || "uncategorized")} · ${escapeHtml(value.version || runtimeVersion)}</span></div><div class="bw-actions"><label class="bw-toggle"><input type="checkbox" data-skill="${escapeHtml(id)}" ${enabled ? "checked" : ""}><span></span></label>${pref ? status(pref.applyStatus) : status("ready", "Runtime 默认")}</div></article>`; }).join("") : '<div class="bw-empty">Runtime 暂未返回可用技能</div>'}</div></section>
-      <section class="bw-capability-section"><div class="bw-section-head"><div><h3>能力授权</h3><p>当前 Agent 可供工具和集成使用的个人授权</p></div><span>${authorizations.length} 项</span></div><div class="bw-list">${authorizations.length ? authorizations.map((item) => `<article class="bw-row"><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(serviceLabels[item.service] || item.service)} · ${escapeHtml(item.credentialMasked || "无有效凭证")}</span></div>${status(item.status)}</article>`).join("") : '<div class="bw-empty">当前 Agent 没有个人能力授权</div>'}</div></section>`;
-    content.querySelectorAll("[data-skill]").forEach((input) => input.addEventListener("change", async () => { const data = await bridge.request(agentApi(`/skills/${encodeURIComponent(input.dataset.skill)}`), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: input.checked }) }); toast(data.preference.applyStatus === "pending" ? "偏好已保存，等待配置适配器应用" : "技能状态已更新"); renderSkills(); }));
+  function disposeCurrent() {
+    if (!activeExtension?.dispose) return;
+    try { activeExtension.dispose(context()); } catch (error) { console.warn("[bairui-workspace]", error.message); }
   }
 
-  async function streamRun(runId, log, approval) {
-    workspaceState.runStream?.abort();
-    const controller = new AbortController();
-    workspaceState.runStream = controller;
-    const response = await fetch(agentApi(`/runs/${encodeURIComponent(runId)}/events`), { signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error("run_stream_unavailable");
-    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; let terminalEvent = false;
-    while (true) {
-      const { done, value } = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const blocks = buffer.replaceAll("\r\n", "\n").split("\n\n"); buffer = blocks.pop() || "";
-      for (const block of blocks) {
-        const line = block.split("\n").find((item) => item.startsWith("data:")); if (!line) continue;
-        const event = JSON.parse(line.slice(5));
-        const row = document.createElement("div"); row.className = "bw-run-event"; row.textContent = `${event.event || "event"} ${event.tool || event.text || event.delta || event.error || event.output || ""}`; log.appendChild(row); log.scrollTop = log.scrollHeight;
-        if (event.event === "approval.request") {
-          approval.hidden = false;
-          approval.querySelector("p").textContent = event.command || event.prompt || "Hermes 请求执行受保护操作";
-        }
-        if (["run.completed", "run.failed", "run.cancelled"].includes(event.event)) { approval.hidden = true; workspaceState.runStream = null; terminalEvent = true; }
-      }
-      if (done) break;
-    }
-    if (terminalEvent) await bridge.request(agentApi(`/runs/${encodeURIComponent(runId)}`)).catch(() => null);
-  }
-
-  async function renderRuns() {
-    const result = await bridge.request(agentApi("/runs?limit=50"));
-    const runs = normalizeList(result, ["runs"]);
-    if (!runs.some((item) => item.id === workspaceState.runId)) workspaceState.runId = runs[0]?.id || null;
-    const selected = runs.find((item) => item.id === workspaceState.runId) || null;
-    const terminal = selected && ["completed", "failed", "cancelled"].includes(selected.status);
-    content.innerHTML = `<div class="bw-section-head"><div><h3>结构化运行</h3><p>长任务由 Hermes 执行，历史记录保存在当前用户的 Agent 空间</p></div><button type="button" class="primary" data-start>＋ 新运行</button></div><div class="bw-run-console"><div class="bw-run-state">${selected ? `${escapeHtml(selected.id)} · ${escapeHtml(STATUS_LABELS[selected.status] || selected.status)}` : "尚未启动运行"}</div><div class="bw-run-log" data-log></div><section class="bw-approval" data-approval hidden><h4>等待你的审批</h4><p></p><div>${["once", "session", "always", "deny"].map((choice) => `<button type="button" data-choice="${choice}" class="${choice === "deny" ? "danger" : ""}">${{ once: "仅本次", session: "本次运行", always: "始终允许", deny: "拒绝" }[choice]}</button>`).join("")}</div></section><div class="bw-actions"><button type="button" data-stop ${selected && !terminal ? "" : "disabled"}>停止运行</button><button type="button" data-refresh ${selected ? "" : "disabled"}>刷新状态</button></div></div><div class="bw-section-head"><h3>运行历史</h3><span>${runs.length} 条</span></div><div class="bw-list">${runs.length ? runs.map((run) => `<article class="bw-row ${run.id === workspaceState.runId ? "selected" : ""}"><div><strong>${escapeHtml(run.inputPreview || "未命名任务")}</strong><span>${formatTime(run.createdAt)}${run.model ? ` · ${escapeHtml(run.model)}` : ""}</span>${run.lastError ? `<p>${escapeHtml(run.lastError)}</p>` : ""}</div><div class="bw-actions">${status(run.status)}<button type="button" data-select-run="${escapeHtml(run.id)}">查看</button>${["completed", "failed", "cancelled"].includes(run.status) ? `<button type="button" data-retry-run="${escapeHtml(run.id)}">${run.status === "failed" ? "重试" : "再次运行"}</button>` : ""}</div></article>`).join("") : '<div class="bw-empty">还没有运行记录</div>'}</div>`;
-    const log = content.querySelector("[data-log]"); const approval = content.querySelector("[data-approval]");
-    const followRun = async (runId) => { await renderRuns(); streamRun(runId, content.querySelector("[data-log]"), content.querySelector("[data-approval]")).then(() => renderRuns()).catch((error) => toast(error.message, "error")); };
-    content.querySelector("[data-start]").addEventListener("click", async () => { const values = await openForm({ heading: "创建运行", fields: [{ name: "input", label: "任务内容", type: "textarea", rows: 10, required: true }] }); if (!values) return; const run = await bridge.request(agentApi("/runs"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); workspaceState.runId = run.run_id; followRun(run.run_id); });
-    content.querySelectorAll("[data-choice]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}/approval`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ choice: button.dataset.choice }) }); approval.hidden = true; toast("审批已提交"); }));
-    content.querySelector("[data-stop]").addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}/stop`), { method: "POST" }); workspaceState.runStream?.abort(); toast("停止请求已提交"); });
-    content.querySelector("[data-refresh]").addEventListener("click", async () => { await bridge.request(agentApi(`/runs/${encodeURIComponent(workspaceState.runId)}`)); renderRuns(); });
-    content.querySelectorAll("[data-select-run]").forEach((button) => button.addEventListener("click", () => { workspaceState.runId = button.dataset.selectRun; renderRuns(); }));
-    content.querySelectorAll("[data-retry-run]").forEach((button) => button.addEventListener("click", async () => { const run = await bridge.request(agentApi(`/runs/${encodeURIComponent(button.dataset.retryRun)}/retry`), { method: "POST" }); workspaceState.runId = run.run_id; followRun(run.run_id); }));
-  }
-
-  async function renderJobs() {
-    const result = await bridge.request(agentApi("/jobs?include_disabled=true"));
-    const jobs = normalizeList(result, ["jobs"]);
-    const jobFields = (job = {}) => { const schedule = typeof job.schedule === "string" ? job.schedule : job.schedule?.expr || job.schedule?.display || ""; return [{ name: "name", label: "名称", value: job.name || "", required: true, maxLength: 200 }, { name: "schedule", label: "执行计划", value: schedule, placeholder: "例如 every day at 09:00 或 0 9 * * *", required: true }, { name: "prompt", label: "任务内容", type: "textarea", value: job.prompt || "", rows: 8, required: true, maxLength: 5000 }, { name: "repeat", label: "重复次数（留空表示持续执行）", type: "number", value: job.repeat || "" }, { name: "skills", label: "限定技能（逗号分隔，可选）", value: Array.isArray(job.skills) ? job.skills.join(",") : job.skills || "" }]; };
-    const jobPayload = (values, current = {}) => ({ name: values.name, schedule: values.schedule, prompt: values.prompt, deliver: current.deliver || "local", repeat: values.repeat ? Number(values.repeat) : null, skills: values.skills ? values.skills.split(/[,，]/).map((item) => item.trim()).filter(Boolean) : [] });
-    content.innerHTML = `<div class="bw-section-head"><div><h3>Hermes 定时任务</h3><p>显示 Hermes 返回的真实计划、最近结果和下次执行时间</p></div><button type="button" class="primary" data-new>＋ 新任务</button></div><div class="bw-list">${jobs.length ? jobs.map((job) => `<article class="bw-row"><div><strong>${escapeHtml(job.name || job.id)}</strong><span>${escapeHtml(job.schedule_display || job.schedule?.display || job.schedule?.expr || job.schedule || "")}${job.next_run_at ? ` · 下次 ${formatTime(job.next_run_at)}` : ""}${job.repeat ? ` · 剩余 ${job.repeat}` : ""}</span><p>${escapeHtml(job.prompt || "")}</p>${job.last_run_at ? `<p>上次 ${formatTime(job.last_run_at)} · ${escapeHtml(STATUS_LABELS[job.last_status] || job.last_status || "未知")}${job.last_error ? ` · ${escapeHtml(job.last_error)}` : ""}</p>` : ""}</div><div class="bw-actions">${status(job.last_status === "error" ? "failed" : job.enabled === false ? "disabled" : job.state || "ready")}<button type="button" data-edit-job="${job.id}">编辑</button><button type="button" data-run="${job.id}">${job.last_status === "error" ? "重试" : "运行"}</button><button type="button" data-toggle="${job.id}" data-enabled="${job.enabled !== false ? "1" : "0"}">${job.enabled === false ? "恢复" : "暂停"}</button><button type="button" data-delete="${job.id}" class="danger-icon" title="删除">×</button></div></article>`).join("") : '<div class="bw-empty">还没有定时任务</div>'}</div>`;
-    content.querySelector("[data-new]").addEventListener("click", async () => { const values = await openForm({ heading: "新建定时任务", fields: jobFields() }); if (!values) return; await bridge.request(agentApi("/jobs"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(jobPayload(values)) }); toast("任务已创建", "success"); renderJobs(); });
-    content.querySelectorAll("[data-edit-job]").forEach((button) => button.addEventListener("click", async () => { const detail = await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.editJob)}`)); const current = detail.job || detail; const values = await openForm({ heading: "编辑定时任务", fields: jobFields(current) }); if (!values) return; await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.editJob)}`), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(jobPayload(values, current)) }); toast("任务已更新", "success"); renderJobs(); }));
-    content.querySelectorAll("[data-run]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.run)}/run`), { method: "POST" }); toast("任务已触发"); }));
-    content.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", async () => { const action = button.dataset.enabled === "1" ? "pause" : "resume"; await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.toggle)}/${action}`), { method: "POST" }); renderJobs(); }));
-    content.querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", async () => { if (!await openForm({ heading: "删除定时任务", submitLabel: "确认删除", danger: true, fields: [] })) return; await bridge.request(agentApi(`/jobs/${encodeURIComponent(button.dataset.delete)}`), { method: "DELETE" }); renderJobs(); }));
-  }
-
-  async function renderUsage() {
-    const result = await bridge.request(agentApi("/usage")); const summary = result.summary;
-    const latency = summary.runCount ? Math.round(summary.latencySumMs / summary.runCount) : 0;
-    content.innerHTML = `<div class="bw-metrics"><div><span>输入 Token</span><strong>${summary.inputTokens.toLocaleString()}</strong></div><div><span>输出 Token</span><strong>${summary.outputTokens.toLocaleString()}</strong></div><div><span>运行次数</span><strong>${summary.runCount.toLocaleString()}</strong></div><div><span>失败次数</span><strong>${summary.failedRunCount.toLocaleString()}</strong></div><div><span>估算费用</span><strong>$${summary.estimatedCostUsd.toFixed(4)}</strong></div><div><span>平均延迟</span><strong>${latency} ms</strong></div></div><div class="bw-table"><table><thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>运行</th><th>费用</th></tr></thead><tbody>${result.rollups.map((item) => `<tr><td>${formatTime(item.bucketStart)}</td><td>${escapeHtml(item.model)}</td><td>${item.inputTokens}</td><td>${item.outputTokens}</td><td>${item.runCount}</td><td>$${item.estimatedCostUsd.toFixed(4)}</td></tr>`).join("")}</tbody></table></div>`;
-  }
-
-  async function renderSettings() {
-    const [agentResult, discovery, authorizationResult] = await Promise.all([bridge.request(agentApi()), bridge.request(agentApi("/runtime/discovery")).catch(() => ({ discovery: {} })), bridge.request(agentApi("/authorizations"))]);
-    const agent = agentResult.agent;
-    const discoveredModels = normalizeList(discovery.discovery?.["discovery.models"]?.data, ["models"]).map((item) => typeof item === "string" ? item : item.id || item.name || item.model).filter(Boolean);
-    const modelIds = (discovery.policy?.allowedModels || []).filter((id) => discoveredModels.includes(id));
-    const authorizations = authorizationResult.authorizations || [];
-    const enabledServices = (authorizationResult.services || []).filter((item) => item.enabled);
-    const serviceLabels = Object.fromEntries((authorizationResult.services || []).map((item) => [item.id, item.name]));
-    content.innerHTML = `<div class="bw-split"><section><h3>Agent 设置</h3><form class="bw-form" data-agent-form><label>名称<input name="name" value="${escapeHtml(agent.name)}" required maxlength="64"></label><label>描述<textarea name="description" rows="4" maxlength="500">${escapeHtml(agent.description || "")}</textarea></label><label>身份与原则<textarea name="soulMarkdown" rows="12" maxlength="50000">${escapeHtml(agent.soulMarkdown || "")}</textarea></label><button type="submit" class="primary">保存 Agent 设置</button></form></section><section><h3>模型与偏好</h3><form class="bw-form" data-pref-form><label>模型<select name="preferredModel"><option value="">管理员默认模型</option>${modelIds.map((id) => `<option value="${escapeHtml(id)}" ${agent.settings?.preferredModel === id ? "selected" : ""}>${escapeHtml(id)}</option>`).join("")}</select></label><label>语言<select name="locale"><option value="zh-CN" ${agent.settings?.locale !== "en-US" ? "selected" : ""}>简体中文</option><option value="en-US" ${agent.settings?.locale === "en-US" ? "selected" : ""}>English</option></select></label><label class="bw-check"><input type="checkbox" name="notifications" ${agent.settings?.notifications !== false ? "checked" : ""}>启用运行通知</label><button type="submit" class="primary">保存偏好</button></form><div class="bw-security-note"><strong>凭证边界</strong><p>Hermes API key、Runtime 签名密钥和平台 Provider key 不会进入浏览器。个人第三方凭证只以加密密文保存，并由当前 Agent 的 Runtime 身份按需读取。</p></div></section></div><section class="bw-authorizations"><div class="bw-section-head"><div><h3>第三方授权</h3><p>Firecrawl、搜索、语音、文档和管理员允许的个人模型 Provider</p></div><button type="button" class="primary" data-auth-new ${enabledServices.length ? "" : "disabled"}>＋ 添加授权</button></div><div class="bw-list">${authorizations.length ? authorizations.map((item) => `<article class="bw-row"><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(serviceLabels[item.service] || item.service)} · ${escapeHtml(item.authType)}${item.endpointUrl ? ` · ${escapeHtml(item.endpointUrl)}` : ""}</span></div><div class="bw-actions">${status(item.status)}<span>${escapeHtml(item.credentialMasked || "凭证已清除")}</span>${item.status !== "revoked" ? `<button type="button" class="danger-icon" data-auth-revoke="${escapeHtml(item.id)}" title="吊销">×</button>` : ""}</div></article>`).join("") : '<div class="bw-empty">还没有个人第三方授权</div>'}</div></section>`;
-    content.querySelector("[data-agent-form]").addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.target)); await bridge.request(agentApi(), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(values) }); toast("Agent 设置已保存", "success"); });
-    content.querySelector("[data-pref-form]").addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.target)); values.notifications = event.target.elements.notifications.checked; await bridge.request(agentApi(), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings: values }) }); toast("偏好已保存", "success"); });
-    content.querySelector("[data-auth-new]")?.addEventListener("click", async () => {
-      const values = await openForm({ heading: "添加第三方授权", fields: [{ name: "service", label: "服务", type: "select", options: enabledServices.map((item) => ({ value: item.id, label: `${item.name} - ${item.purpose}` })) }, { name: "label", label: "名称", required: true, maxLength: 100 }, { name: "authType", label: "认证类型", type: "select", options: [{ value: "api_key", label: "API Key" }, { value: "bearer_token", label: "Bearer Token" }] }, { name: "endpointUrl", label: "HTTPS 接口地址（可选）", type: "url" }, { name: "provider", label: "Provider（可选）", maxLength: 200 }, { name: "model", label: "模型（可选）", maxLength: 200 }, { name: "secret", label: "密钥或 Token", type: "password", required: true, maxLength: 64000 }] });
-      if (!values) return;
-      await bridge.request(agentApi("/authorizations"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service: values.service, label: values.label, authType: values.authType, endpointUrl: values.endpointUrl, secret: values.secret, metadata: { provider: values.provider, model: values.model } }) });
-      toast("授权已加密保存", "success"); renderSettings();
-    });
-    content.querySelectorAll("[data-auth-revoke]").forEach((button) => button.addEventListener("click", async () => {
-      if (!await openForm({ heading: "吊销第三方授权", submitLabel: "确认吊销", danger: true, fields: [] })) return;
-      await bridge.request(agentApi(`/authorizations/${encodeURIComponent(button.dataset.authRevoke)}`), { method: "DELETE" });
-      toast("授权已吊销，密钥密文已清除"); renderSettings();
+  function syncNavigation() {
+    if (!nav) return;
+    nav.replaceChildren(...workspaceRegistry.list().map((extension) => {
+      const button = createElement("button", {
+        className: `settings-nav-item${extension.id === workspaceState.view ? " active" : ""}`,
+        text: extension.label,
+        type: "button",
+        attributes: { "data-view": extension.id }
+      });
+      button.addEventListener("click", () => render(extension.id));
+      return button;
     }));
   }
 
-  const HERMES_CAPABILITY_GROUPS = [
-    { title: "模型与认证", description: "读取当前 Agent 的 Hermes Provider、模型和辅助模型状态", operations: ["provider.catalog", "provider.oauth.list", "model.info", "model.options", "model.auxiliary"] },
-    { title: "工具与技能", description: "读取工具集、技能来源和可用能力", operations: ["toolsets.list", "skills.list", "skills.hub.sources", "mcp.list", "mcp.catalog"] },
-    { title: "身份与自动化", description: "读取 Profile、定时任务和交付目标", operations: ["profiles.list", "profiles.active.get", "cron.delivery_targets", "cron.blueprints"] },
-    { title: "诊断与文件", description: "读取 Agent 范围内的健康、检查点和工作区目录", operations: ["diagnostics.status", "diagnostics.checkpoints", "files.list"] }
-  ];
-
-  function operationSummary(value) {
-    if (Array.isArray(value)) return `${value.length} 项`;
-    if (!value || typeof value !== "object") return value == null ? "无数据" : String(value);
-    const arrays = Object.entries(value).filter(([, item]) => Array.isArray(item));
-    if (arrays.length) return arrays.map(([key, item]) => `${key}: ${item.length}`).join(" · ");
-    if (typeof value.status === "string") return value.status;
-    return `${Object.keys(value).length} 个字段`;
-  }
-
-  async function renderHermes() {
-    content.innerHTML = `<div class="bw-section-head"><div><h3>Hermes 能力中心</h3><p>所有请求经过当前 Agent 的 Runtime Boundary；密钥、主机配置和其他用户数据不会进入这里。</p></div><span class="bw-status bw-status-ready">Agent 范围</span></div><div class="bw-capability-grid">${HERMES_CAPABILITY_GROUPS.map((group, index) => `<section class="bw-capability-card"><header><div><h3>${escapeHtml(group.title)}</h3><p>${escapeHtml(group.description)}</p></div><span>${group.operations.length}</span></header><div class="bw-list">${group.operations.map((operation) => `<button type="button" class="bw-capability-row" data-hermes-operation="${escapeHtml(operation)}"><span>${escapeHtml(operation)}</span><strong data-hermes-result="${escapeHtml(operation)}">读取</strong></button>`).join("")}</div></section>`).join("")}</div><section class="bw-security-note"><strong>高级操作</strong><p>需要写入配置、安装技能、修改 Profile、MCP 或文件的动作会在对应工作台中显示确认、权限和真实执行结果。</p></section>`;
-    content.querySelectorAll("[data-hermes-operation]").forEach((button) => button.addEventListener("click", async () => {
-      const operation = button.dataset.hermesOperation;
-      const target = content.querySelector(`[data-hermes-result="${CSS.escape(operation)}"]`);
-      button.disabled = true;
-      if (target) target.textContent = "读取中";
-      try {
-        const result = await bridge.request(agentApi(`/hermes/operations/${encodeURIComponent(operation)}`));
-        if (target) target.textContent = operationSummary(result);
-        button.classList.add("loaded");
-      } catch (error) {
-        if (target) target.textContent = STATUS_LABELS[error.message] || "不可用";
-        toast(error.message || "Hermes 能力读取失败", "error");
-      } finally { button.disabled = false; }
-    }));
-  }
-
-  function registerBuiltInViews() {
-    const views = {
-      memory: [3, renderMemory], skills: [4, renderSkills],
-      runs: [7, renderRuns], jobs: [8, renderJobs],
-      usage: [9, renderUsage], hermes: [10, renderHermes], settings: [11, renderSettings]
-    };
-    for (const [id, [order, renderView]] of Object.entries(views)) {
-      const label = NAV.find(([key]) => key === id)?.[1] || id;
-      if (!workspaceRegistry.get(id)) workspaceRegistry.register({ id, label, order, render: renderView });
+  async function render(view) {
+    const extension = workspaceRegistry.get(view) || workspaceRegistry.list()[0];
+    if (!extension || !content) return;
+    if (activeExtension?.id !== extension.id) disposeCurrent();
+    activeExtension = extension;
+    workspaceState.view = extension.id;
+    const revision = ++workspaceState.renderRevision;
+    title.textContent = extension.label;
+    agentLabel.textContent = activeAgent()?.name || "Agent";
+    syncNavigation();
+    content.replaceChildren(loadingNode());
+    try {
+      await extension.render(context());
+    } catch (error) {
+      if (revision === workspaceState.renderRevision) showError(error);
     }
+  }
+
+  function syncWorkspaceGeometry() {
+    if (!modal) return;
+    const zoom = Number.parseFloat(document.documentElement.style.zoom) || Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const mobile = window.matchMedia("(max-width: 780px)").matches;
+    const horizontalGutter = mobile ? 0 : 40;
+    const verticalGutter = mobile ? 0 : 64;
+    const width = Math.max(1, Math.min(1180, (window.innerWidth - horizontalGutter) / zoom));
+    const height = Math.max(1, Math.min(760, (window.innerHeight - verticalGutter) / zoom));
+    Object.assign(modal.style, {
+      width: `${width}px`,
+      height: `${height}px`,
+      maxWidth: `${width}px`,
+      maxHeight: `${height}px`
+    });
+  }
+
+  function openWorkspace(view = workspaceState.view) {
+    if (!root) return;
+    lastFocused = document.activeElement;
+    syncWorkspaceGeometry();
+    root.hidden = false;
+    root.inert = false;
+    root.setAttribute("aria-hidden", "false");
+    document.body.classList.add("bairui-workspace-open");
+    render(view);
+    root.querySelector("[data-bairui-workspace-close]")?.focus();
+  }
+
+  function closeWorkspace() {
+    if (!root || root.hidden) return;
+    disposeCurrent();
+    activeExtension = null;
+    workspaceState.renderRevision += 1;
+    root.hidden = true;
+    root.inert = true;
+    root.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("bairui-workspace-open");
+    window.dispatchEvent(new CustomEvent("bairui:chat-layout"));
+    if (lastFocused instanceof HTMLElement && document.contains(lastFocused)) lastFocused.focus();
   }
 
   function mount() {
-    root = document.createElement("section"); root.className = "bairui-workspace"; root.hidden = true;
-    root.innerHTML = `<aside class="bw-nav"><header><img src="/assets/bairui-agent-icon.png" alt=""><strong>bairui-agent</strong></header><nav>${NAV.map(([key, label]) => `<button type="button" data-view="${key}">${escapeHtml(label)}</button>`).join("")}</nav></aside><main><header class="bw-header"><div><span>${escapeHtml(activeAgent()?.name || "Agent")}</span><h1></h1></div><button type="button" data-close title="关闭工作区" aria-label="关闭工作区">×</button></header><div class="bw-content"></div></main>`;
-    const extensionHost = document.querySelector("[data-bairui-extension-host]") || document.body;
-    extensionHost.appendChild(root); content = root.querySelector(".bw-content"); title = root.querySelector("h1");
-    const nav = root.querySelector("nav");
-    const syncNavigation = () => {
-      nav.innerHTML = navigationEntries().map(({ id, label }) => `<button type="button" data-view="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join("");
-      nav.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => render(button.dataset.view)));
-    };
+    root = document.querySelector("[data-bairui-extension-host]");
+    if (!root) {
+      console.warn("[bairui-workspace] native extension host is unavailable");
+      return;
+    }
+    nav = root.querySelector("[data-bairui-workspace-nav]");
+    content = root.querySelector("[data-bairui-workspace-content]");
+    title = root.querySelector("#bairui-workspace-title");
+    agentLabel = root.querySelector("[data-bairui-workspace-agent]");
+    modal = root.querySelector(".bairui-workspace-modal");
+    root.inert = true;
     syncNavigation();
-    window.addEventListener("bairui:workspace-registry-changed", syncNavigation);
-    root.querySelector("[data-close]").addEventListener("click", closeWorkspace);
-    window.addEventListener("bairui:workspace-open", () => openWorkspace());
+    root.querySelector("[data-bairui-workspace-close]")?.addEventListener("click", closeWorkspace);
+    root.addEventListener("click", (event) => { if (event.target === root) closeWorkspace(); });
+    window.addEventListener("bairui:workspace-open", (event) => openWorkspace(event.detail?.view));
     window.addEventListener("bairui:workspace-refresh", () => { if (!root.hidden) render(workspaceState.view); });
-    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !root.hidden && !document.querySelector("dialog[open]")) closeWorkspace(); });
+    window.addEventListener("bairui:workspace-registry-changed", syncNavigation);
+    window.addEventListener("resize", () => { if (!root.hidden) syncWorkspaceGeometry(); }, { passive: true });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !root.hidden && !document.querySelector("dialog[open]")) closeWorkspace();
+    });
   }
 
-  registerBuiltInViews();
   window.addEventListener("DOMContentLoaded", mount, { once: true });
 })();

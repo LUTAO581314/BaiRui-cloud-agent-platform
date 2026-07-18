@@ -27,11 +27,15 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
   assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
   assert.match(html, /\/assets\/bairui-workspace-skills\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-runs\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-jobs\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-hermes\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-settings\.js/);
   assert.match(html, /<head>[\s\S]*data-bairui-overlay[\s\S]*<\/head>/);
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
-  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
+  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createThemeSwitcher\(\),\s+createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
 
@@ -87,24 +91,21 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
 
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
-  const conversations = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-conversations.js"), "utf8");
-  const agents = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-agents.js"), "utf8");
-  const channels = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-channels.js"), "utf8");
-  const hotspots = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-hotspots.js"), "utf8");
-  const memory = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-memory.js"), "utf8");
-  const skills = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-skills.js"), "utf8");
-  const usage = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-usage.js"), "utf8");
-  const workspaceSources = [workspace, conversations, agents, channels, hotspots, memory, skills, usage].join("\n");
-  assert.match(conversations, /renderConversations/);
-  assert.match(agents, /renderAgents/);
-  assert.match(channels, /renderChannels/);
-  assert.match(hotspots, /renderHotspots/);
-  for (const view of ["memory", "skills", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
+  const names = ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "hermes", "settings"];
+  const extensions = Object.fromEntries(names.map((name) => [name, fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", `bairui-workspace-${name}.js`), "utf8")]));
+  const workspaceSources = [workspace, ...Object.values(extensions)].join("\n");
+  for (const name of names) {
+    assert.match(extensions[name], /window\.BairuiWorkspaceRegistry/);
+    assert.match(extensions[name], new RegExp(`id: ["']${name}["']`));
+  }
+  assert.doesNotMatch(workspace, /function render[A-Z]|\.innerHTML\s*=/);
   for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspaceSources, new RegExp(route.replace("/", "\\/")));
-  assert.match(workspace, /Hermes MEMORY\.md/);
-  assert.match(workspace, /Hermes USER\.md/);
-  assert.match(workspace, /Obsidian 主记忆库/);
-  for (const capability of ["Runtime Capabilities", "Hermes Toolsets", "health.detailed", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) assert.match(workspace, new RegExp(capability.replace(".", "\\.")));
+  for (const evidence of ["Hermes MEMORY.md", "Hermes USER.md", "Obsidian 主记忆库"]) assert.match(extensions.memory, new RegExp(evidence.replace(".", "\\.")));
+  for (const capability of ["Runtime Capabilities", "Hermes Toolsets", "health.detailed", "discovery.capabilities", "discovery.toolsets"]) assert.match(extensions.skills, new RegExp(capability.replace(".", "\\.")));
+  for (const evidence of ["data-edit-job", "编辑定时任务"]) assert.match(extensions.jobs, new RegExp(evidence));
+  assert.match(extensions.runs, /bridge\.openRunEvents/);
+  assert.match(extensions.hermes, /\/hermes\/operations\//);
+  assert.match(extensions.settings, /个人连接/);
 });
 
 test("restores BaiLongma's native independent panel controls", () => {
@@ -117,30 +118,36 @@ test("restores BaiLongma's native independent panel controls", () => {
 test("keeps the BaiRui toolbar above the interactive BaiLongma graph", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
-  assert.match(overlay, /\.bairui-platform-tools\s*\{[\s\S]*z-index:\s*2147483000\s*!important/);
-  assert.match(overlay, /\.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
+  assert.match(overlay, /body\[data-bairui-shell\] \.bairui-platform-tools\s*\{[\s\S]*z-index:\s*190/);
+  assert.match(overlay, /body\[data-bairui-shell\] \.bairui-platform-tools\s*>\s*\*[\s\S]*pointer-events:\s*auto/);
+  assert.doesNotMatch(overlay, /!important/);
   assert.match(adapter, /document\.body\.appendChild\(tools\)/);
-  assert.match(adapter, /zIndex:\s*"2147483000"/);
+  assert.doesNotMatch(adapter, /style\.zIndex|2147483000/);
 });
 
 test("adapts BaiLongma panels into persistent desktop controls and mobile drawers", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
-  for (const evidence of [".panel-tab", ".bairui-panel-scrim", "body:not(.l1-collapsed)", "body:not(.l2-collapsed)"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  for (const evidence of ["mountPanelControls", "bailongma-panel-l1-collapsed", "bailongma-panel-l2-collapsed", "aria-expanded"]) assert.match(adapter, new RegExp(evidence));
+  for (const evidence of [".panel-tab", ".bairui-panel-scrim", ":not(.l1-collapsed)", ":not(.l2-collapsed)", "max-width: 780px"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const evidence of ["mountPanelControls", "bailongma-panel-l1-collapsed", "bailongma-panel-l2-collapsed", "aria-expanded", "aria-hidden", "aria-controls", ".inert", "desktopState"]) assert.match(adapter, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("imports SillyTavern character cards through a confirmed BaiRui adapter flow", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
-  for (const evidence of ["previewOnly", "confirmUntrustedPrompts", "character-card", "import-character-card", "SillyTavern"]) assert.match(adapter, new RegExp(evidence));
-  assert.match(overlay, /\.bairui-card-dialog/);
+  const agents = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-agents.js"), "utf8");
+  for (const evidence of ["previewOnly", "confirmUntrustedPrompts", "character-card", "SillyTavern", "settings-modal bairui-character-dialog"]) assert.match(adapter, new RegExp(evidence));
+  assert.match(agents, /data-import-card/);
+  assert.match(agents, /bridge\.chooseCharacterCard/);
+  assert.match(overlay, /\.bairui-character-dialog/);
+  assert.doesNotMatch(overlay, /\.bairui-card-dialog/);
 });
 
 test("adapts the BaiLongma console into a persistent Hermes chat column", () => {
   const overlay = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.css"), "utf8");
   const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-bailongma.js"), "utf8");
-  for (const evidence of [".bairui-chat-header", "#chat-history.open", "#chat-messages .msg", ".bairui-attach-button", ".bairui-streaming #send-btn::before"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const evidence of [".bairui-chat-header", ".bairui-attach-button", ".bairui-streaming #send-btn"]) assert.match(overlay, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(overlay, /body\[data-bairui-shell\]\s+(?:#chat-area|#chat-history|#chat-messages|\.console)\b/);
   for (const evidence of ["mountHermesChatSurface", "applyViewportLayout", "document.documentElement).zoom", "height / zoom", "ClipboardEvent", "DataTransfer", "attach-image", "Hermes ·"]) assert.match(adapter, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(adapter, /bairui:chat-layout/);
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");

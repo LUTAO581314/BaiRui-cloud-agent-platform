@@ -36,6 +36,15 @@
     return body;
   }
 
+  function openRunEvents(runId, options = {}) {
+    const agent = state.activeAgent;
+    if (!agent?.id) throw new Error("active_agent_required");
+    return platformRequest(`/api/user/agents/${encodeURIComponent(agent.id)}/runs/${encodeURIComponent(runId)}/events`, {
+      ...options,
+      headers: { accept: "text/event-stream", ...(options.headers || {}) }
+    });
+  }
+
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   }
@@ -47,6 +56,13 @@
   function readyDom() {
     if (document.readyState !== "loading") return Promise.resolve();
     return new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
+  }
+
+  function fitToVisualViewport(element, { horizontalGutter = 28, verticalGutter = 32 } = {}) {
+    if (!element) return;
+    const zoom = Number.parseFloat(document.documentElement.style.zoom) || Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    element.style.maxWidth = `${Math.max(1, (window.innerWidth - horizontalGutter) / zoom)}px`;
+    element.style.maxHeight = `${Math.max(1, (window.innerHeight - verticalGutter) / zoom)}px`;
   }
 
   function sleep(ms) {
@@ -240,6 +256,7 @@
       </form>`;
       document.body.appendChild(overlay);
       const form = overlay.querySelector("form");
+      fitToVisualViewport(form, { verticalGutter: 64 });
       const error = overlay.querySelector(".bairui-onboarding-error");
       const later = overlay.querySelector("[data-later]");
       bindHermesProviderFields(form, authorization);
@@ -287,6 +304,7 @@
       </form>`;
       document.body.appendChild(overlay);
       const form = overlay.querySelector("form");
+      fitToVisualViewport(form, { verticalGutter: 64 });
       const error = overlay.querySelector(".bairui-onboarding-error");
       const progress = overlay.querySelector(".bairui-onboarding-progress");
       const later = overlay.querySelector("[data-later]");
@@ -506,6 +524,7 @@
     dialog.appendChild(form);
     dialog.addEventListener("cancel", (event) => event.preventDefault());
     document.body.appendChild(dialog);
+    fitToVisualViewport(dialog);
     state.approvalDialog = dialog;
     dialog.showModal();
   }
@@ -736,7 +755,7 @@
 
   function cardNotice(message, tone = "info") {
     const notice = document.createElement("div");
-    notice.className = `bairui-card-notice tone-${tone}`;
+    notice.className = `bairui-extension-toast tone-${tone}`;
     notice.setAttribute("role", "status");
     notice.textContent = message;
     document.body.appendChild(notice);
@@ -748,22 +767,23 @@
     const endpoint = `/api/user/agents/${encodeURIComponent(agent.id)}/character-card`;
     const preview = await requestJson(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card, previewOnly: true }) });
     const dialog = document.createElement("dialog");
-    dialog.className = "bairui-card-dialog";
+    dialog.className = "settings-modal bairui-character-dialog";
     dialog.innerHTML = `<form method="dialog">
-      <header><div><span>角色卡预检</span><strong>${escapeHtml(preview.card.name)}</strong></div><button type="button" data-close title="关闭" aria-label="关闭">×</button></header>
-      <div class="bairui-card-body">
+      <header class="settings-header"><div><span class="settings-title">角色卡预检</span><strong>${escapeHtml(preview.card.name)}</strong></div><button class="settings-close" type="button" data-close title="关闭" aria-label="关闭">×</button></header>
+      <div class="settings-content bairui-character-body">
         <dl><div><dt>文件</dt><dd>${escapeHtml(filename)}</dd></div><div><dt>规范</dt><dd>${escapeHtml(preview.card.spec)} ${escapeHtml(preview.card.specVersion)}</dd></div><div><dt>Hermes 身份</dt><dd>${preview.card.soulChars.toLocaleString()} 字符</dd></div><div><dt>Obsidian 资料</dt><dd>${preview.card.loreNotes + 1} 条</dd></div></dl>
-        <section><strong>导入边界</strong><p>身份、性格、场景和系统指引将更新 Hermes 的 SOUL.md。开场白、示例对话和 Lorebook 仅保存为 Obsidian 来源资料，不会伪装成 Hermes 原生记忆。</p></section>
-        <label class="bairui-card-confirm"><input type="checkbox" required><span>我确认该角色卡来自可信来源，并允许其中的提示词改变当前 Agent 身份。扩展脚本和执行配置不会导入。</span></label>
-        <p class="bairui-card-error" role="alert"></p>
+        <section class="settings-section"><div class="settings-section-label">导入边界</div><p>身份、性格、场景和系统指引将更新 Hermes 的 SOUL.md。开场白、示例对话和 Lorebook 仅保存为 Obsidian 来源资料，不会伪装成 Hermes 原生记忆。</p></section>
+        <label class="bairui-character-confirm"><input type="checkbox" required><span>我确认该角色卡来自可信来源，并允许其中的提示词改变当前 Agent 身份。扩展脚本和执行配置不会导入。</span></label>
+        <p class="settings-feedback error" data-card-error role="alert"></p>
       </div>
-      <footer><button type="button" data-cancel>取消</button><button type="submit" class="primary" disabled>导入角色卡</button></footer>
+      <footer class="settings-row-action bairui-character-actions"><button type="button" class="settings-save-btn" data-cancel>取消</button><button type="submit" class="settings-save-btn" disabled>导入角色卡</button></footer>
     </form>`;
     document.body.appendChild(dialog);
+    fitToVisualViewport(dialog);
     const form = dialog.querySelector("form");
     const confirmation = dialog.querySelector('input[type="checkbox"]');
     const submit = dialog.querySelector('button[type="submit"]');
-    const error = dialog.querySelector(".bairui-card-error");
+    const error = dialog.querySelector("[data-card-error]");
     const close = () => { dialog.close(); dialog.remove(); };
     dialog.querySelector("[data-close]").addEventListener("click", close);
     dialog.querySelector("[data-cancel]").addEventListener("click", close);
@@ -896,13 +916,20 @@
   function mountPanelControls() {
     const left = document.querySelector("#panel-l1-tab");
     const right = document.querySelector("#panel-l2-tab");
-    if (!left || !right || document.querySelector(".bairui-panel-scrim")) return;
+    const leftPanel = document.querySelector("#panel-l1");
+    const rightPanel = document.querySelector("#panel-l2");
+    if (!left || !right || !leftPanel || !rightPanel || document.querySelector(".bairui-panel-scrim")) return;
     const scrim = document.createElement("button");
     scrim.type = "button";
     scrim.className = "bairui-panel-scrim";
     scrim.title = "关闭侧栏";
     scrim.setAttribute("aria-label", "关闭侧栏");
+    scrim.hidden = true;
     document.body.appendChild(scrim);
+    left.setAttribute("aria-controls", "panel-l1");
+    right.setAttribute("aria-controls", "panel-l2");
+    leftPanel.dataset.bairuiDrawer = "left";
+    rightPanel.dataset.bairuiDrawer = "right";
 
     const mobile = () => window.matchMedia("(max-width: 780px)").matches;
     let mobileMode = mobile();
@@ -915,6 +942,11 @@
       const rightOpen = !document.body.classList.contains("l2-collapsed");
       left.setAttribute("aria-expanded", String(leftOpen));
       right.setAttribute("aria-expanded", String(rightOpen));
+      leftPanel.setAttribute("aria-hidden", String(!leftOpen));
+      rightPanel.setAttribute("aria-hidden", String(!rightOpen));
+      leftPanel.inert = !leftOpen;
+      rightPanel.inert = !rightOpen;
+      scrim.hidden = !mobile() || (!leftOpen && !rightOpen);
       left.title = `${leftOpen ? "收起" : "展开"}左侧认知面板`;
       right.title = `${rightOpen ? "收起" : "展开"}右侧运行面板`;
     };
@@ -940,7 +972,7 @@
       if (!document.body.classList.contains("l2-collapsed")) right.click();
     });
     window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && mobile()) scrim.click();
+      if (event.key === "Escape" && mobile() && !scrim.hidden) scrim.click();
     });
     window.addEventListener("resize", () => {
       const nextMobile = mobile();
@@ -1017,6 +1049,7 @@
     refresh.addEventListener("click", () => location.reload());
     actions.appendChild(refresh);
     document.body.appendChild(blocker);
+    fitToVisualViewport(blocker.querySelector("section"), { verticalGutter: 64 });
     if (["initializing", "upgrading", "deleting"].includes(failure.code)) {
       const poll = async () => {
         if (!document.body.contains(blocker)) return;
@@ -1033,7 +1066,12 @@
     const [me, agent] = await Promise.all([requestJson("/api/me"), loadActiveAgent()]);
     state.user = me.user;
     const originalSettings = document.querySelector("#settings-btn");
-    if (originalSettings) originalSettings.hidden = true;
+    if (originalSettings) {
+      originalSettings.hidden = false;
+      originalSettings.title = "打开 Agent 工作区";
+      originalSettings.setAttribute("aria-label", "打开 Agent 工作区");
+      originalSettings.addEventListener("click", () => window.dispatchEvent(new CustomEvent("bairui:workspace-open")));
+    }
 
     const tools = document.createElement("nav");
     tools.className = "bairui-platform-tools";
@@ -1080,31 +1118,12 @@
     workspace.dataset.action = "workspace";
     workspace.addEventListener("click", () => window.dispatchEvent(new CustomEvent("bairui:workspace-open")));
     tools.appendChild(workspace);
-    const addAgent = iconButton("创建 Agent", "+");
-    addAgent.addEventListener("click", async () => {
-      const created = await createAgentDialog();
-      activateAgent(created.id);
-    });
-    tools.appendChild(addAgent);
-    const importCard = iconButton("导入 SillyTavern 角色卡", "⇧");
-    importCard.dataset.action = "import-character-card";
-    importCard.addEventListener("click", () => chooseCharacterCard(state.activeAgent));
-    tools.appendChild(importCard);
-    if (["org_admin", "platform_admin"].includes(state.user.role)) {
-      const admin = document.createElement("a");
-      admin.href = "/admin";
-      admin.title = "总控后台";
-      admin.setAttribute("aria-label", "总控后台");
-      admin.textContent = "⚙";
-      tools.appendChild(admin);
-    }
     const logout = iconButton("退出登录", "↪");
     logout.addEventListener("click", async () => {
       await platformRequest("/api/auth/logout", { method: "POST" });
       location.href = "/login";
     });
     tools.appendChild(logout);
-    Object.assign(tools.style, { position: "fixed", zIndex: "2147483000", pointerEvents: "auto" });
     document.body.appendChild(tools);
     mountPanelControls();
     mountHermesChatSurface(agent);
@@ -1121,6 +1140,7 @@
   window.bairuiPlatform = Object.freeze({
     state,
     request: requestJson,
+    openRunEvents,
     loadActiveAgent,
     listSessions,
     createSession,
@@ -1129,6 +1149,7 @@
     initializeAgent,
     waitForAgentReady,
     createAgentDialog,
+    chooseCharacterCard,
     stopActiveStream,
     prefillChat,
     initializationLabel,

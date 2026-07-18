@@ -126,6 +126,10 @@ const required = [
   "apps/web/public/bairui-workspace-usage.js",
   "apps/web/public/bairui-workspace-memory.js",
   "apps/web/public/bairui-workspace-skills.js",
+  "apps/web/public/bairui-workspace-runs.js",
+  "apps/web/public/bairui-workspace-jobs.js",
+  "apps/web/public/bairui-workspace-hermes.js",
+  "apps/web/public/bairui-workspace-settings.js",
   "apps/web/public/bairui-scene-bootstrap.js",
   "docs/10-control-plane-architecture.md",
   "docs/11-control-plane-protocol.md",
@@ -136,7 +140,8 @@ const required = [
   "docs/16-control-command-delivery.md",
   "docs/17-agent-resource-telemetry.md",
   "docs/23-durable-channel-bridge.md",
-  "docs/24-immutable-release-pipeline.md"
+  "docs/24-immutable-release-pipeline.md",
+  "docs/U01-04-SHELL-EVIDENCE.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -224,13 +229,10 @@ const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/bu
 for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD_INTEGRITY_FILES", "sourceCommit", "patchManifestSha256", "appliedPatches"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
 }
-if (!bailongmaBuild.includes("/assets/bairui-workspace-conversations.js")) failures.push("BaiRui build must inject the modular conversations workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-agents.js")) failures.push("BaiRui build must inject the modular Agent workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-channels.js")) failures.push("BaiRui build must inject the modular channels workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-hotspots.js")) failures.push("BaiRui build must inject the modular hotspots workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-memory.js")) failures.push("BaiRui build must inject the modular memory workspace extension");
-if (!bailongmaBuild.includes("/assets/bairui-workspace-skills.js")) failures.push("BaiRui build must inject the modular skills workspace extension");
+const workspaceExtensionIds = ["conversations", "agents", "channels", "hotspots", "usage", "memory", "skills", "runs", "jobs", "hermes", "settings"];
+for (const id of workspaceExtensionIds) {
+  if (!bailongmaBuild.includes(`/assets/bairui-workspace-${id}.js`)) failures.push(`BaiRui build must inject the modular ${id} workspace extension`);
+}
 const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
 for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
   if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
@@ -241,14 +243,15 @@ for (const evidence of ["readBailongmaPatchManifest", "applyBailongmaPatchQueue"
   if (!patchQueue.includes(evidence)) failures.push("Missing BaiLongma patch queue enforcement: " + evidence);
 }
 const appShellTransform = fs.readFileSync(path.join(root, "packages/bailongma-ui/app-shell-transform.mjs"), "utf8");
-for (const evidence of ["createBairuiExtensionHost", "data-bairui-extension-host", "createPanelTabs()", "createConsole()"] ) {
+for (const evidence of ["createBairuiExtensionHost", "data-bairui-extension-host", "createThemeSwitcher()", "createPanelTabs()", "createConsole()", "settings-overlay", "settings-modal", "settings-nav", "settings-content", "root.dataset.bairuiShell", "SETTINGS_CALL_ANCHOR"] ) {
   if (!appShellTransform.includes(evidence)) failures.push("Missing native BaiLongma extension slot evidence: " + evidence);
 }
 const workspaceAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace.js"), "utf8");
-for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register", "workspaceRegistry.get(view)", "bairui:workspace-registry-changed", "document.querySelector(\"[data-bairui-extension-host]\")"]) {
+for (const evidence of ["BairuiWorkspaceRegistry", "register(definition)", "workspaceRegistry.get(view)", "workspaceRegistry.list()", "bairui:workspace-registry-changed", "document.querySelector(\"[data-bairui-extension-host]\")", "extension.render(context())"]) {
   if (!workspaceAdapter.includes(evidence)) failures.push("Missing BaiRui workspace extension registry evidence: " + evidence);
 }
 if (workspaceAdapter.includes("document.body.appendChild(root)")) failures.push("BaiRui workspace must not append a second root directly to document.body");
+if (/function render[A-Z]|\.innerHTML\s*=/.test(workspaceAdapter)) failures.push("Core BaiRui workspace host must not contain centralized renderX or innerHTML views");
 const usageExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-usage.js"), "utf8");
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"usage\"", "agentApi(\"/usage\")", "bw-metrics"]) {
   if (!usageExtension.includes(evidence)) failures.push("Missing modular usage workspace extension evidence: " + evidence);
@@ -281,13 +284,39 @@ const skillsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\"/skills\")", "agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "data-skill"]) {
   if (!skillsExtension.includes(evidence)) failures.push("Missing modular skills workspace extension evidence: " + evidence);
 }
-const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
-const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
-for (const view of ["renderMemory", "renderSkills", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
-  if (!workspace.includes(view)) failures.push(`Missing BaiRui user workspace view: ${view}`);
+const remainingExtensionEvidence = Object.freeze({
+  runs: ["id: \"runs\"", "bridge.openRunEvents", "agentApi(\"/runs?limit=50\")", "approval.request"],
+  jobs: ["id: \"jobs\"", "agentApi(\"/jobs?include_disabled=true\")", "data-edit-job", "编辑定时任务"],
+  hermes: ["id: \"hermes\"", "CAPABILITY_GROUPS", "/hermes/operations/", "Agent 范围"],
+  settings: ["id: \"settings\"", "agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "个人连接"]
+});
+for (const [id, evidenceList] of Object.entries(remainingExtensionEvidence)) {
+  const extension = fs.readFileSync(path.join(root, `apps/web/public/bairui-workspace-${id}.js`), "utf8");
+  if (!extension.includes("BairuiWorkspaceRegistry")) failures.push(`Missing ${id} workspace registry registration`);
+  for (const evidence of evidenceList) if (!extension.includes(evidence)) failures.push(`Missing modular ${id} workspace extension evidence: ${evidence}`);
+  for (const forbidden of ["window.fetch =", "window.EventSource ="]) if (extension.includes(forbidden)) failures.push(`${id} workspace extension must not replace a global browser transport`);
 }
-for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {
-  if (!workspace.includes(evidence)) failures.push(`Missing exposed Hermes user capability: ${evidence}`);
+for (const view of workspaceExtensionIds) {
+  const functionName = `function render${view[0].toUpperCase()}${view.slice(1)}`;
+  if (workspaceAdapter.includes(functionName)) failures.push(`Workspace host must not retain the ${view} render implementation`);
+}
+const bailongmaOverlayCss = fs.readFileSync(path.join(root, "apps/web/public/bairui-bailongma.css"), "utf8");
+for (const forbidden of ["!important", ".bw-dialog", ".bw-form", ".bairui-card-dialog"]) {
+  if (bailongmaOverlayCss.includes(forbidden)) failures.push(`BaiRui overlay must not contain the legacy or global style token: ${forbidden}`);
+}
+const unscopedCssRules = bailongmaOverlayCss.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes("{") && !line.startsWith("@") && !line.startsWith("body[data-bairui-shell]"));
+if (unscopedCssRules.length) failures.push(`BaiRui overlay contains unscoped CSS rules: ${unscopedCssRules.slice(0, 3).join(" | ")}`);
+const userShellAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-bailongma.js"), "utf8");
+for (const forbidden of ["href = \"/admin\"", "href=\"/admin\"", "总控后台", "管理后台"]) {
+  if (userShellAdapter.includes(forbidden)) failures.push(`Ordinary user Shell must not expose administrator navigation: ${forbidden}`);
+}
+const sharedStyles = fs.readFileSync(path.join(root, "apps/web/public/styles.css"), "utf8");
+for (const obsolete of [".brain-app", ".brain-layout", ".feature-workspace", "body[data-view=\"user\"]"]) {
+  if (sharedStyles.includes(obsolete)) failures.push(`Legacy handcrafted user visual system must be removed: ${obsolete}`);
+}
+const u0104Evidence = fs.readFileSync(path.join(root, "docs/U01-04-SHELL-EVIDENCE.md"), "utf8");
+for (const evidence of ["U01-04 only", "does not complete U01-05", "does not claim that Gate U01 passes", "1920x1080", "390x844"]) {
+  if (!u0104Evidence.includes(evidence)) failures.push(`U01-04 evidence boundary is missing: ${evidence}`);
 }
 for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!CONTROL_ACTIONS.includes(action)) failures.push(`Missing allowed control action: ${action}`);
