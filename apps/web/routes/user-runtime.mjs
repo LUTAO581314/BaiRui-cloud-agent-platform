@@ -26,14 +26,37 @@ const READ_ONLY_MANAGEMENT_OPERATIONS = new Set([
   "cron.list", "cron.get", "cron.history", "cron.delivery_targets", "cron.blueprints", "analytics.usage", "analytics.models", "diagnostics.status", "diagnostics.system.stats", "diagnostics.checkpoints", "files.list", "files.read", "files.read-data-url", "files.download", "channel.platforms", "channel.pairing.list"
 ]);
 
-const SECRET_FIELD = /(?:password|passphrase|secret|token|api[-_]?key|private[-_]?key|credential|authorization|cookie|raw_env|raw_yaml|env_file)/i;
+const SECRET_FIELD = /(?:password|passphrase|secret|token|api[-_]?key|private[-_]?key|credential(?:[-_]?envelope)?|authorization|cookie|raw_env|raw_yaml|env_file)$/i;
+const RAW_SECRET_INPUT_FIELD = /(?:password|passphrase|secret|token|api[-_]?key|private[-_]?key|credential(?:[-_]?envelope)?|authorization|cookie|raw_env|raw_yaml|env_file)$/i;
 const SCENE_RUNTIME_OPERATIONS = new Set(["sessions.get", "sessions.messages", "sessions.chat", "runs.get", "runs.stop", "runs.approve", "memory.snapshot", "memory.apply"]);
 
 function redactManagementValue(value, key = "") {
-  if (SECRET_FIELD.test(key)) return "[redacted]";
+  if (SECRET_FIELD.test(key)) return undefined;
   if (Array.isArray(value)) return value.map((item) => redactManagementValue(item));
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, redactManagementValue(item, name)]));
+  return Object.fromEntries(Object.entries(value).flatMap(([name, item]) => {
+    const redacted = redactManagementValue(item, name);
+    return redacted === undefined ? [] : [[name, redacted]];
+  }));
+}
+
+function containsRawSecretInput(value, key = "") {
+  if (RAW_SECRET_INPUT_FIELD.test(key)) return true;
+  if (Array.isArray(value)) return value.some((item) => containsRawSecretInput(item));
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(([name, item]) => containsRawSecretInput(item, name));
+}
+
+function requestedModel(input) {
+  if (typeof input?.model === "string") return input.model.trim();
+  if (typeof input?.model_id === "string") return input.model_id.trim();
+  if (input?.body && typeof input.body === "object" && !Array.isArray(input.body)) return requestedModel(input.body);
+  return "";
+}
+
+function discoveredModelIds(value) {
+  const list = Array.isArray(value) ? value : Array.isArray(value?.data) ? value.data : Array.isArray(value?.models) ? value.models : [];
+  return new Set(list.map((item) => typeof item === "string" ? item : item?.id ?? item?.model ?? item?.name).filter(Boolean));
 }
 
 function decodeOperation(value) {
@@ -80,12 +103,26 @@ export function createUserRuntimeRoutes(options) {
       if (!HERMES_MANAGEMENT_OPERATIONS.has(operation)) return send(404, { error: "unsupported_hermes_operation" });
       const loggedIn = requireLogin(principal);
       requirePermission(loggedIn, READ_ONLY_MANAGEMENT_OPERATIONS.has(operation) ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
-      if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
       const agent = await ownedAgent(loggedIn, managementMatch[1]);
+      if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
       if (!READ_ONLY_MANAGEMENT_OPERATIONS.has(operation)) await requireOperationalAgent(loggedIn, agent);
       const input = method === "GET" ? Object.fromEntries(url.searchParams.entries()) : await readJson(request, maxChatBodyBytes);
       if (!input || typeof input !== "object" || Array.isArray(input)) return send(400, { error: "invalid_hermes_operation_input" });
-      const result = await runtimeClient.operation({ principal: loggedIn, agent, operation, input });
+      if (containsRawSecretInput(input)) return send(400, { error: "opaque_credentials_required" });
+      let result;
+      if (operation === "model.set") {
+        const model = requestedModel(input);
+        if (!model || model.length > 200 || /[\0\r\n]/.test(model)) return send(400, { error: "invalid_model" });
+        const policy = await modelAccess(loggedIn.organizationId);
+        if (!policy.allowedModels.includes(model)) return send(400, { error: "model_not_allowed" });
+        const discovered = await runtimeClient.operation({ principal: loggedIn, agent, operation: "discovery.models", input: {} });
+        if (!discoveredModelIds(discovered).has(model)) return send(400, { error: "model_not_available" });
+        result = await runtimeClient.operation({ principal: loggedIn, agent, operation, input });
+        const settings = { ...(agent.settings ?? {}), preferredModel: model };
+        await repository.updateAgent(agent.id, { settings });
+      } else {
+        result = await runtimeClient.operation({ principal: loggedIn, agent, operation, input });
+      }
       await repository.recordAudit({ organizationId: loggedIn.organizationId, actorUserId: loggedIn.userId, action: `hermes.${operation}`, targetType: "agent", targetId: agent.id, metadata: { operation, method } });
       return send(200, redactManagementValue(result));
     }
@@ -148,7 +185,9 @@ export function createUserRuntimeRoutes(options) {
         if (![...HERMES_MANAGEMENT_OPERATIONS, ...SCENE_RUNTIME_OPERATIONS].includes(operation)) return send(400, { error: "unsupported_scene_command" });
         if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
         await requireOperationalAgent(loggedIn, agent);
-        result = await runtimeClient.operation({ principal: loggedIn, agent, operation, input: payload.input && typeof payload.input === "object" ? payload.input : {} });
+        const operationInput = payload.input && typeof payload.input === "object" && !Array.isArray(payload.input) ? payload.input : {};
+        if (containsRawSecretInput(operationInput)) return send(400, { error: "opaque_credentials_required" });
+        result = await runtimeClient.operation({ principal: loggedIn, agent, operation, input: operationInput });
       }
       const view = body.action === "navigate"
         ? { ...scene.view, navigation: { surface: String(payload.surface ?? ""), updatedAt: new Date().toISOString() } }
@@ -160,55 +199,58 @@ export function createUserRuntimeRoutes(options) {
 
     const discoveryMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runtime\/discovery$/);
     if (discoveryMatch && method === "GET") {
-      requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, PERMISSIONS.AGENT_READ, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, discoveryMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, discoveryMatch[1]);
       const names = ["health.detailed", "discovery.models", "discovery.capabilities", "discovery.skills", "discovery.toolsets"];
       const [settled, policy] = await Promise.all([
-        Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal, agent, operation }))),
-        modelAccess(principal.organizationId)
+        Promise.allSettled(names.map((operation) => runtimeClient.operation({ principal: loggedIn, agent, operation }))),
+        modelAccess(loggedIn.organizationId)
       ]);
       return send(200, {
         agentId: agent.id,
-        discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: settled[index].value } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])),
+        discovery: Object.fromEntries(names.map((name, index) => [name, settled[index].status === "fulfilled" ? { status: "available", data: redactManagementValue(settled[index].value) } : { status: "unavailable", error: settled[index].reason.code ?? "runtime_unavailable" }])),
         policy
       });
     }
 
     const sessionsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions$/);
     if (sessionsMatch && ["GET", "POST"].includes(method)) {
-      requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, sessionsMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, sessionsMatch[1]);
-      if (method === "POST") await requireOperationalAgent(principal, agent);
+      if (method === "POST") await requireOperationalAgent(loggedIn, agent);
       if (method === "GET") {
-        return send(200, await runtimeClient.operation({ principal, agent, operation: "sessions.list", input: { limit: url.searchParams.get("limit") ?? 50, offset: url.searchParams.get("offset") ?? 0, include_children: url.searchParams.get("include_children") ?? false } }));
+        return send(200, await runtimeClient.operation({ principal: loggedIn, agent, operation: "sessions.list", input: { limit: url.searchParams.get("limit") ?? 50, offset: url.searchParams.get("offset") ?? 0, include_children: url.searchParams.get("include_children") ?? false } }));
       }
       const body = await readJson(request);
-      const policy = await modelAccess(principal.organizationId);
+      const policy = await modelAccess(loggedIn.organizationId);
       const preferredModel = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : undefined;
-      const result = await runtimeClient.operation({ principal, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || policy.defaultModel || undefined } } });
+      const result = await runtimeClient.operation({ principal: loggedIn, agent, operation: "sessions.create", input: { body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined, model: preferredModel || policy.defaultModel || undefined } } });
       return send(201, result);
     }
 
     const sessionActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)\/(messages|fork|chat|chat\/stream)$/);
     if (sessionActionMatch) {
-      requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, sessionActionMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, sessionActionMatch[1]);
       const sessionId = sessionActionMatch[2];
       const action = sessionActionMatch[3];
-      if (method === "POST" && ["fork", "chat", "chat/stream"].includes(action)) await requireOperationalAgent(principal, agent);
-      if (action === "messages" && method === "GET") return send(200, await runtimeClient.operation({ principal, agent, operation: "sessions.messages", input: { session_id: sessionId } }));
+      if (method === "POST" && ["fork", "chat", "chat/stream"].includes(action)) await requireOperationalAgent(loggedIn, agent);
+      if (action === "messages" && method === "GET") return send(200, await runtimeClient.operation({ principal: loggedIn, agent, operation: "sessions.messages", input: { session_id: sessionId } }));
       if (action === "fork" && method === "POST") {
         const body = await readJson(request);
-        return send(201, await runtimeClient.operation({ principal, agent, operation: "sessions.fork", input: { session_id: sessionId, body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined } } }));
+        return send(201, await runtimeClient.operation({ principal: loggedIn, agent, operation: "sessions.fork", input: { session_id: sessionId, body: { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined } } }));
       }
       if (action === "chat" && method === "POST") {
         const body = await readJson(request, maxChatBodyBytes);
         const message = sessionMessage(body);
         if (!message) return send(400, { error: "invalid_message" });
-        return send(200, await runtimeClient.operation({ principal, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message } } }));
+        return send(200, await runtimeClient.operation({ principal: loggedIn, agent, operation: "sessions.chat", input: { session_id: sessionId, body: { message } } }));
       }
       if (action === "chat/stream" && method === "POST") {
         const body = await readJson(request, maxChatBodyBytes);
@@ -216,7 +258,7 @@ export function createUserRuntimeRoutes(options) {
         if (!message) return send(400, { error: "invalid_message" });
         const controller = new AbortController();
         response.on("close", () => controller.abort());
-        const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message } }, signal: controller.signal });
+        const upstream = await runtimeClient.streamOperation({ principal: loggedIn, agent, operation: "sessions.chat.stream", input: { session_id: sessionId, body: { message } }, signal: controller.signal });
         await pipeRuntimeStream(response, upstream);
         return true;
       }
@@ -225,66 +267,69 @@ export function createUserRuntimeRoutes(options) {
 
     const sessionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/sessions\/([^/]+)$/);
     if (sessionMatch && ["GET", "PATCH", "DELETE"].includes(method)) {
-      requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, sessionMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, sessionMatch[1]);
       const input = { session_id: sessionMatch[2] };
       if (method === "PATCH") {
         const body = await readJson(request);
         input.body = { title: typeof body.title === "string" ? body.title.trim().slice(0, 200) : undefined };
       }
       const operation = method === "GET" ? "sessions.get" : method === "PATCH" ? "sessions.update" : "sessions.delete";
-      return send(200, await runtimeClient.operation({ principal, agent, operation, input }));
+      return send(200, await runtimeClient.operation({ principal: loggedIn, agent, operation, input }));
     }
 
     const runsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs$/);
     if (runsMatch && ["GET", "POST"].includes(method)) {
-      requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
-      const agent = await ownedAgent(principal, runsMatch[1]);
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, method === "GET" ? PERMISSIONS.CONVERSATION_READ : PERMISSIONS.CONVERSATION_WRITE, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, runsMatch[1]);
       if (method === "GET") {
-        const runs = await repository.listAgentRuns(principal.organizationId, principal.userId, agent.id, url.searchParams.get("limit") ?? 50);
+        const runs = await repository.listAgentRuns(loggedIn.organizationId, loggedIn.userId, agent.id, url.searchParams.get("limit") ?? 50);
         return send(200, { runs: runs.map(publicAgentRun) });
       }
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      await requireOperationalAgent(principal, agent);
+      await requireOperationalAgent(loggedIn, agent);
       const body = await readJson(request);
       if (typeof body.input !== "string" || !body.input.trim() || body.input.length > 20_000) return send(400, { error: "invalid_run_input" });
-      const policy = await modelAccess(principal.organizationId);
+      const policy = await modelAccess(loggedIn.organizationId);
       const model = policy.allowedModels.includes(agent.settings?.preferredModel) ? agent.settings.preferredModel : policy.defaultModel;
-      return send(202, await startAgentRun(principal, agent, body.input.trim(), model));
+      return send(202, await startAgentRun(loggedIn, agent, body.input.trim(), model));
     }
 
     const runActionMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)\/(events|approval|stop|retry)$/);
     if (runActionMatch) {
-      requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_WRITE, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, PERMISSIONS.CONVERSATION_WRITE, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, runActionMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, runActionMatch[1]);
       const runId = runActionMatch[2];
       const action = runActionMatch[3];
       if (action === "retry" && method === "POST") {
-        await requireOperationalAgent(principal, agent);
-        const previous = await repository.getAgentRun(principal.organizationId, principal.userId, agent.id, runId);
+        await requireOperationalAgent(loggedIn, agent);
+        const previous = await repository.getAgentRun(loggedIn.organizationId, loggedIn.userId, agent.id, runId);
         if (!previous) return send(404, { error: "run_not_found" });
         if (!terminalAgentRunStatuses.has(previous.status)) return send(409, { error: "run_not_terminal" });
-        return send(202, await startAgentRun(principal, agent, previous.inputText, previous.model, previous.id));
+        return send(202, await startAgentRun(loggedIn, agent, previous.inputText, previous.model, previous.id));
       }
       if (action === "events" && method === "GET") {
         const controller = new AbortController();
         response.on("close", () => controller.abort());
-        const upstream = await runtimeClient.streamOperation({ principal, agent, operation: "runs.events", input: { run_id: runId }, signal: controller.signal });
+        const upstream = await runtimeClient.streamOperation({ principal: loggedIn, agent, operation: "runs.events", input: { run_id: runId }, signal: controller.signal });
         await pipeRuntimeStream(response, upstream);
         return true;
       }
       if (action === "approval" && method === "POST") {
         const body = await readJson(request);
         if (!["once", "session", "always", "deny"].includes(body.choice)) return send(400, { error: "invalid_approval_choice" });
-        const result = await runtimeClient.operation({ principal, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } });
-        await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "running" });
+        const result = await runtimeClient.operation({ principal: loggedIn, agent, operation: "runs.approve", input: { run_id: runId, choice: body.choice, resolve_all: Boolean(body.resolveAll) } });
+        await repository.updateAgentRun({ id: runId, organizationId: loggedIn.organizationId, userId: loggedIn.userId, agentId: agent.id, status: "running" });
         return send(200, result);
       }
       if (action === "stop" && method === "POST") {
-        const result = await runtimeClient.operation({ principal, agent, operation: "runs.stop", input: { run_id: runId } });
-        await repository.updateAgentRun({ id: runId, organizationId: principal.organizationId, userId: principal.userId, agentId: agent.id, status: "stopping" });
+        const result = await runtimeClient.operation({ principal: loggedIn, agent, operation: "runs.stop", input: { run_id: runId } });
+        await repository.updateAgentRun({ id: runId, organizationId: loggedIn.organizationId, userId: loggedIn.userId, agentId: agent.id, status: "stopping" });
         return send(202, result);
       }
       return false;
@@ -292,17 +337,19 @@ export function createUserRuntimeRoutes(options) {
 
     const runMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/runs\/([^/]+)$/);
     if (runMatch && method === "GET") {
-      requirePermission(requireLogin(principal), PERMISSIONS.CONVERSATION_READ, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, PERMISSIONS.CONVERSATION_READ, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, runMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, runMatch[1]);
-      return send(200, await synchronizeAgentRun(principal, agent, runMatch[2]));
+      return send(200, await synchronizeAgentRun(loggedIn, agent, runMatch[2]));
     }
 
     const jobsMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/jobs(?:\/([^/]+))?(?:\/(pause|resume|run))?$/);
     if (jobsMatch) {
-      requirePermission(requireLogin(principal), method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: principal.organizationId, userId: principal.userId });
+      const loggedIn = requireLogin(principal);
+      requirePermission(loggedIn, method === "GET" ? PERMISSIONS.AGENT_READ : PERMISSIONS.AGENT_MANAGE_OWN, { organizationId: loggedIn.organizationId, userId: loggedIn.userId });
+      const agent = await ownedAgent(loggedIn, jobsMatch[1]);
       if (!runtimeClient) return send(503, { error: "runtime_unavailable" });
-      const agent = await ownedAgent(principal, jobsMatch[1]);
       const jobId = jobsMatch[2];
       const action = jobsMatch[3];
       let operation;
@@ -313,8 +360,8 @@ export function createUserRuntimeRoutes(options) {
       else if (jobId && method === "GET") { operation = "jobs.get"; input.job_id = jobId; }
       else if (jobId && method === "PATCH") { operation = "jobs.update"; input = { job_id: jobId, body: await readJson(request) }; }
       else if (jobId && method === "DELETE") { operation = "jobs.delete"; input.job_id = jobId; }
-      if (["jobs.create", "jobs.run"].includes(operation)) await requireOperationalAgent(principal, agent);
-      if (operation) return send(method === "POST" ? 202 : 200, await runtimeClient.operation({ principal, agent, operation, input }));
+      if (["jobs.create", "jobs.run"].includes(operation)) await requireOperationalAgent(loggedIn, agent);
+      if (operation) return send(method === "POST" ? 202 : 200, await runtimeClient.operation({ principal: loggedIn, agent, operation, input }));
       return false;
     }
     return false;
