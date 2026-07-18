@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   CONTROL_APPROVAL_ACTIONS,
   validateCredentialResolution,
+  validateCredentialResolutionRequest,
   validateResourceReport,
   validateRuntimeHeartbeat
 } from "@bairui/contracts";
@@ -56,7 +57,7 @@ const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-sto
 const COMPONENT_STATUSES = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
 const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "critical"]);
 const RESOURCE_STATUSES = new Set(["running", "degraded", "offline", "unknown"]);
-const CONTAINER_RESOURCE_ROLES = new Set(["hermes", "runtime-boundary"]);
+const CONTAINER_RESOURCE_ROLES = new Set(["hermes", "hermes-dashboard", "runtime-boundary"]);
 const CONTAINER_RESOURCE_STATUSES = new Set(["running", "paused", "restarting", "exited", "dead", "created", "removing", "unknown"]);
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
 const CHANNEL_METADATA_KEYS = new Set(["accountId", "botName", "tenantKey", "webhookPath"]);
@@ -1360,12 +1361,20 @@ export function createPlatformApp(options) {
         if (!machine || machine.machineId !== agentId) return json(response, 401, { error: "invalid_agent_credential" });
         const agent = await repository.getAgent(agentId);
         if (!agent) return json(response, 404, { error: "agent_not_found" });
+        let resolutionRequest;
+        try { resolutionRequest = validateCredentialResolutionRequest(signed.body); }
+        catch { return json(response, 404, { error: "authorization_not_available" }); }
+        const runtime = await repository.getAgentRuntimeByAgent(agent.id);
+        const requestedScope = resolutionRequest.owner_scope;
+        if (!runtime || requestedScope.organization_id !== agent.organizationId || requestedScope.user_id !== agent.ownerUserId || requestedScope.agent_id !== agent.id || requestedScope.runtime_id !== runtime.id) {
+          return json(response, 404, { error: "authorization_not_available" });
+        }
         const authorization = await repository.getAgentAuthorization(agent.organizationId, agent.ownerUserId, agent.id, authorizationId);
         if (!authorization || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
         const credential = JSON.parse(providerVault.open(authorization.credentialEnvelope));
         await repository.markAgentAuthorizationUsed(authorization.id);
         await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: null, action: "agent.authorization.resolve", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, runtimeCredentialId: machine.credential.id, service: authorization.service } });
-        const resolved = validateCredentialResolution({ authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
+        const resolved = validateCredentialResolution({ schema_version: "2.0", owner_scope: requestedScope, authorization: { id: authorization.id, service: authorization.service, label: authorization.label, authType: authorization.authType, endpointUrl: authorization.endpointUrl, metadata: authorization.metadata }, credential });
         return json(response, 200, resolved);
       }
       if (method === "POST" && url.pathname === "/api/internal/control-plane/snapshots") {
