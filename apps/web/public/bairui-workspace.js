@@ -437,7 +437,8 @@
   function mount() {
     root = document.createElement("section"); root.className = "bairui-workspace"; root.hidden = true;
     root.innerHTML = `<aside class="bw-nav"><header><img src="/assets/bairui-agent-icon.png" alt=""><strong>bairui-agent</strong></header><nav>${NAV.map(([key, label]) => `<button type="button" data-view="${key}">${escapeHtml(label)}</button>`).join("")}</nav></aside><main><header class="bw-header"><div><span>${escapeHtml(activeAgent()?.name || "Agent")}</span><h1></h1></div><button type="button" data-close title="关闭工作区" aria-label="关闭工作区">×</button></header><div class="bw-content"></div></main>`;
-    document.body.appendChild(root); content = root.querySelector(".bw-content"); title = root.querySelector("h1");
+    const extensionHost = document.querySelector("[data-bairui-extension-host]") || document.body;
+    extensionHost.appendChild(root); content = root.querySelector(".bw-content"); title = root.querySelector("h1");
     root.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => render(button.dataset.view)));
     root.querySelector("[data-close]").addEventListener("click", closeWorkspace);
     window.addEventListener("bairui:workspace-open", () => openWorkspace());

@@ -95,8 +95,9 @@ diagnostics and administrator tooling where they are needed for evidence.
 - `packages/bailongma-ui/build.mjs` owns staging, source copying, explicit
   transforms and integrity manifest generation.
 - `bairui-bailongma.js` and `bairui-workspace.js` are host adapters while the
-  corresponding behavior is being moved into stable BaiLongma extension
-  points; they must not replace global `window.fetch` or `EventSource`.
+  corresponding behavior is being moved into the native `data-bairui-extension-host`
+  slot; they must not replace global `window.fetch` or `EventSource` or append a
+  second root page directly to `document.body`.
 - UI code emits Scene intents and host commands. It never calls Hermes,
   PostgreSQL, a Provider or an external service directly.
 - A panel without a real snapshot, command, event, persistence, revision,

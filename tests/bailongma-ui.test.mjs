@@ -24,7 +24,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
-  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createConsole\(\)/);
+  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
 
