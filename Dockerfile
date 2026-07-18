@@ -7,6 +7,7 @@ FROM node:24-alpine AS bailongma-ui
 WORKDIR /app
 COPY packages/bailongma-ui ./packages/bailongma-ui
 COPY scripts/build-bailongma-ui.mjs ./scripts/build-bailongma-ui.mjs
+COPY patches/bailongma ./patches/bailongma
 COPY upstreams/bailongma ./upstreams/bailongma
 RUN node scripts/build-bailongma-ui.mjs
 

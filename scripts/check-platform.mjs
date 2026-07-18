@@ -66,10 +66,12 @@ const required = [
   "packages/bailongma-ui/brain-app-transform.mjs",
   "packages/bailongma-ui/app-shell-transform.mjs",
   "packages/bailongma-ui/host-adapter-transform.mjs",
+  "packages/bailongma-ui/patch-queue.mjs",
   "packages/bailongma-ui/build.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
+  "patches/bailongma/manifest.yaml",
   "packages/security/secret-envelope.mjs",
   "packages/memory/obsidian-note.mjs",
   "packages/memory/projection-coordinator.mjs",
@@ -211,8 +213,17 @@ for (const evidence of ["/usr/local/lib/node_modules/npm", "/usr/local/lib/node_
 if (!platformDockerfile.includes("apk add --no-cache docker-cli")) failures.push("Platform image must include the Docker CLI required by Server Agent");
 if (!workflow.includes("Validate Server Agent Docker client")) failures.push("Container CI must execute the Server Agent Docker client from the production image");
 const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/build.mjs"), "utf8");
-for (const evidence of [".bairui-build.json", "transformBailongmaHostApp", "transformBailongmaHostChat", "transformBailongmaHostVoiceWake", "BUILD_INTEGRITY_FILES"]) {
+for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD_INTEGRITY_FILES", "sourceCommit", "patchManifestSha256", "appliedPatches"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
+}
+const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
+for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
+  if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
+}
+if (!platformDockerfile.includes("COPY patches/bailongma ./patches/bailongma")) failures.push("Platform image must include the BaiLongma patch manifest during UI build");
+const patchQueue = fs.readFileSync(path.join(root, "packages/bailongma-ui/patch-queue.mjs"), "utf8");
+for (const evidence of ["readBailongmaPatchManifest", "applyBailongmaPatchQueue", "source commit", "assertAnchors", "manifestSha256"]) {
+  if (!patchQueue.includes(evidence)) failures.push("Missing BaiLongma patch queue enforcement: " + evidence);
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";

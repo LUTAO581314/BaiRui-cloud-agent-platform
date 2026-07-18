@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { transformBailongmaBrainApp } from "./brain-app-transform.mjs";
-import { transformBailongmaAppShell } from "./app-shell-transform.mjs";
-import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostVoiceWake } from "./host-adapter-transform.mjs";
+import { applyBailongmaPatchQueue } from "./patch-queue.mjs";
 
 const PREFIX = "/bailongma-ui/";
 const BUILD_INTEGRITY_FILES = Object.freeze([
@@ -52,19 +50,23 @@ export function buildBailongmaUi(options) {
   try {
     for (const file of ["LICENSE", "package.json"]) fs.copyFileSync(path.join(sourceRoot, file), path.join(staging, file));
     fs.cpSync(path.join(sourceRoot, "src", "ui"), path.join(staging, "src", "ui"), { recursive: true });
-    fs.writeFileSync(path.join(staging, "brain-ui.html"), entryHtml(fs.readFileSync(path.join(sourceRoot, "brain-ui.html"), "utf8")));
-
-    const appPath = path.join(staging, "src", "ui", "brain-ui", "app.js");
-    fs.writeFileSync(appPath, transformBailongmaHostApp(transformBailongmaBrainApp(fs.readFileSync(appPath, "utf8"))));
-    const shellPath = path.join(staging, "src", "ui", "brain-ui", "app-shell.js");
-    fs.writeFileSync(shellPath, transformBailongmaAppShell(fs.readFileSync(shellPath, "utf8")));
-    const chatPath = path.join(staging, "src", "ui", "brain-ui", "chat.js");
-    fs.writeFileSync(chatPath, transformBailongmaHostChat(fs.readFileSync(chatPath, "utf8")));
-    const wakePath = path.join(staging, "src", "ui", "brain-ui", "voice-wake.js");
-    fs.writeFileSync(wakePath, transformBailongmaHostVoiceWake(fs.readFileSync(wakePath, "utf8")));
+    fs.copyFileSync(path.join(sourceRoot, "brain-ui.html"), path.join(staging, "brain-ui.html"));
+    const patchQueue = applyBailongmaPatchQueue({
+      sourceRoot,
+      stagingRoot: staging,
+      entryHtml
+    });
 
     const files = Object.fromEntries(BUILD_INTEGRITY_FILES.map((file) => [file, sha256(fs.readFileSync(path.join(staging, file)))]));
-    fs.writeFileSync(path.join(staging, ".bairui-build.json"), `${JSON.stringify({ schemaVersion: "1.0", source: "xiaoyuanda666-ship-it/BaiLongma", sourceVersion: packageMetadata.version, files }, null, 2)}\n`);
+    fs.writeFileSync(path.join(staging, ".bairui-build.json"), `${JSON.stringify({
+      schemaVersion: "1.0",
+      source: "xiaoyuanda666-ship-it/BaiLongma",
+      sourceVersion: packageMetadata.version,
+      sourceCommit: patchQueue.sourceCommit,
+      patchManifestSha256: patchQueue.manifestSha256,
+      appliedPatches: patchQueue.appliedPatches,
+      files
+    }, null, 2)}\n`);
     fs.rmSync(outputRoot, { recursive: true, force: true });
     fs.renameSync(staging, outputRoot);
     return { outputRoot, sourceVersion: packageMetadata.version, files };

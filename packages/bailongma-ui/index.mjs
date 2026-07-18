@@ -49,7 +49,7 @@ export function createBailongmaUi(options) {
 
   const packageMetadata = JSON.parse(fs.readFileSync(packagePath, "utf8"));
   const buildManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (buildManifest.schemaVersion !== "1.0" || buildManifest.source !== "xiaoyuanda666-ship-it/BaiLongma" || buildManifest.sourceVersion !== packageMetadata.version) {
+  if (buildManifest.schemaVersion !== "1.0" || buildManifest.source !== "xiaoyuanda666-ship-it/BaiLongma" || buildManifest.sourceVersion !== packageMetadata.version || !/^[a-f0-9]{40}$/.test(buildManifest.sourceCommit || "") || !/^[a-f0-9]{64}$/.test(buildManifest.patchManifestSha256 || "") || !Array.isArray(buildManifest.appliedPatches) || buildManifest.appliedPatches.length === 0) {
     throw new Error("BaiLongma UI build manifest does not match its source metadata");
   }
   for (const relative of BUILD_INTEGRITY_FILES) {
