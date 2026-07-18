@@ -49,6 +49,7 @@ import { createAuthRoutes } from "./routes/auth.mjs";
 import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
+import { createWorkspaceAssetRoutes } from "./routes/workspace-assets.mjs";
 import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
 import { workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
 
@@ -555,6 +556,7 @@ export function createPlatformApp(options) {
     immutableImage: IMMUTABLE_IMAGE
   });
   const routeInternalChannels = createInternalChannelRoutes({ repository, providerVault, authenticateMachine });
+  const routeWorkspaceAssets = createWorkspaceAssetRoutes({ skillsScript: options.bairuiWorkspaceSkillsScript });
 
   return async function handle(request, response) {
     securityHeaders(response);
@@ -613,12 +615,7 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.bairuiWorkspaceMemoryScript);
       }
-      if (method === "GET" && url.pathname === "/assets/bairui-workspace-skills.js") {
-        if (!options.bairuiWorkspaceSkillsScript) return json(response, 404, { error: "not_found" });
-        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.bairuiWorkspaceSkillsScript);
-      }
-
+      if (await routeWorkspaceAssets({ method, url, response })) return;
       if (await routeInternalChannels({ method, url, request, response })) return;
 
       const principal = await principalFor(request);
