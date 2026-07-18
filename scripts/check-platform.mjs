@@ -2,12 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { CONTRACTS_VERSION, CONTROL_ACTIONS } from "@bairui/contracts";
+import { CONTRACTS_VERSION, CONTROL_ACTIONS, CONTROL_QUARANTINED_ACTIONS, CONTROL_RECEIPT_STATES } from "@bairui/contracts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const expectedContracts = `https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v${CONTRACTS_VERSION}`;
+const expectedContractsVersion = "2.3.0-rc.1";
+const expectedContracts = `https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v${expectedContractsVersion}`;
+if (CONTRACTS_VERSION !== expectedContractsVersion) throw new Error(`@bairui/contracts must expose ${expectedContractsVersion}`);
 if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw new Error(`@bairui/contracts must be pinned to ${expectedContracts}`);
+const packageLock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+const lockedContracts = packageLock.packages?.["node_modules/@bairui/contracts"];
+if (lockedContracts?.version !== expectedContractsVersion || lockedContracts?.resolved !== expectedContracts || !/^sha512-/.test(lockedContracts?.integrity ?? "")) throw new Error("@bairui/contracts lockfile entry must pin the published release and integrity");
 const required = [
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
@@ -25,6 +30,7 @@ const required = [
   "apps/web/routes/auth.mjs",
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
+  "apps/web/routes/internal-control.mjs",
   "apps/web/routes/internal-channels.mjs",
   "apps/web/routes/workspace-assets.mjs",
   "apps/channel-worker/server.mjs",
@@ -62,6 +68,7 @@ const required = [
   "docs/20-platform-agent-integration-guide.md",
   "docs/HERMES_FRONTEND_CAPABILITY_MAP.md",
   "docs/22-platform-route-boundaries.md",
+  "docs/C00-02-CONSUMER-STATUS.md",
   "scripts/check-postgres-schema.mjs",
   "packages/server-protocol/runtime-client.mjs",
   "packages/bailongma-ui/brain-app-transform.mjs",
@@ -74,6 +81,7 @@ const required = [
   "packages/bailongma-ui/compatibility.mjs",
   "patches/bailongma/manifest.yaml",
   "packages/security/secret-envelope.mjs",
+  "packages/security/control-mutation.mjs",
   "packages/memory/obsidian-note.mjs",
   "packages/memory/projection-coordinator.mjs",
   "packages/memory/projection-worker.mjs",
@@ -90,6 +98,9 @@ const required = [
   "tests/platform-http.test.mjs",
   "tests/resource-collector.test.mjs",
   "tests/control-plane-protocol.test.mjs",
+  "tests/control-mutation.test.mjs",
+  "tests/control-authority-route.test.mjs",
+  "tests/contracts-candidate.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "tests/memory-projection-worker.test.mjs",
   "tests/channel-adapters.test.mjs",
@@ -190,12 +201,12 @@ for (const evidence of ["PERMISSIONS.CONTROL_PLANE_READ", "PERMISSIONS.ORG_MEMBE
 for (const legacy of ['url.pathname === "/message"', 'url.pathname === "/events"', "createBailongmaEventHub", "toBailongmaConversations"]) {
   if (server.includes(legacy)) failures.push(`Legacy or synthesized BaiLongma transport is forbidden: ${legacy}`);
 }
-const routeSources = ["auth.mjs", "user-runtime.mjs", "admin-control.mjs"].map((file) => fs.readFileSync(path.join(root, "apps", "web", "routes", file), "utf8"));
+const routeSources = ["auth.mjs", "user-runtime.mjs", "admin-control.mjs", "internal-control.mjs"].map((file) => fs.readFileSync(path.join(root, "apps", "web", "routes", file), "utf8"));
 const runtimeSurface = server + routeSources.join("\n");
 for (const evidence of ["sessions.chat.stream", "runs.events", "runtimeClient.streamOperation", "ownerUserId !== principal.userId"]) {
   if (!runtimeSurface.includes(evidence)) failures.push(`Missing multi-tenant Runtime evidence: ${evidence}`);
 }
-for (const evidence of ["createAuthRoutes", "createUserRuntimeRoutes", "createAdminControlRoutes", "routeAuth", "routeUserRuntime", "routeAdminControl"]) {
+for (const evidence of ["createAuthRoutes", "createUserRuntimeRoutes", "createAdminControlRoutes", "createInternalControlRoutes", "routeAuth", "routeUserRuntime", "routeAdminControl", "routeInternalControl"]) {
   if (!server.includes(evidence)) failures.push("Missing Platform route composition evidence: " + evidence);
 }
 for (const forbidden of ["/api/auth/login", "/runtime/discovery", "/sessions/", "/runs/", "/jobs", "/api/admin/control-commands", "/api/admin/control-approvals", "/api/admin/release-manifests"]) {
@@ -318,9 +329,13 @@ const u0104Evidence = fs.readFileSync(path.join(root, "docs/U01-04-SHELL-EVIDENC
 for (const evidence of ["U01-04 only", "does not complete U01-05", "does not claim that Gate U01 passes", "1920x1080", "390x844"]) {
   if (!u0104Evidence.includes(evidence)) failures.push(`U01-04 evidence boundary is missing: ${evidence}`);
 }
-for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
+for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!CONTROL_ACTIONS.includes(action)) failures.push(`Missing allowed control action: ${action}`);
 }
+if (CONTROL_ACTIONS.includes("config.apply-user") || !CONTROL_QUARANTINED_ACTIONS.includes("config.apply-user")) failures.push("config.apply-user must remain legacy-readable but quarantined from canonical issuance");
+if (CONTROL_RECEIPT_STATES.includes("succeeded") || !CONTROL_RECEIPT_STATES.includes("completion_candidate")) failures.push("Executor receipts must use completion_candidate instead of final succeeded");
+for (const legacyIssuer of ["requestAgentSkillConfiguration", "requestAgentIdentityConfiguration"]) if (server.includes(legacyIssuer)) failures.push(`Canonical user routes must not issue quarantined owner configuration commands: ${legacyIssuer}`);
+if (!server.includes("pending_control_authority")) failures.push("Owner configuration saves must expose their pending Control Authority state");
 for (const prefix of ["prompt.", "conversation.", "task.", "model.", "tool.", "skill.", "memory.", "runtime.", "shell.", "script.", "sql."]) {
   if (CONTROL_ACTIONS.some((action) => action.startsWith(prefix))) failures.push(`Hermes/business action must not enter control protocol: ${prefix}*`);
 }
@@ -343,14 +358,14 @@ for (const table of ["agent_components", "heartbeats", "telemetry_events", "usag
   if (!fleetMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent fleet table: ${table}`);
 }
 for (const evidence of ["/api/internal/control-plane/heartbeats", "/api/admin/agents", "requestAgentProvisioning"]) {
-  if (!server.includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
+  if (!(server + routeSources.join("\n")).includes(evidence)) failures.push(`Missing Agent fleet server evidence: ${evidence}`);
 }
 
 const characterCardGuide = fs.readFileSync(path.join(root, "docs/21-character-card-hermes-compatibility.md"), "utf8");
 for (const evidence of ["SOUL.md", "hermes_target=none", "context adapter", "patch queue"]) {
   if (!characterCardGuide.includes(evidence)) failures.push(`Missing character-card compatibility boundary: ${evidence}`);
 }
-for (const evidence of ["parseTavernCharacterCard", "/character-card", "requestAgentIdentityConfiguration", "publicFleetAgent"]) {
+for (const evidence of ["parseTavernCharacterCard", "/character-card", "pendingOwnerConfiguration", "publicFleetAgent"]) {
   if (!server.includes(evidence)) failures.push(`Missing character-card platform behavior: ${evidence}`);
 }
 const resourceMigrationPath = path.join(root, "packages/db/migrations/012_agent_resource_telemetry.sql");
@@ -359,15 +374,16 @@ for (const table of ["agent_resource_samples", "agent_container_resource_samples
   if (!resourceMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing Agent resource table: ${table}`);
 }
 for (const evidence of ["/api/internal/control-plane/resources", "latestAgentResourceSamples", "/resources"]) {
-  if (!server.includes(evidence)) failures.push(`Missing Agent resource telemetry server evidence: ${evidence}`);
+  if (!(server + routeSources.join("\n")).includes(evidence)) failures.push(`Missing Agent resource telemetry server evidence: ${evidence}`);
 }
 const deliveryMigrationPath = path.join(root, "packages/db/migrations/007_control_command_delivery.sql");
 const deliveryMigration = fs.existsSync(deliveryMigrationPath) ? fs.readFileSync(deliveryMigrationPath, "utf8") : "";
 for (const table of ["server_credentials", "agent_runtime_credentials", "machine_request_nonces", "command_receipts"]) {
   if (!deliveryMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing command delivery table: ${table}`);
 }
-for (const evidence of ["/api/internal/control-plane/commands/lease", "recordCommandReceipt", "verifyMachineRequest", "revealLease"]) {
-  if (!server.includes(evidence)) failures.push(`Missing command delivery server evidence: ${evidence}`);
+const controlDeliverySource = server + routeSources.join("\n");
+for (const evidence of ["/api/internal/control-plane/commands/lease", "controlAuthority.leaseCommands", "controlAuthority.recordReceipt", "validateLeaseRequestEnvelope", "validateReceiptEnvelope", "verifyMachineRequest", "verifyControlMutationSignature", "control-authority-migration-required"]) {
+  if (!controlDeliverySource.includes(evidence)) failures.push(`Missing command delivery server evidence: ${evidence}`);
 }
 const userSurfaceMigrationPath = path.join(root, "packages/db/migrations/008_user_agent_surfaces.sql");
 const userSurfaceMigration = fs.existsSync(userSurfaceMigrationPath) ? fs.readFileSync(userSurfaceMigrationPath, "utf8") : "";
@@ -378,8 +394,6 @@ const runtimeHistoryMigration = fs.readFileSync(path.join(root, "packages/db/mig
 for (const fragment of ["CREATE TABLE IF NOT EXISTS agent_runs", "agent_runs_owner_fkey", "parent_run_id", "input_text"]) {
   if (!runtimeHistoryMigration.includes(fragment)) throw new Error(`Runtime history migration is missing ${fragment}`);
 }
-const userConfigurationMigration = fs.readFileSync(path.join(root, "packages/db/migrations/014_user_configuration_apply.sql"), "utf8");
-if (!userConfigurationMigration.includes("'config.apply-user'")) failures.push("Missing owner-scoped configuration control action");
 const memoryProjectionMigration = fs.readFileSync(path.join(root, "packages/db/migrations/015_hermes_obsidian_memory.sql"), "utf8");
 for (const fragment of ["memory_kind", "hermes_target", "hermes_sync_status"]) if (!memoryProjectionMigration.includes(fragment)) failures.push(`Memory projection migration is missing ${fragment}`);
 const memoryOutboxMigration = fs.readFileSync(path.join(root, "packages/db/migrations/017_memory_projection_outbox.sql"), "utf8");

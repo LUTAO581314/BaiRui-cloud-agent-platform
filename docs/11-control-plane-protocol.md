@@ -15,7 +15,6 @@ Allowed actions:
 - `upstream.check`
 - `config.stage`
 - `config.apply`
-- `config.apply-user`
 - `backup.create`
 - `backup.verify`
 - `backup.restore`
@@ -32,8 +31,9 @@ enforces the allow-list and action-specific identifier arguments.
 ## State machine
 
 ```text
-queued -> leased -> accepted -> running -> succeeded
+queued -> leased -> accepted -> running -> completion_candidate
                                       \-> failed
+completion_candidate -> verifying -> command.verified -> succeeded
 queued/leased/accepted/running -> cancelled or expired
 ```
 
@@ -54,15 +54,17 @@ A credential from one protocol cannot authenticate to another. Control command
 arguments contain revision/release/backup/probe/service identifiers, never raw
 secret values, user content, or executable text.
 
-`config.apply-user` is limited to an opaque configuration revision generated
-from allowlisted Agent-owner preferences. It carries no approval id or secret
-envelope. The Supervisor currently accepts only the `skills` scope and merges
-only `skills.disabled` into Hermes `config.yaml`; all other scopes fail closed.
-The general `config.apply` path remains platform-administrator approval-gated.
+`config.apply-user` is a legacy-readable, quarantined action. Contracts
+`v2.3.0-rc.1` rejects it in new command and lease envelopes, and consumers must
+not translate it into another canonical action. Existing repository rows and
+the legacy Supervisor handler remain migration input for C00-03; they are not a
+valid issuance path. The general `config.apply` path remains
+platform-administrator approval-gated.
 
 ## Closed-loop result
 
-A command is not successful merely because an API accepted it. Success requires
-server-agent execution plus a matching post-action observation. Configuration
+A command is not successful merely because an API accepted it. A Server Agent
+may emit only `completion_candidate`; success requires Authority verification
+against a newer matching post-action observation and evidence. Configuration
 and release records stay `pending` or `applying` until verification succeeds;
 failure records the evidence and either rolls back or blocks further rollout.

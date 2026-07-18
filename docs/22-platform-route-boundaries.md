@@ -25,6 +25,7 @@ request context containing method, url, request, response, and principal.
 | routes/auth.mjs | login, registration, logout, current principal | session identity and login throttling |
 | routes/user-runtime.mjs | Hermes discovery, sessions, chat streams, Runs, Jobs | authenticated Agent-scoped Runtime data plane |
 | routes/admin-control.mjs | control commands, approvals, immutable release manifests | RBAC-governed control and release decisions |
+| routes/internal-control.mjs | canonical command lease and receipt envelopes | machine transport authentication plus C00-03 Control Authority |
 | http.mjs | bounded JSON parsing, responses, origin comparison, security headers | shared transport policy |
 | app.mjs | composition and domains not migrated yet | temporary orchestration and compatibility boundary |
 
@@ -38,6 +39,10 @@ organization scope, audit write, transaction, status code, and error code.
 - authentication, Runtime session, Run, Job, control approval, or release
   manifest routes must not be reintroduced into app.mjs;
 - route modules must not parse cookies or invent independent error envelopes;
+- internal control routes must verify timestamp/nonce/body transport HMAC and
+  the embedded mutation signature before calling the Control Authority;
+- internal control routes must never fall back to legacy repository lease or
+  receipt transitions when the Control Authority is unavailable;
 - administrator routes must not gain access to conversation, prompt, or memory
   bodies;
 - Runtime routes must resolve the Agent through the authenticated owner before

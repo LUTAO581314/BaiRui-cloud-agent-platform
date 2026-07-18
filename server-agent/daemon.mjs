@@ -30,16 +30,27 @@ export async function runControlDaemon(options = {}) {
   const signal = options.signal;
   const intervalMs = Math.max(1_000, Number(env.BAIRUI_CONTROL_POLL_INTERVAL_MS ?? 5_000));
   const resourceIntervalMs = Math.max(10_000, Number(env.BAIRUI_RESOURCE_INTERVAL_MS) || 30_000);
+  const sequenceState = { value: Date.now() };
+  const seenLeaseIds = new Set();
   const client = {
     platformUrl: env.BAIRUI_PLATFORM_URL,
+    organizationId: env.BAIRUI_ORGANIZATION_ID,
+    userId: env.BAIRUI_USER_ID,
+    agentId: env.BAIRUI_AGENT_ID,
     serverId: env.BAIRUI_SERVER_ID,
     token: env.BAIRUI_SERVER_AGENT_TOKEN,
     executor: options.executor ?? supervisorFromEnv(env, options),
     fetch: options.fetch,
     limit: Number(env.BAIRUI_CONTROL_LEASE_LIMIT ?? 5),
-    leaseSeconds: Number(env.BAIRUI_CONTROL_LEASE_SECONDS ?? 120)
+    leaseSeconds: Number(env.BAIRUI_CONTROL_LEASE_SECONDS ?? 120),
+    sequenceState,
+    seenLeaseIds,
+    resolveSecretRefs: options.resolveSecretRefs,
+    observe: options.observe
   };
-  if (!client.platformUrl || !client.serverId || !client.token) throw new Error("BAIRUI_PLATFORM_URL, BAIRUI_SERVER_ID, and BAIRUI_SERVER_AGENT_TOKEN are required");
+  if (!client.platformUrl || !client.organizationId || !client.userId || !client.agentId || !client.serverId || !client.token) {
+    throw new Error("BAIRUI_PLATFORM_URL, BAIRUI_ORGANIZATION_ID, BAIRUI_USER_ID, BAIRUI_AGENT_ID, BAIRUI_SERVER_ID, and BAIRUI_SERVER_AGENT_TOKEN are required");
+  }
   let nextResourceAt = 0;
   while (!signal?.aborted) {
     try {

@@ -12,11 +12,12 @@ configuration surface -> restart if required -> probe -> mark applied or roll
 back. Saving Provider settings alone never means they are active, and the
 control plane never selects a Provider for an individual Agent run.
 
-Agent owners use a narrower loop for skill preferences: save preference ->
-build a server-side `skills` revision -> lease `config.apply-user` -> merge
-structured YAML -> restart only Hermes -> receipt -> mark the matching
-preference applied or failed. This path cannot alter provider credentials,
-runtime settings, channels, prompts, memory, or container commands.
+The former Agent-owner `config.apply-user` dispatch loop is quarantined. The UI
+may continue to save an owner preference, but no canonical command may be
+issued until C00-03 models the preference as DesiredState plus an allowlisted
+deployment adapter and post-action Observation. Consumers must not translate
+the legacy action or pass the generated configuration document through a
+lease.
 
 ## Release loop
 

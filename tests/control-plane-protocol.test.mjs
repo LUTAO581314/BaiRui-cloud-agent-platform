@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CONTROL_ACTIONS, validateControlCommand } from "../packages/server-protocol/control-plane.mjs";
+import {
+  CONTROL_ACTIONS,
+  CONTROL_QUARANTINED_ACTIONS,
+  LEGACY_CONTROL_ACTIONS,
+  validateControlCommand,
+  validateControlCommandEnvelope
+} from "../packages/server-protocol/control-plane.mjs";
 
 const base = () => ({
   schema_version: "1.0",
@@ -59,12 +65,31 @@ test("backup expiration accepts an identifier but no host path", () => {
   assert.throws(() => validateControlCommand({ ...value, arguments: { backup_id: "backup_a", path: "/var/lib/bairui/backups/backup_a.brb" } }), /not allowed/);
 });
 
-test("owner configuration accepts only an opaque revision reference", () => {
+test("owner configuration remains legacy-readable but cannot be issued in a canonical envelope", () => {
   const value = base();
   value.action = "config.apply-user";
   value.arguments = { config_revision_id: "config_user_a" };
   delete value.approval_id;
   assert.equal(validateControlCommand(value).action, "config.apply-user");
+  assert.equal(LEGACY_CONTROL_ACTIONS.includes("config.apply-user"), true);
+  assert.equal(CONTROL_ACTIONS.includes("config.apply-user"), false);
+  assert.equal(CONTROL_QUARANTINED_ACTIONS.includes("config.apply-user"), true);
+  const envelope = {
+    schema_version: "1.0",
+    organization_id: "org_a",
+    user_id: "user_a",
+    agent_id: "agent_a",
+    server_id: "server_a",
+    request_id: "request_a",
+    correlation_id: "correlation_a",
+    idempotency_key: value.idempotency_key,
+    created_at: value.created_at,
+    revision: 1,
+    sequence: 1,
+    signature: { algorithm: "hmac-sha256", key_id: "server_a", value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", signed_at: value.created_at },
+    command: value
+  };
+  assert.throws(() => validateControlCommandEnvelope(envelope), /not allowed/);
   assert.throws(() => validateControlCommand({ ...value, arguments: { ...value.arguments, skill: "browser" } }), /not allowed/);
   assert.throws(() => validateControlCommand({ ...value, arguments: { ...value.arguments, prompt: "hello" } }), /not allowed/);
 });

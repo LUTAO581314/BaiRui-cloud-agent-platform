@@ -11,7 +11,7 @@ const digest = (name) => `ghcr.io/lutao581314/${name}@sha256:${"a".repeat(64)}`;
 const input = {
   version: "0.1.0-rc.8",
   generatedAt: "2026-07-17T00:00:00.000Z",
-  contractsVersion: "2.2.1",
+  contractsVersion: "2.3.0-rc.1",
   platformCommit: "1".repeat(40),
   agentCommit: "2".repeat(40),
   hermesCommit: "3".repeat(40),

@@ -7,7 +7,7 @@ import { MemoryPlatformRepository } from "../packages/db/memory-repository.mjs";
 import { hashPassword } from "../packages/auth/password.mjs";
 import { ROLES } from "../packages/auth/authorization.mjs";
 import { SecretEnvelope } from "../packages/security/secret-envelope.mjs";
-import { signedMachinePost, sendCommandReceipt } from "../server-agent/control-client.mjs";
+import { leaseControlCommands, signedMachinePost } from "../server-agent/control-client.mjs";
 import { deriveMachineKey, signMachineRequest } from "../packages/security/machine-request.mjs";
 import { workspaceIdFromRef } from "../packages/server-protocol/runtime-client.mjs";
 import { createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
@@ -337,7 +337,7 @@ test("a failed Agent initialization can be retried without duplicating configura
   assert.equal(retry.agent.initializationStatus, "provisioning");
 });
 
-test("signed command lease provisions an Agent route and independent heartbeat identity", async (t) => {
+test("canonical delivery fails closed while legacy repository state remains migration-only", async (t) => {
   const context = await setup();
   t.after(() => context.server.close());
   const rootCookie = await login(context.baseUrl, "root@example.test");
@@ -359,7 +359,7 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const replayTimestamp = Date.now().toString();
   const replayNonce = "fixed_nonce_value_1234567890";
   const replayHeaders = { "content-type": "application/json", "x-bairui-machine-id": serverRegistration.server.id, "x-bairui-timestamp": replayTimestamp, "x-bairui-nonce": replayNonce, "x-bairui-signature": signMachineRequest({ method: "POST", path: replayPath, timestamp: replayTimestamp, nonce: replayNonce, body: replayBody, token: serverRegistration.credential.token }) };
-  assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 200);
+  assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 400);
   assert.equal((await fetch(`${context.baseUrl}${replayPath}`, { method: "POST", headers: replayHeaders, body: replayBody })).status, 401);
   const vault = new SecretEnvelope(providerEncryptionKey);
   await context.repository.upsertProviderConfiguration({ organizationId: "org_a", provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model", apiKeyEnvelope: vault.seal("provider-secret-value"), keyHint: "alue", updatedBy: "root" });
@@ -369,21 +369,27 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.equal(initialize.status, 202);
   assert.doesNotMatch(await initialize.clone().text(), /provider-secret-value/);
 
-  const leaseResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
-  assert.equal(leaseResponse.status, 200);
-  const leased = (await leaseResponse.json()).commands;
-  assert.equal(leased.length, 1);
-  const command = leased[0];
-  assert.equal(command.action, "deployment.provision");
-  assert.equal(command.config.secrets.provider_api_key, "provider-secret-value");
-  assert.ok(command.config.secrets.runtime_shared_secret.length >= 32);
-  assert.ok(command.config.secrets.agent_control_token.length >= 32);
+  await assert.rejects(() => leaseControlCommands({
+    platformUrl: context.baseUrl,
+    organizationId: "org_a",
+    userId: "user_a",
+    agentId: context.agent.id,
+    serverId: serverRegistration.server.id,
+    token: serverRegistration.credential.token
+  }), { code: "verification_failed", statusCode: 503 });
 
-  const receiptOptions = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: command.command_id, attempt: command.attempt };
-  await sendCommandReceipt({ ...receiptOptions, state: "accepted" });
-  await sendCommandReceipt({ ...receiptOptions, state: "running" });
-  await assert.rejects(() => sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://169.254.169.254/latest/meta-data" }), { code: "invalid_runtime_endpoint", statusCode: 400 });
-  await sendCommandReceipt({ ...receiptOptions, state: "succeeded", runtimeEndpointRef: "http://127.0.0.1:19001", resultSummary: { containers: 2 } });
+  const [command] = await context.repository.leaseControlCommands({ serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 });
+  assert.equal(command.action, "deployment.provision");
+  assert.doesNotMatch(JSON.stringify(command), /provider-secret-value/);
+  const agentControlToken = vault.open(command.config.secret_envelope.agentControlToken);
+  assert.equal(vault.open(command.config.secret_envelope.providerApiKey), "provider-secret-value");
+  assert.ok(vault.open(command.config.secret_envelope.runtimeSharedSecret).length >= 32);
+  assert.ok(agentControlToken.length >= 32);
+
+  const legacyReceipt = { commandId: command.command_id, serverId: serverRegistration.server.id, attempt: command.attempt };
+  await context.repository.recordCommandReceipt({ ...legacyReceipt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ ...legacyReceipt, state: "running" });
+  await context.repository.recordCommandReceipt({ ...legacyReceipt, state: "succeeded", runtimeEndpointRef: "http://127.0.0.1:19001", resultSummary: { containers: 2 } });
   assert.equal((await context.repository.getProviderConfiguration("org_a")).applyStatus, "applied");
   assert.equal((await context.repository.listProviderChannels("org_a"))[0].status, "applied");
   const route = await context.repository.getAgentRuntimeRoute(context.agent.id);
@@ -394,7 +400,7 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const heartbeatObservedAt = new Date().toISOString();
   const heartbeatComponent = { layer: "core-runtime", moduleId: "hermes", status: "healthy", version: "hermes-1", capabilities: ["runs"], metrics: {}, observedAt: heartbeatObservedAt };
   const heartbeat = { organizationId: "org_a", userId: "user_a", agentId: context.agent.id, runtimeId: context.runtime.id, sequence: 1, status: "healthy", runtimeVersion: "hermes-1", boundaryVersion: "0.3.0", observedAt: heartbeatObservedAt, queueDepth: 0, activeRuns: 0, failedRuns: 0, components: [heartbeatComponent, { ...heartbeatComponent, moduleId: "bairui.runtime-boundary", version: "0.3.0" }], events: [] };
-  const heartbeatResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: "/api/internal/control-plane/heartbeats", payload: heartbeat });
+  const heartbeatResponse = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: agentControlToken, path: "/api/internal/control-plane/heartbeats", payload: heartbeat });
   assert.equal(heartbeatResponse.status, 202);
   assert.equal((await context.repository.getAgent(context.agent.id)).initializationStatus, "ready");
 
@@ -405,10 +411,10 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   assert.doesNotMatch(JSON.stringify(authorization), new RegExp(personalSecret));
   const resolvePath = `/api/internal/runtime/agents/${context.agent.id}/authorizations/${authorization.id}/resolve`;
   const resolutionRequest = { schema_version: "2.0", owner_scope: { organization_id: "org_a", user_id: "user_a", agent_id: context.agent.id, runtime_id: context.runtime.id, workspace_id: workspaceIdFromRef(context.runtime.workspaceRef) }, authorization_id: authorization.id, expected_service: "firecrawl", trace: { correlation_id: "credential_resolution_http" } };
-  const resolved = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: resolvePath, payload: resolutionRequest });
+  const resolved = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: agentControlToken, path: resolvePath, payload: resolutionRequest });
   assert.equal(resolved.status, 200);
   assert.equal((await resolved.json()).credential.secret, personalSecret);
-  const wrongWorkspaceResolution = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: command.config.secrets.agent_control_token, path: resolvePath, payload: { ...resolutionRequest, owner_scope: { ...resolutionRequest.owner_scope, workspace_id: "workspace_other" } } });
+  const wrongWorkspaceResolution = await signedMachinePost({ platformUrl: context.baseUrl, machineId: context.agent.id, token: agentControlToken, path: resolvePath, payload: { ...resolutionRequest, owner_scope: { ...resolutionRequest.owner_scope, workspace_id: "workspace_other" } } });
   assert.equal(wrongWorkspaceResolution.status, 404);
   const wrongMachine = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: resolvePath, payload: resolutionRequest });
   assert.equal(wrongMachine.status, 401);
@@ -502,23 +508,21 @@ test("signed command lease provisions an Agent route and independent heartbeat i
   const pause = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "pause" }) });
   assert.equal(pause.status, 202);
   assert.equal((await pause.json()).action, "deployment.suspend");
-  const lifecycleLease = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
-  const lifecycleCommand = (await lifecycleLease.json()).commands[0];
+  const [lifecycleCommand] = await context.repository.leaseControlCommands({ serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 });
   assert.equal(lifecycleCommand.action, "deployment.suspend");
-  const lifecycleReceipt = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: lifecycleCommand.command_id, attempt: lifecycleCommand.attempt };
-  await sendCommandReceipt({ ...lifecycleReceipt, state: "accepted" });
-  await sendCommandReceipt({ ...lifecycleReceipt, state: "running" });
-  await sendCommandReceipt({ ...lifecycleReceipt, state: "succeeded" });
+  const lifecycleReceipt = { commandId: lifecycleCommand.command_id, serverId: serverRegistration.server.id, attempt: lifecycleCommand.attempt };
+  await context.repository.recordCommandReceipt({ ...lifecycleReceipt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ ...lifecycleReceipt, state: "running" });
+  await context.repository.recordCommandReceipt({ ...lifecycleReceipt, state: "succeeded" });
   assert.equal((await context.repository.getAgentRuntimeByAgent(context.agent.id)).status, "suspended");
   const resume = await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "resume" }) });
   assert.equal(resume.status, 202);
-  const resumeLease = await signedMachinePost({ platformUrl: context.baseUrl, machineId: serverRegistration.server.id, token: serverRegistration.credential.token, path: "/api/internal/control-plane/commands/lease", payload: { serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 } });
-  const resumeCommand = (await resumeLease.json()).commands[0];
+  const [resumeCommand] = await context.repository.leaseControlCommands({ serverId: serverRegistration.server.id, limit: 5, leaseSeconds: 120 });
   assert.equal(resumeCommand.action, "deployment.resume");
-  const resumeReceipt = { platformUrl: context.baseUrl, serverId: serverRegistration.server.id, token: serverRegistration.credential.token, commandId: resumeCommand.command_id, attempt: resumeCommand.attempt };
-  await sendCommandReceipt({ ...resumeReceipt, state: "accepted" });
-  await sendCommandReceipt({ ...resumeReceipt, state: "running" });
-  await sendCommandReceipt({ ...resumeReceipt, state: "succeeded" });
+  const resumeReceipt = { commandId: resumeCommand.command_id, serverId: serverRegistration.server.id, attempt: resumeCommand.attempt };
+  await context.repository.recordCommandReceipt({ ...resumeReceipt, state: "accepted" });
+  await context.repository.recordCommandReceipt({ ...resumeReceipt, state: "running" });
+  await context.repository.recordCommandReceipt({ ...resumeReceipt, state: "succeeded" });
   assert.equal((await context.repository.getAgentRuntimeByAgent(context.agent.id)).status, "starting");
   assert.equal((await fetch(`${context.baseUrl}/api/user/agents/${context.agent.id}/lifecycle`, { method: "POST", headers: { cookie: userCookie, "content-type": "application/json" }, body: JSON.stringify({ action: "delete", confirmName: "wrong" }) })).status, 400);
 });
