@@ -164,12 +164,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
       - name: Capture BaiLongma source design baseline
         run: node tests/browser/design-baseline.mjs
       - name: Exercise U00-03 Platform vertical slice
         run: node --test tests/u00-03-vertical-slice.test.mjs
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
       - name: Exercise BaiLongma, Hermes, Obsidian and RBAC browser flows
         run: npm run test:browser:remote
       - name: Upload browser evidence
