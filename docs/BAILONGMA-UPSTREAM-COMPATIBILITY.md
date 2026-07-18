@@ -44,5 +44,15 @@ commit passes all of the following:
 - U00-03 vertical-slice evidence;
 - container and distribution checks.
 
-Until that CI result is recorded, the production decision is `hold` and the
-current pin remains `0e243bc518cebbdb74f114e98b1189133abbda63`.
+Before the candidate CI result, the source and production decision was
+`hold`; the old production pin was
+`0e243bc518cebbdb74f114e98b1189133abbda63`.
+
+## Result
+
+Candidate CI passed on [Platform CI 29631312214](https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/actions/runs/29631312214), including verify, PostgreSQL, U00-03, remote browser, container and distribution jobs.
+
+Decision: `compatible-source-candidate`. The candidate may replace the source
+gitlink after PR review. It is not yet a production release: a new immutable
+Platform build and deployment manifest must bind the new BaiLongma commit and
+image digests before deployment.
