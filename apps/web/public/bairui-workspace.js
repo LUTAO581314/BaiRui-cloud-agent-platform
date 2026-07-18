@@ -28,7 +28,6 @@
     for (const extension of workspaceRegistry.list()) entries.set(extension.id, extension);
     return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   }
-  const CHANNEL_LABELS = { web: "网页", cli: "CLI", feishu: "飞书", wechat: "微信", qq: "QQ" };
   const STATUS_LABELS = {
     ready: "正常", active: "正常", connected: "已连接", applied: "已生效", pending: "待应用",
     provisioning: "初始化中", starting: "启动中", suspended: "已暂停", stopped: "已停止",
@@ -165,7 +164,7 @@
     content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
     try {
       const renderer = workspaceRegistry.get(view)?.render;
-      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm, noteBody, download });
+      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm, noteBody, download, closeWorkspace });
     } catch (error) { showError(error); }
   }
 
@@ -256,31 +255,6 @@
       <section class="bw-capability-section"><div class="bw-section-head"><div><h3>Hermes 技能</h3><p>${result.discovery?.status === "available" ? "来自当前 Agent Runtime" : "Runtime 不可用，显示已保存偏好"}</p></div>${status(result.discovery?.status)}</div><div class="bw-list">${skills.length ? skills.map((skill) => { const value = typeof skill === "string" ? { name: skill } : skill; const id = value.id || value.name; const pref = preferences.get(id); const enabled = pref ? pref.enabled : value.enabled !== false; return `<article class="bw-row"><div><strong>${escapeHtml(value.name || id)}</strong><span>${escapeHtml(value.description || id)} · ${escapeHtml(value.category || "uncategorized")} · ${escapeHtml(value.version || runtimeVersion)}</span></div><div class="bw-actions"><label class="bw-toggle"><input type="checkbox" data-skill="${escapeHtml(id)}" ${enabled ? "checked" : ""}><span></span></label>${pref ? status(pref.applyStatus) : status("ready", "Runtime 默认")}</div></article>`; }).join("") : '<div class="bw-empty">Runtime 暂未返回可用技能</div>'}</div></section>
       <section class="bw-capability-section"><div class="bw-section-head"><div><h3>能力授权</h3><p>当前 Agent 可供工具和集成使用的个人授权</p></div><span>${authorizations.length} 项</span></div><div class="bw-list">${authorizations.length ? authorizations.map((item) => `<article class="bw-row"><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(serviceLabels[item.service] || item.service)} · ${escapeHtml(item.credentialMasked || "无有效凭证")}</span></div>${status(item.status)}</article>`).join("") : '<div class="bw-empty">当前 Agent 没有个人能力授权</div>'}</div></section>`;
     content.querySelectorAll("[data-skill]").forEach((input) => input.addEventListener("change", async () => { const data = await bridge.request(agentApi(`/skills/${encodeURIComponent(input.dataset.skill)}`), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: input.checked }) }); toast(data.preference.applyStatus === "pending" ? "偏好已保存，等待配置适配器应用" : "技能状态已更新"); renderSkills(); }));
-  }
-
-  async function renderChannels() {
-    const result = await bridge.request(agentApi("/channels"));
-    content.innerHTML = `<div class="bw-section-head"><div><h3>渠道连接</h3><p>非 Web 渠道只有收到适配器回执后才会显示已连接</p></div></div><div class="bw-list">${result.channels.map(({ channel, binding }) => `<article class="bw-row"><div><strong>${escapeHtml(CHANNEL_LABELS[channel] || channel)}</strong><span>${escapeHtml(binding?.displayName || "未绑定")}${binding?.credentialMasked ? ` · ${escapeHtml(binding.credentialMasked)}` : ""}${binding?.adapterVersion ? ` · ${escapeHtml(binding.adapterVersion)}` : ""}${binding?.callbackPath ? `<br>${escapeHtml(new URL(binding.callbackPath, window.location.origin).toString())}` : ""}</span></div><div class="bw-actions">${status(binding?.status || "unconfigured")}<button type="button" data-bind="${channel}">${binding ? "更新" : "绑定"}</button>${binding && channel !== "web" ? `<button type="button" data-unbind="${channel}" class="danger-icon" title="解绑">×</button>` : ""}</div></article>`).join("")}</div>`;
-    content.querySelectorAll("[data-bind]").forEach((button) => button.addEventListener("click", async () => {
-      const channel = button.dataset.bind;
-      const fields = [{ name: "displayName", label: "显示名称", value: CHANNEL_LABELS[channel] }];
-      if (channel === "feishu") fields.push({ name: "appId", label: "App ID", required: true }, { name: "appSecret", label: "App Secret", type: "password", required: true }, { name: "verifyToken", label: "Verify Token", type: "password" });
-      else if (channel === "wechat") fields.push({ name: "appId", label: "App ID", required: true }, { name: "appSecret", label: "App Secret", type: "password", required: true }, { name: "token", label: "Token", type: "password" });
-      else if (channel === "qq") fields.push({ name: "appId", label: "App ID", required: true }, { name: "appSecret", label: "App Secret", type: "password", required: true });
-      else if (channel === "cli") fields.push({ name: "label", label: "终端标识", value: "default" });
-      const values = await openForm({ heading: `绑定${CHANNEL_LABELS[channel]}`, fields }); if (!values) return;
-      const { displayName, ...credentials } = values;
-      const data = await bridge.request(agentApi(`/channels/${channel}`), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName, credentials }) });
-      toast(data.binding.status === "connected" ? "渠道已连接" : "配置已加密保存，等待渠道适配器确认"); renderChannels();
-    }));
-    content.querySelectorAll("[data-unbind]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/channels/${button.dataset.unbind}`), { method: "DELETE" }); toast("渠道已解绑"); renderChannels(); }));
-  }
-
-  async function renderHotspots() {
-    const result = await bridge.request(agentApi("/hotspots"));
-    content.innerHTML = `<div class="bw-section-head"><div><h3>实时热点</h3><p>${result.run ? `采集于 ${formatTime(result.run.completedAt)}` : "管理员尚未完成热点采集"}</p></div></div><div class="bw-hotspot-grid">${result.items.length ? result.items.map((item) => `<article class="bw-hotspot"><header><span>${escapeHtml(item.sourceName)}</span><strong>${item.rank || "--"}</strong></header><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.heat || item.category || "")}</p><footer><button type="button" data-bookmark="${item.id}" data-value="${item.bookmarked ? "0" : "1"}">${item.bookmarked ? "已收藏" : "收藏"}</button><button type="button" class="primary" data-analyze="${item.id}">交给 Agent</button>${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">来源</a>` : ""}</footer></article>`).join("") : '<div class="bw-empty">暂无真实热点数据</div>'}</div>`;
-    content.querySelectorAll("[data-bookmark]").forEach((button) => button.addEventListener("click", async () => { await bridge.request(agentApi(`/hotspots/${button.dataset.bookmark}/bookmark`), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ bookmarked: button.dataset.value === "1" }) }); renderHotspots(); }));
-    content.querySelectorAll("[data-analyze]").forEach((button) => button.addEventListener("click", () => { const item = result.items.find((entry) => entry.id === button.dataset.analyze); bridge.prefillChat(`请分析这个热点，说明事实来源、背景、可信度和可能影响：${item.title}\n${item.url || ""}`); closeWorkspace(); }));
   }
 
   async function streamRun(runId, log, approval) {
@@ -405,7 +379,7 @@
   function registerBuiltInViews() {
     const views = {
       memory: [3, renderMemory], skills: [4, renderSkills],
-      channels: [5, renderChannels], hotspots: [6, renderHotspots], runs: [7, renderRuns], jobs: [8, renderJobs],
+      runs: [7, renderRuns], jobs: [8, renderJobs],
       usage: [9, renderUsage], hermes: [10, renderHermes], settings: [11, renderSettings]
     };
     for (const [id, [order, renderView]] of Object.entries(views)) {

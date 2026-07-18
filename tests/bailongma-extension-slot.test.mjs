@@ -59,6 +59,21 @@ test("the Agent management view is a separately served owner-scoped workspace ex
   assert.doesNotMatch(workspace, /function renderAgents|agents:\s*\[2,/);
 });
 
+test("channel and hotspot views are separate Agent-scoped workspace extensions", () => {
+  const channels = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-channels.js"), "utf8");
+  for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"channels\"", "agentApi(\"/channels\")", "credentialMasked", "data-unbind"]) {
+    assert.match(channels, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(channels, /window\.fetch\s*=|window\.EventSource\s*=/);
+  const hotspots = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-hotspots.js"), "utf8");
+  for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"hotspots\"", "agentApi(\"/hotspots\")", "bridge.prefillChat", "closeWorkspace"]) {
+    assert.match(hotspots, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(hotspots, /window\.fetch\s*=|window\.EventSource\s*=/);
+  const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
+  assert.doesNotMatch(workspace, /function renderChannels|channels:\s*\[5,|function renderHotspots|hotspots:\s*\[6,/);
+});
+
 test("the memory view keeps Obsidian and Hermes synchronization in a separate extension", () => {
   const memory = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-memory.js"), "utf8");
   for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {

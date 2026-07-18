@@ -30,6 +30,8 @@ function entryHtml(source) {
 <script src="/assets/bairui-workspace.js" defer></script>
 <script src="/assets/bairui-workspace-conversations.js" defer></script>
 <script src="/assets/bairui-workspace-agents.js" defer></script>
+<script src="/assets/bairui-workspace-channels.js" defer></script>
+<script src="/assets/bairui-workspace-hotspots.js" defer></script>
 <script src="/assets/bairui-workspace-usage.js" defer></script>
 <script src="/assets/bairui-workspace-memory.js" defer></script>
 <script src="/assets/bairui-workspace-skills.js" defer></script>
