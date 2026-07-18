@@ -22,6 +22,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-workspace\.js/);
   assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
   assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-skills\.js/);
   assert.match(html, /<head>[\s\S]*data-bairui-overlay[\s\S]*<\/head>/);
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
