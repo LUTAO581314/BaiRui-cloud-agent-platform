@@ -50,6 +50,7 @@ import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
 import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
+import { workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
 
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
@@ -1366,11 +1367,12 @@ export function createPlatformApp(options) {
         catch { return json(response, 404, { error: "authorization_not_available" }); }
         const runtime = await repository.getAgentRuntimeByAgent(agent.id);
         const requestedScope = resolutionRequest.owner_scope;
-        if (!runtime || requestedScope.organization_id !== agent.organizationId || requestedScope.user_id !== agent.ownerUserId || requestedScope.agent_id !== agent.id || requestedScope.runtime_id !== runtime.id) {
+        if (!runtime || requestedScope.organization_id !== agent.organizationId || requestedScope.user_id !== agent.ownerUserId || requestedScope.agent_id !== agent.id || requestedScope.runtime_id !== runtime.id || requestedScope.workspace_id !== workspaceIdFromRef(runtime.workspaceRef)) {
           return json(response, 404, { error: "authorization_not_available" });
         }
+        if (resolutionRequest.authorization_id !== authorizationId) return json(response, 404, { error: "authorization_not_available" });
         const authorization = await repository.getAgentAuthorization(agent.organizationId, agent.ownerUserId, agent.id, authorizationId);
-        if (!authorization || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
+        if (!authorization || authorization.service !== resolutionRequest.expected_service || !["stored", "applied"].includes(authorization.status) || !authorization.credentialEnvelope) return json(response, 404, { error: "authorization_not_available" });
         const credential = JSON.parse(providerVault.open(authorization.credentialEnvelope));
         await repository.markAgentAuthorizationUsed(authorization.id);
         await repository.recordAudit({ organizationId: agent.organizationId, actorUserId: null, action: "agent.authorization.resolve", targetType: "agent_authorization", targetId: authorization.id, metadata: { agentId: agent.id, runtimeCredentialId: machine.credential.id, service: authorization.service } });

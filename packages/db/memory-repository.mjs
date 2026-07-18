@@ -1113,9 +1113,11 @@ export class MemoryPlatformRepository {
     let outbound = this.#channelOutbox.find((item) => item.inboxId === inbox.id) ?? null;
     const now = new Date().toISOString();
     if (input.outbound && !outbound) {
+      const channelConversation = this.#channelConversations.find((item) => item.bindingId === inbox.bindingId && item.channelConversationId === inbox.conversation.channel_conversation_id);
+      if (!channelConversation) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
       outbound = {
         id: input.outbound.id ?? randomUUID(), organizationId: inbox.organizationId, userId: inbox.userId, agentId: inbox.agentId, bindingId: inbox.bindingId, inboxId: inbox.id,
-        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: input.outbound.conversation ?? inbox.conversation, content: input.outbound.content,
+        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: channelConversation.runtimeConversationId }, content: input.outbound.content,
         attachments: input.outbound.attachments ?? [], replyToMessageId: input.outbound.replyToMessageId ?? inbox.externalMessageId, trace: input.outbound.trace ?? inbox.trace,
         state: "pending", attempts: 0, maxAttempts: input.outbound.maxAttempts ?? 8, availableAt: now, workerId: null, leaseToken: null, leaseExpiresAt: null,
         channelMessageId: null, lastErrorCode: null, deliveredAt: null, createdAt: now, updatedAt: now
@@ -1147,6 +1149,10 @@ export class MemoryPlatformRepository {
       .slice(0, Math.max(1, Math.min(Number(input.limit) || 10, 100)));
     for (const item of deliveries) Object.assign(item, { state: "leased", attempts: item.attempts + 1, workerId: input.workerId, leaseToken: `${leaseId}:${item.id}`, leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
     return { leaseId, deliveries };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    return this.#channelOutbox.find((item) => item.id === outboundId) ?? null;
   }
 
   async recordChannelDeliveryReceipt(input) {

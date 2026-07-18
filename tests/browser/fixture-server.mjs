@@ -136,7 +136,7 @@ function createRuntimeFixture() {
     if (name === "jobs.run") return { status: "started" };
     if (name === "memory.snapshot") {
       return {
-        schema_version: "1.0",
+        schema_version: "2.0",
         digest,
         projection,
         memory: { entries: projectedEntries(projection.memory) },

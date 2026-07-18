@@ -14,8 +14,10 @@ test("runtime client derives tenant and actor from the authenticated principal",
   const client = new BairuiRuntimeClient({ baseUrl: "http://runtime.test", sharedSecret: secret, fetch });
   const result = await client.invoke({ principal: { userId: "user_a", organizationId: "org_a", role: "user" }, agent: { id: "agent_a", ownerUserId: "user_a", organizationId: "org_a" }, conversation: { id: "conversation_a" }, content: "Hello" });
   assert.equal(result.content, "Hello");
-  assert.equal(captured.body.request.tenant.organization_id, "org_a");
-  assert.equal(captured.body.request.tenant.agent_id, "agent_a");
+  assert.equal(captured.body.schema_version, "2.0");
+  assert.equal(captured.body.request.owner_scope.organization_id, "org_a");
+  assert.equal(captured.body.request.owner_scope.user_id, "user_a");
+  assert.equal(captured.body.request.owner_scope.agent_id, "agent_a");
   assert.equal(captured.body.request.actor.user_id, "user_a");
   const canonical = `${captured.options.headers["x-bairui-timestamp"]}.${captured.options.headers["x-bairui-nonce"]}.${captured.options.body}`;
   assert.equal(captured.options.headers["x-bairui-signature"], createHmac("sha256", secret).update(canonical).digest("base64url"));
@@ -58,6 +60,7 @@ test("runtime client signs service integration requests", async () => {
   } });
   await client.invokeIntegration({ integrationId: "trendradar", capability: "list_hotspots" });
   assert.match(captured.url, /\/v1\/integrations\/requests$/);
+  assert.equal(captured.body.schema_version, "2.0");
   assert.equal(captured.body.request.integration_id, "trendradar");
   assert.ok(captured.headers["x-bairui-signature"]);
 });
@@ -114,7 +117,7 @@ test("runtime client resolves an Agent-specific Runtime for operations and nativ
   await client.operation({ principal, agent, operation: "sessions.list" });
   const stream = await client.streamOperation({ principal, agent, operation: "runs.events", input: { run_id: "run_a" } });
   assert.match(calls[0].url, /^https:\/\/agent_a\.runtime\.test/);
-  assert.equal(calls[0].body.tenant.agent_id, "agent_a");
+  assert.equal(calls[0].body.owner_scope.agent_id, "agent_a");
   assert.equal(calls[1].body.operation, "runs.events");
   assert.match(await stream.text(), /run\.completed/);
 });

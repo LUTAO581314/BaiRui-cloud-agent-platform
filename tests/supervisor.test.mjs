@@ -168,7 +168,7 @@ test("Supervisor encrypts, verifies, and restores Agent backups with rollback hi
       fs.writeFileSync(path.join(destination, "instance.json"), JSON.stringify({ agentId: "agent_a" }));
       fs.writeFileSync(path.join(destination, "hermes.env"), "RESTORED_HERMES=1\n");
       fs.writeFileSync(path.join(destination, "dashboard.env"), "RESTORED_DASHBOARD=1\n");
-      fs.writeFileSync(path.join(destination, "runtime.env"), "RESTORED_RUNTIME=1\n");
+      fs.writeFileSync(path.join(destination, "runtime.env"), "HERMES_API_SERVER_KEY=hermes-secret-that-is-longer-than-thirty-two\nBAIRUI_RUNTIME_SHARED_SECRET=runtime-secret-that-is-longer-than-thirty-two\n");
       return { stdout: "", stderr: "" };
     }
     if (args[1] === "inspect") throw new Error("missing");

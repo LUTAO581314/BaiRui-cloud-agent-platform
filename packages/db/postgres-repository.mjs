@@ -1596,13 +1596,16 @@ export class PostgresPlatformRepository {
       if (!inbox) return null;
       let outbound = null;
       if (input.outbound) {
+        const { rows: conversationRows } = await client.query("SELECT runtime_conversation_id FROM channel_conversations WHERE binding_id=$1 AND channel_conversation_id=$2", [inbox.bindingId, inbox.conversation.channel_conversation_id]);
+        if (!conversationRows[0]) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
+        const outboundConversation = { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: conversationRows[0].runtime_conversation_id };
         const result = await client.query(
           `INSERT INTO channel_outbox
             (id, organization_id, user_id, agent_id, binding_id, inbox_id, channel, channel_account_id, conversation, content, attachments, reply_to_message_id, trace)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            ON CONFLICT (inbox_id) DO UPDATE SET updated_at=channel_outbox.updated_at
            RETURNING *`,
-          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, input.outbound.conversation ?? inbox.conversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
+          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, outboundConversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
         );
         outbound = mapChannelOutbound(result.rows[0]);
       }
@@ -1658,6 +1661,11 @@ export class PostgresPlatformRepository {
       [input.agentId ?? null, input.organizationId ?? null, input.channels, bindingIds, limit, input.workerId, leaseId, leaseSeconds]
     );
     return { leaseId, deliveries: rows.map(mapChannelOutbound) };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    const { rows } = await this.pool.query("SELECT * FROM channel_outbox WHERE id=$1", [outboundId]);
+    return mapChannelOutbound(rows[0]);
   }
 
   async recordChannelDeliveryReceipt(input) {
