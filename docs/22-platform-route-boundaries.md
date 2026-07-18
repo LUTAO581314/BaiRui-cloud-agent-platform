@@ -43,6 +43,8 @@ organization scope, audit write, transaction, status code, and error code.
   the embedded mutation signature before calling the Control Authority;
 - internal control routes must never fall back to legacy repository lease or
   receipt transitions when the Control Authority is unavailable;
+- canonical control delivery has one HTTP entry per operation: `/leases` and
+  `/receipts`; legacy command-prefixed paths must not alias the Authority;
 - administrator routes must not gain access to conversation, prompt, or memory
   bodies;
 - Runtime routes must resolve the Agent through the authenticated owner before

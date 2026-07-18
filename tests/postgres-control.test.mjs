@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { PostgresPlatformRepository } from "../packages/db/postgres-repository.mjs";
 
@@ -10,12 +10,13 @@ test("PostgreSQL reuses an approved configuration when failed provisioning is re
   const userId = `user_retry_${suffix}`;
   const agentId = `agent_retry_${suffix}`;
   const serverId = `server_retry_${suffix}`;
+  const keyHash = (purpose) => createHash("sha256").update(`postgres-control-retry:${purpose}:${suffix}`).digest("hex");
   const request = {
     agentId,
     requestedBy: userId,
     provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" },
     secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { generation: 1 }, hermesApiServerKey: { generation: 1 }, agentControlToken: { generation: 1 } },
-    agentCredentialHash: "d".repeat(64),
+    agentCredentialHash: keyHash("runtime-first"),
     agentCredentialHint: "test"
   };
   try {
@@ -29,7 +30,7 @@ test("PostgreSQL reuses an approved configuration when failed provisioning is re
     await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "accepted" });
     await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "running" });
     await repository.recordCommandReceipt({ commandId: leased.command_id, serverId, attempt: leased.attempt, state: "failed", errorCode: "docker_unavailable", errorSummary: "Control executor failed (docker_unavailable)" });
-    const retry = await repository.requestAgentProvisioning({ ...request, secretEnvelope: { ...request.secretEnvelope, agentControlToken: { generation: 2 } }, agentCredentialHash: "e".repeat(64) });
+    const retry = await repository.requestAgentProvisioning({ ...request, secretEnvelope: { ...request.secretEnvelope, agentControlToken: { generation: 2 } }, agentCredentialHash: keyHash("runtime-retry") });
     assert.notEqual(retry.command.id, first.command.id);
     assert.equal(retry.command.arguments.config_revision_id, first.command.arguments.config_revision_id);
     const deployments = await repository.pool.query("SELECT status,desired_state_version FROM control_deployments WHERE agent_id=$1 ORDER BY created_at", [agentId]);
@@ -48,16 +49,17 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
   const agentId = `agent_pg_${suffix}`;
   const runtimeId = `runtime_pg_${suffix}`;
   const serverId = `server_pg_${suffix}`;
+  const keyHash = (purpose) => createHash("sha256").update(`postgres-control:${purpose}:${suffix}`).digest("hex");
   try {
     await repository.createOrganization({ id: organizationId, name: "PostgreSQL Control Test" });
     await repository.createUser({ id: userId, organizationId, email: `${suffix}@postgres.test`, displayName: "Postgres User", passwordHash: "not-used", role: "user" });
     await repository.createAgent({ id: agentId, organizationId, ownerUserId: userId, name: "Postgres Agent" });
     await repository.createAgentRuntime({ id: runtimeId, organizationId, ownerUserId: userId, agentId, workspaceRef: `workspace:${agentId}` });
     await repository.createServer({ id: serverId, organizationId, name: "Postgres Host", status: "healthy" });
-    await repository.createServerCredential({ id: `server_cred_${suffix}`, serverId, keyHash: "a".repeat(64), keyHint: "test", createdBy: userId });
+    await repository.createServerCredential({ id: `server_cred_${suffix}`, serverId, keyHash: keyHash("server"), keyHint: "test", createdBy: userId });
     assert.equal(await repository.claimMachineNonce({ credentialType: "server", credentialId: `server_cred_${suffix}`, nonce: `nonce_${suffix}_1234567890`, timestampMs: Date.now(), expiresAt: new Date(Date.now() + 600_000).toISOString() }), true);
     assert.equal(await repository.claimMachineNonce({ credentialType: "server", credentialId: `server_cred_${suffix}`, nonce: `nonce_${suffix}_1234567890`, timestampMs: Date.now(), expiresAt: new Date(Date.now() + 600_000).toISOString() }), false);
-    const provision = await repository.requestAgentProvisioning({ agentId, requestedBy: userId, provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" }, secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { encrypted: true }, hermesApiServerKey: { encrypted: true }, agentControlToken: { encrypted: true } }, agentCredentialHash: "b".repeat(64), agentCredentialHint: "test" });
+    const provision = await repository.requestAgentProvisioning({ agentId, requestedBy: userId, provider: { provider: "compatible", baseUrl: "https://models.example.test/v1", model: "example/model" }, secretEnvelope: { providerApiKey: { encrypted: true }, runtimeSharedSecret: { encrypted: true }, hermesApiServerKey: { encrypted: true }, agentControlToken: { encrypted: true } }, agentCredentialHash: keyHash("runtime"), agentCredentialHint: "test" });
     assert.equal(provision.command.action, "deployment.provision");
     const commands = await repository.leaseControlCommands({ serverId, limit: 5, leaseSeconds: 120 });
     assert.equal(commands.length, 1);
@@ -112,7 +114,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.deepEqual(channel.credentialEnvelope, { encrypted: true });
     assert.equal(channel.connectionGeneration, 1);
     assert.equal((await repository.listAgentChannelBindings(organizationId, userId, agentId)).length, 1);
-    const channelWorker = await repository.createChannelWorkerCredential({ id: `channel_worker_cred_${suffix}`, workerId: `channel_worker_${suffix}`, organizationId, allowedChannels: ["feishu"], keyHash: "c".repeat(64), keyHint: "test", createdBy: userId });
+    const channelWorker = await repository.createChannelWorkerCredential({ id: `channel_worker_cred_${suffix}`, workerId: `channel_worker_${suffix}`, organizationId, allowedChannels: ["feishu"], keyHash: keyHash("channel-worker"), keyHint: "test", createdBy: userId });
     assert.equal((await repository.getActiveChannelWorkerCredential(channelWorker.workerId)).organizationId, organizationId);
     assert.equal(await repository.claimMachineNonce({ credentialType: "channel-worker", credentialId: channelWorker.id, nonce: `channel_nonce_${suffix}_1234567890`, timestampMs: Date.now(), expiresAt: new Date(Date.now() + 600_000).toISOString() }), true);
     assert.deepEqual((await repository.listChannelBindingsForWorker({ organizationId, allowedChannels: ["feishu"], channels: ["feishu", "qq"] })).map((item) => item.id), [channel.id]);

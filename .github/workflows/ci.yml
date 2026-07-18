@@ -134,6 +134,10 @@ jobs:
       - run: npm ci
       - run: npm run db:migrate
       - run: npm run db:schema:check
+      - name: Exercise C00-03 PostgreSQL Authority model
+        env:
+          BAIRUI_POSTGRES_INTEGRATION: "1"
+        run: node --test tests/postgres-control-authority.test.mjs
       - name: Exercise PostgreSQL control transactions
         env:
           BAIRUI_POSTGRES_INTEGRATION: "1"

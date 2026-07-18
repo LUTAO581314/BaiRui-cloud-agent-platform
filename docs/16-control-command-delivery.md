@@ -14,22 +14,24 @@ heartbeats use an Agent Runtime Credential.
 ## Lease and receipt lifecycle
 
 ```text
-queued -> leased -> accepted -> running -> succeeded
-                                     \-> failed/cancelled
+queued -> leased -> accepted -> running -> completion_candidate
+                                     \-> failed/cancelled/expired
+completion_candidate -> verifying -> command.verified -> succeeded
 ```
 
 PostgreSQL leases commands with `FOR UPDATE SKIP LOCKED`. Expired leases return
-to the queue while expired commands do not. Receipts are idempotent by command,
-attempt, and state. A successful provision receipt records a private Runtime
-route and moves the Runtime to `starting`; only a later healthy Agent heartbeat
-moves it to `ready`.
+to the queue while expired commands do not. Canonical receipts are idempotent
+by command, lease, attempt, idempotency key, and event sequence. Executor
+completion is only a candidate; final success requires Authority verification
+against a newer matching Observation and evidence.
 
 ## Secret delivery
 
-Provider, Hermes API, Runtime Boundary, and Agent control credentials are
-encrypted inside an Agent-scoped configuration revision. They are decrypted
-only for an authenticated Server lease response over TLS. They are never
-returned to `/app`, `/admin`, logs, telemetry, command arguments, or receipts.
+Canonical leases contain only opaque `secret_refs`. Provider, Hermes API,
+Runtime Boundary, and Agent control credentials remain inside the local
+credential resolver and are never returned to `/app`, `/admin`, logs,
+telemetry, command arguments, or receipts. Legacy configuration envelopes in
+the original repositories are migration input, not an HTTP delivery path.
 
 ## Supervisor
 

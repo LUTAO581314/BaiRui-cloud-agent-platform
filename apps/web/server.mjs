@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { createPlatformServer } from "./app.mjs";
 import { MemoryPlatformRepository } from "../../packages/db/memory-repository.mjs";
 import { PostgresPlatformRepository } from "../../packages/db/postgres-repository.mjs";
+import { ControlAuthorityRepository } from "../../packages/db/control-authority-repository.mjs";
+import { ControlAuthorityService } from "../../packages/control-authority/service.mjs";
 import { hashPassword } from "../../packages/auth/password.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
 import { BairuiRuntimeClient, workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
@@ -28,6 +30,9 @@ if (production && !databaseUrl) throw new Error("DATABASE_URL is required in pro
 const repository = databaseUrl
   ? new PostgresPlatformRepository({ connectionString: databaseUrl, ssl: process.env.BAIRUI_DATABASE_SSL === "1" ? { rejectUnauthorized: true } : undefined })
   : new MemoryPlatformRepository();
+const controlAuthority = databaseUrl
+  ? new ControlAuthorityService({ repository: new ControlAuthorityRepository({ pool: repository.pool }) })
+  : undefined;
 const providerEncryptionKey = process.env.BAIRUI_PROVIDER_ENCRYPTION_KEY ?? (production ? "" : "development-provider-encryption-key-change-me");
 if (!providerEncryptionKey) throw new Error("BAIRUI_PROVIDER_ENCRYPTION_KEY is required in production");
 const providerVault = new SecretEnvelope(providerEncryptionKey);
@@ -94,6 +99,7 @@ const server = createPlatformServer({
   allowRegistration: process.env.BAIRUI_ALLOW_REGISTRATION === "1",
   agentIngestToken: process.env.BAIRUI_AGENT_INGEST_TOKEN,
   runtimeClient,
+  controlAuthority,
   providerVault,
   licensePrivateKey: process.env.BAIRUI_LICENSE_PRIVATE_KEY?.replaceAll("\\n", "\n"),
   styles: fs.readFileSync(path.join(appDir, "public", "styles.css"), "utf8"),

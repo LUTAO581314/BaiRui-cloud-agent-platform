@@ -354,7 +354,7 @@ test("canonical delivery fails closed while legacy repository state remains migr
   const healthyServer = (await context.repository.listServers("org_a")).find((server) => server.id === serverRegistration.server.id);
   assert.equal(healthyServer.status, "healthy");
   assert.ok(healthyServer.lastSeenAt);
-  const replayPath = "/api/internal/control-plane/commands/lease";
+  const replayPath = "/api/internal/control-plane/leases";
   const replayBody = JSON.stringify({ serverId: serverRegistration.server.id, limit: 1 });
   const replayTimestamp = Date.now().toString();
   const replayNonce = "fixed_nonce_value_1234567890";

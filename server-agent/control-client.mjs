@@ -93,6 +93,9 @@ function assertLeaseBinding(lease, request, options) {
   })) {
     if (lease[field] !== expected) throw controlError(field === "server_id" ? "server_mismatch" : "owner_mismatch", `Lease ${field} does not match its request`);
   }
+  if (lease.revision !== request.revision || lease.sequence <= request.sequence) {
+    throw controlError("sequence_conflict", "Lease revision or sequence does not advance its request");
+  }
   if (!verifyControlMutationSignature(lease, { token: options.token, expectedKeyId: options.platformKeyId ?? options.serverId, now: nowMs(options) })) {
     throw controlError("invalid_signature", "Lease mutation signature is invalid");
   }
@@ -157,7 +160,7 @@ export async function leaseControlCommands(options) {
   const response = await signedMachinePost({
     ...options,
     machineId: options.serverId,
-    path: "/api/internal/control-plane/commands/lease",
+    path: "/api/internal/control-plane/leases",
     payload: request
   });
   const body = await response.json().catch(() => ({}));
@@ -216,7 +219,7 @@ export async function sendCommandReceipt(options) {
     ...(opaqueReference(options.resultRef) ? { result_ref: options.resultRef } : {}),
     ...(opaqueReference(options.endpointRef) ? { endpoint_ref: options.endpointRef } : {})
   }, options));
-  const path = `/api/internal/control-plane/commands/${encodeURIComponent(command.command_id)}/receipts`;
+  const path = "/api/internal/control-plane/receipts";
   const response = await signedMachinePost({ ...options, machineId: options.serverId, path, payload: receipt });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw parseControlResponse(body, "command_receipt_failed", response.status);
