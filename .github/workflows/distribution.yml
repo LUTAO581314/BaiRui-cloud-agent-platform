@@ -145,7 +145,7 @@ jobs:
           mkdir -p dist/bundle
           node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
           node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
-          cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
+          cp distribution/compose.yaml distribution/compose.external-proxy.yaml distribution/Caddyfile dist/bundle/
           cp distribution/install.sh dist/install.sh
           chmod 0755 dist/install.sh
           tar -czf dist/bairui-agent.tar.gz -C dist/bundle .

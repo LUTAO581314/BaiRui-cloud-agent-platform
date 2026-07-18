@@ -1,0 +1,6 @@
+services:
+  caddy:
+    environment:
+      BAIRUI_SITE_ADDRESS: ":8080"
+    ports: !override
+      - "${BAIRUI_EXTERNAL_PROXY_BIND:?BAIRUI_EXTERNAL_PROXY_BIND is required}:8080"
