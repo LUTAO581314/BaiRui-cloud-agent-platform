@@ -12,21 +12,31 @@ test("BaiRui workspace is exposed through a native BaiLongma extension slot", ()
   const transformed = transformBailongmaAppShell(source);
   assert.match(transformed, /createBairuiExtensionHost\(\)/);
   assert.match(transformed, /data-bairui-extension-host/);
+  assert.match(transformed, /class="settings-overlay"/);
+  assert.match(transformed, /class="settings-modal bairui-workspace-modal"/);
+  assert.match(transformed, /class="settings-nav" data-bairui-workspace-nav/);
+  assert.match(transformed, /root\.dataset\.bairuiShell = "true"/);
+  assert.match(transformed, /createSecondaryPanel\(\),\s+createThemeSwitcher\(\),\s+createPanelTabs\(\)/);
   assert.match(transformed, /createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
+  const markup = transformed.slice(transformed.indexOf("export function createBrainUiMarkup"));
+  assert.doesNotMatch(markup, /createSettingsModal\(\)/);
 });
 
-test("BaiRui workspace consumes the native slot and keeps a compatibility fallback", () => {
+test("BaiRui workspace consumes the native slot without creating a second page root", () => {
   const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
-  assert.match(workspace, /document\.querySelector\("\[data-bairui-extension-host\]"\)/);
-  assert.match(workspace, /extensionHost\.appendChild\(root\)/);
+  assert.match(workspace, /root = document\.querySelector\("\[data-bairui-extension-host\]"\)/);
+  assert.match(workspace, /root\.hidden = false/);
+  assert.match(workspace, /root\.inert = false/);
   assert.doesNotMatch(workspace, /document\.body\.appendChild\(root\)/);
+  assert.doesNotMatch(workspace, /root\.innerHTML/);
 });
 
 test("BaiRui workspace views are registered through an extension registry", () => {
   const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
-  for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register", "workspaceRegistry.get(view)", "bairui:workspace-registry-changed", "registerBuiltInViews"]) {
+  for (const evidence of ["BairuiWorkspaceRegistry", "register(definition)", "workspaceRegistry.get(view)", "workspaceRegistry.list()", "bairui:workspace-registry-changed", "extension.render(context())"]) {
     assert.match(workspace, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.doesNotMatch(workspace, /function render[A-Z]|\.innerHTML\s*=/);
 });
 
 test("the usage view is a separately served workspace extension", () => {
@@ -90,4 +100,31 @@ test("the skills view stays Agent-scoped while using Hermes discovery and prefer
     assert.match(skills, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.doesNotMatch(skills, /window\.fetch\s*=|window\.EventSource\s*=/);
+});
+
+test("remaining management views are isolated workspace extensions", () => {
+  const definitions = [
+    ["bairui-workspace-runs.js", "runs", ["bridge.openRunEvents", "agentApi(\"/runs?limit=50\")", "approval.request"]],
+    ["bairui-workspace-jobs.js", "jobs", ["agentApi(\"/jobs?include_disabled=true\")", "data-edit-job", "编辑定时任务"]],
+    ["bairui-workspace-hermes.js", "hermes", ["CAPABILITY_GROUPS", "/hermes/operations/", "Agent 范围"]],
+    ["bairui-workspace-settings.js", "settings", ["agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "个人连接"]]
+  ];
+  for (const [file, id, evidence] of definitions) {
+    const source = fs.readFileSync(path.join(root, "apps", "web", "public", file), "utf8");
+    assert.match(source, /window\.BairuiWorkspaceRegistry/);
+    assert.match(source, new RegExp(`id: ["']${id}["']`));
+    for (const value of evidence) assert.match(source, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(source, /window\.fetch\s*=|window\.EventSource\s*=/);
+  }
+});
+
+test("the user shell has one scoped BaiLongma visual system", () => {
+  const css = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-bailongma.css"), "utf8");
+  const adapter = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-bailongma.js"), "utf8");
+  const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
+  assert.doesNotMatch(css, /!important|\.bw-dialog|\.bw-form|\.bairui-card-dialog/);
+  const ruleLines = css.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes("{") && !line.startsWith("@"));
+  for (const line of ruleLines) assert.match(line, /^body\[data-bairui-shell\]/, `unscoped BaiRui CSS rule: ${line}`);
+  assert.doesNotMatch(adapter, /href\s*=\s*["']\/admin|总控后台|管理后台/);
+  assert.doesNotMatch(workspace, /\.bw-dialog|\.bw-form|function render[A-Z]|\.innerHTML\s*=/);
 });

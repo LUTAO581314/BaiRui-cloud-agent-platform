@@ -566,7 +566,11 @@ export function createPlatformApp(options) {
       "bairui-workspace-hotspots.js": options.bairuiWorkspaceHotspotsScript,
       "bairui-workspace-usage.js": options.bairuiWorkspaceUsageScript,
       "bairui-workspace-memory.js": options.bairuiWorkspaceMemoryScript,
-      "bairui-workspace-skills.js": options.bairuiWorkspaceSkillsScript
+      "bairui-workspace-skills.js": options.bairuiWorkspaceSkillsScript,
+      "bairui-workspace-runs.js": options.bairuiWorkspaceRunsScript,
+      "bairui-workspace-jobs.js": options.bairuiWorkspaceJobsScript,
+      "bairui-workspace-hermes.js": options.bairuiWorkspaceHermesScript,
+      "bairui-workspace-settings.js": options.bairuiWorkspaceSettingsScript
     }
   });
 

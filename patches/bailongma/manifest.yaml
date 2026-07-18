@@ -31,9 +31,9 @@
       "kind": "source-transform",
       "target": "src/ui/brain-ui/app-shell.js",
       "handler": "transformBailongmaAppShell",
-      "anchors": ["const createPanelTabs", "createSecondaryPanel(),"],
+      "anchors": ["const createPanelTabs", "const createThemeSwitcher", "createSecondaryPanel(),", "createSettingsModal(),", "root.dataset.theme = \"midnight\";"],
       "tests": ["tests/bailongma-ui.test.mjs"],
-      "removalCondition": "BaiLongma exposes the panel tab extension point natively"
+      "removalCondition": "BaiLongma renders its native theme switcher and panel tabs and exposes a host-owned settings extension surface"
     },
     {
       "id": "runtime-brain-host-adapter",

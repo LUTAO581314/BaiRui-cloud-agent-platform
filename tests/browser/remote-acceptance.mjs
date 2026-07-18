@@ -7,6 +7,9 @@ import { fixtureCredentials, startBrowserFixture } from "./fixture-server.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const artifacts = path.join(root, "test-results", "remote-browser-acceptance");
+const workspaceHost = "[data-bairui-extension-host]";
+const workspaceNav = "[data-bairui-workspace-nav]";
+const workspaceViews = ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "hermes", "settings"];
 fs.mkdirSync(artifacts, { recursive: true });
 
 async function login(page, baseUrl, credentials, expectedPath) {
@@ -23,6 +26,21 @@ async function login(page, baseUrl, credentials, expectedPath) {
 async function assertNoHorizontalOverflow(page) {
   const metrics = await page.evaluate(() => ({ documentWidth: document.documentElement.scrollWidth, viewportWidth: document.documentElement.clientWidth }));
   assert.ok(metrics.documentWidth <= metrics.viewportWidth + 1, `horizontal overflow: ${metrics.documentWidth}px > ${metrics.viewportWidth}px`);
+}
+
+async function waitForVisibleGraph(page, browserErrors = []) {
+  const graph = page.locator("#graph");
+  await graph.waitFor({ state: "attached" });
+  try {
+    await graph.waitFor({ state: "visible", timeout: 10_000 });
+  } catch {
+    const diagnostics = await graph.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { bodyClass: document.body.className, display: style.display, visibility: style.visibility, opacity: style.opacity, width: rect.width, height: rect.height, documentState: document.readyState };
+    });
+    throw new Error(`BaiLongma graph did not become visible: ${JSON.stringify({ ...diagnostics, browserErrors })}`);
+  }
 }
 
 async function waitForWorkspaceText(page, value) {
@@ -49,9 +67,9 @@ async function ordinaryDesktop(browser, fixture) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const browserErrors = [];
-  page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("pageerror", (error) => browserErrors.push(error.stack || error.message));
   await login(page, baseUrl, fixtureCredentials.user, "/app");
-  await page.locator("#graph").waitFor({ state: "visible" });
+  await waitForVisibleGraph(page, browserErrors);
   await page.waitForFunction(() => document.querySelectorAll("#graph circle").length >= 3);
   await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
   await page.locator(".bairui-chat-header").waitFor({ state: "visible" });
@@ -86,6 +104,9 @@ async function ordinaryDesktop(browser, fixture) {
   });
   assert.ok(chatGeometry.top < 100 && chatGeometry.bottom > chatGeometry.viewport - 40 && chatGeometry.height > chatGeometry.viewport * 0.75, `chat column is not viewport anchored: ${JSON.stringify(chatGeometry)}`);
   assert.equal(await page.locator('a[href="/admin"]').count(), 0, "ordinary users must not receive an admin link");
+  assert.equal(await page.locator(".brain-app, .brain-header, .brain-view-tabs").count(), 0, "legacy handcrafted user shell must not exist");
+  assert.equal(await page.locator("#settings-overlay").count(), 0, "the local BaiLongma settings page must not create a second settings system");
+  assert.equal(await page.locator(workspaceHost).count(), 1, "the user page must expose exactly one extension workspace host");
   assert.equal((await page.request.get(`${baseUrl}/api/admin/overview`)).status(), 403);
   assert.equal((await page.request.get(`${baseUrl}/admin`)).status(), 404);
 
@@ -103,7 +124,6 @@ async function ordinaryDesktop(browser, fixture) {
   await initializationDialog.locator("[data-later]").click();
   await initializationDialog.waitFor({ state: "detached" });
 
-  const views = ["conversations", "agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"];
   const workspaceButton = page.locator('.bairui-platform-tools [data-action="workspace"]');
   const hitTest = await workspaceButton.evaluate((button) => {
     const rect = button.getBoundingClientRect();
@@ -113,16 +133,16 @@ async function ordinaryDesktop(browser, fixture) {
   });
   process.stdout.write(`Desktop toolbar hit test: ${JSON.stringify(hitTest)}\n`);
   await workspaceButton.click();
-  await page.locator(".bairui-workspace").waitFor({ state: "visible" });
-  for (const view of views) assert.equal(await page.locator(`.bw-nav [data-view="${view}"]`).count(), 1, `missing user workspace view: ${view}`);
-  await page.locator('.bw-nav [data-view="memory"]').click();
+  await page.locator(workspaceHost).waitFor({ state: "visible" });
+  for (const view of workspaceViews) assert.equal(await page.locator(`${workspaceNav} [data-view="${view}"]`).count(), 1, `missing user workspace view: ${view}`);
+  await page.locator(`${workspaceNav} [data-view="memory"]`).click();
   await waitForWorkspaceText(page, "Hermes memory mapping");
   await page.getByText("Hermes MEMORY.md", { exact: true }).waitFor();
   await page.getByText("Hermes USER.md", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-memory.png"), fullPage: true });
 
-  await page.locator('.bw-nav [data-view="skills"]').click();
+  await page.locator(`${workspaceNav} [data-view="skills"]`).click();
   await waitForWorkspaceText(page, "Runtime Capabilities");
   await page.getByText("Web tools", { exact: true }).waitFor();
   await page.getByText("fixture-hermes-1.0.0", { exact: true }).waitFor();
@@ -130,20 +150,20 @@ async function ordinaryDesktop(browser, fixture) {
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-runtime-capabilities.png"), fullPage: true });
 
-  await page.locator('.bw-nav [data-view="jobs"]').click();
+  await page.locator(`${workspaceNav} [data-view="jobs"]`).click();
   await page.getByText("Daily research", { exact: true }).waitFor();
   await page.locator('[data-edit-job="job_remote"]').click();
-  const jobDialog = page.locator("dialog.bw-dialog");
+  const jobDialog = page.locator("dialog.bairui-extension-dialog");
   await jobDialog.locator('input[name="name"]').fill("Daily verified research");
   await jobDialog.locator('textarea[name="prompt"]').fill("Summarize verified project updates");
   await jobDialog.locator('button[type="submit"]').click();
   await page.getByText("Daily verified research", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, "user-desktop-jobs.png"), fullPage: true });
 
-  await page.locator('.bw-nav [data-view="settings"]').click();
-  await waitForWorkspaceText(page, "第三方授权");
+  await page.locator(`${workspaceNav} [data-view="settings"]`).click();
+  await waitForWorkspaceText(page, "个人连接");
   await page.locator("[data-auth-new]").click();
-  const authorizationDialog = page.locator("dialog.bw-dialog");
+  const authorizationDialog = page.locator("dialog.bairui-extension-dialog");
   await authorizationDialog.locator('select[name="service"]').selectOption("firecrawl");
   await authorizationDialog.locator('input[name="label"]').fill("Remote Firecrawl");
   await authorizationDialog.locator('input[name="endpointUrl"]').fill("https://api.firecrawl.dev/v1");
@@ -154,7 +174,7 @@ async function ordinaryDesktop(browser, fixture) {
   assert.doesNotMatch(authorizationPayload, /remote-browser-firecrawl-secret/);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-settings.png"), fullPage: true });
 
-  await page.locator(".bw-header [data-close]").click();
+  await page.locator("[data-bairui-workspace-close]").click();
   await page.locator("#msg-input").fill("Reply from the Hermes remote fixture");
   const sendGeometry = await page.locator("#send-btn").evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -195,12 +215,58 @@ async function ordinaryDesktop(browser, fixture) {
   await context.close();
 }
 
+async function ordinaryShellViewport(browser, fixture, name, viewport) {
+  const context = await browser.newContext({ viewport });
+  const page = await context.newPage();
+  const browserErrors = [];
+  page.on("pageerror", (error) => browserErrors.push(error.stack || error.message));
+  await login(page, fixture.baseUrl, fixtureCredentials.user, "/app");
+  await waitForVisibleGraph(page, browserErrors);
+  await page.locator(".bairui-platform-tools").waitFor({ state: "visible" });
+  if (browserErrors.length) throw new Error(`${name} initial browser errors: ${browserErrors.join("; ")}`);
+  assert.equal(await page.locator(workspaceHost).count(), 1, `${name}: expected one workspace host`);
+  assert.equal(await page.locator("#settings-overlay").count(), 0, `${name}: local settings overlay must be absent`);
+  assert.equal(await page.locator(".brain-app, .brain-header, .brain-view-tabs").count(), 0, `${name}: legacy user shell must be absent`);
+
+  const left = page.locator("#panel-l1-tab");
+  const right = page.locator("#panel-l2-tab");
+  await left.click();
+  await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && !document.body.classList.contains("l2-collapsed"));
+  assert.equal(await left.getAttribute("aria-expanded"), "false", `${name}: left panel state is not exposed`);
+  assert.equal(await right.getAttribute("aria-expanded"), "true", `${name}: right panel must remain independently open`);
+  assert.equal(await page.locator("#panel-l1").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.locator("#panel-l2").getAttribute("aria-hidden"), "false");
+  await left.click();
+  await right.click();
+  await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  assert.equal(await left.getAttribute("aria-expanded"), "true", `${name}: left panel must remain independently open`);
+  assert.equal(await right.getAttribute("aria-expanded"), "false", `${name}: right panel state is not exposed`);
+  await right.click();
+
+  await page.locator("#settings-btn").click();
+  await page.locator(workspaceHost).waitFor({ state: "visible" });
+  for (const view of workspaceViews) assert.equal(await page.locator(`${workspaceNav} [data-view="${view}"]`).count(), 1, `${name}: missing ${view} extension`);
+  const geometry = await page.locator(`${workspaceHost} .bairui-workspace-modal`).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(geometry.left >= 0 && geometry.top >= 0 && geometry.right <= geometry.viewportWidth && geometry.bottom <= geometry.viewportHeight, `${name}: workspace is outside viewport: ${JSON.stringify(geometry)}`);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(artifacts, `user-${name}-workspace.png`), fullPage: true });
+  await page.locator("[data-bairui-workspace-close]").click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "settings-btn", `${name}: closing the workspace must restore focus`);
+  assert.deepEqual(browserErrors, [], `${name} browser errors: ${browserErrors.join("; ")}`);
+  await context.close();
+}
+
 async function ordinaryMobile(browser, fixture) {
   const { baseUrl, runtimeOperations } = fixture;
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
+  const browserErrors = [];
+  page.on("pageerror", (error) => browserErrors.push(error.stack || error.message));
   await login(page, baseUrl, fixtureCredentials.user, "/app");
-  await page.locator("#graph").waitFor({ state: "visible" });
+  await waitForVisibleGraph(page, browserErrors);
   await page.evaluate(() => { window.__bairuiMobileInitializationDialog = window.bairuiPlatform.initializeAgent({ id: "agent_remote", name: "Hermes Memory Agent" }); });
   const initializationDialog = page.locator(".bairui-onboarding-form");
   await initializationDialog.getByText("初始化 Hermes", { exact: true }).waitFor();
@@ -228,22 +294,24 @@ async function ordinaryMobile(browser, fixture) {
   await page.locator(".bairui-panel-scrim").click({ position: { x: 380, y: 500 } });
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator('.bairui-platform-tools [data-action="workspace"]').click();
-  await page.locator('.bw-nav [data-view="memory"]').click();
+  await page.locator(`${workspaceNav} [data-view="memory"]`).click();
   await waitForWorkspaceText(page, "Hermes memory mapping");
   const mobileChrome = await page.evaluate(() => {
     const toolbar = document.querySelector(".bairui-platform-tools").getBoundingClientRect();
-    const header = document.querySelector(".bw-header").getBoundingClientRect();
-    return { toolbarBottom: toolbar.bottom, headerTop: header.top, headerBottom: header.bottom };
+    const host = document.querySelector("[data-bairui-extension-host]");
+    const header = host.querySelector(".settings-header").getBoundingClientRect();
+    return { toolbarBottom: toolbar.bottom, headerTop: header.top, headerBottom: header.bottom, viewportHeight: innerHeight, hostZIndex: Number(getComputedStyle(host).zIndex), toolbarZIndex: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex) };
   });
-  assert.ok(mobileChrome.headerTop >= mobileChrome.toolbarBottom - 1, `mobile toolbar overlaps workspace header: ${JSON.stringify(mobileChrome)}`);
+  assert.ok(mobileChrome.hostZIndex > mobileChrome.toolbarZIndex, `mobile workspace must cover the toolbar: ${JSON.stringify(mobileChrome)}`);
+  assert.ok(mobileChrome.headerTop >= 0 && mobileChrome.headerBottom <= mobileChrome.viewportHeight, `mobile workspace header is outside the viewport: ${JSON.stringify(mobileChrome)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });
-  await page.locator('.bw-nav [data-view="skills"]').click();
+  await page.locator(`${workspaceNav} [data-view="skills"]`).click();
   await waitForWorkspaceText(page, "Runtime Capabilities");
   await page.getByText("Web tools", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-runtime-capabilities.png"), fullPage: true });
-  await page.locator(".bw-header [data-close]").click();
+  await page.locator("[data-bairui-workspace-close]").click();
   await page.locator("#msg-input").fill("Approval fixture request");
   await page.locator("#send-btn").click();
   const approval = page.locator("dialog.bairui-approval-dialog");
@@ -257,6 +325,7 @@ async function ordinaryMobile(browser, fixture) {
   await approval.locator('[data-choice="deny"]').click();
   await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "runs.approve" && item.input.run_id === "run_approval_remote" && item.input.choice === "deny");
   await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
+  assert.deepEqual(browserErrors, [], `mobile browser errors: ${browserErrors.join("; ")}`);
   await context.close();
 }
 
@@ -281,7 +350,9 @@ async function platformAdmin(browser, baseUrl) {
 const fixture = await startBrowserFixture();
 const browser = await chromium.launch({ headless: true });
 try {
+  await ordinaryShellViewport(browser, fixture, "wide", { width: 1920, height: 1080 });
   await ordinaryDesktop(browser, fixture);
+  await ordinaryShellViewport(browser, fixture, "tablet", { width: 1024, height: 768 });
   await ordinaryMobile(browser, fixture);
   await platformAdmin(browser, fixture.baseUrl);
   process.stdout.write(`Remote browser acceptance passed. Artifacts: ${artifacts}\n`);
