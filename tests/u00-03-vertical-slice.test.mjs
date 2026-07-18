@@ -25,6 +25,26 @@ function sseEvents(text) {
   }));
 }
 
+async function readSseUntil(response, marker) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      if (text.includes(marker)) {
+        await reader.cancel();
+        return text;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return text;
+}
+
 function writeEvidence(report) {
   fs.mkdirSync(evidenceDir, { recursive: true });
   fs.writeFileSync(path.join(evidenceDir, "web-chat.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
@@ -85,7 +105,7 @@ test("U00-03 web chat crosses UI command, BFF, Runtime, storage, events and cont
 
   const sceneEvents = await fetch(`${agentBase}/scenes/brain/events?after=0`, { headers: { cookie: ownerCookie } });
   assert.equal(sceneEvents.status, 200);
-  assert.match(await sceneEvents.text(), /scene\.patch/);
+  assert.match(await readSseUntil(sceneEvents, "scene.patch"), /scene\.patch/);
 
   const heartbeat = await fixture.repository.saveAgentHeartbeat({
     organizationId: scope.organization_id,
