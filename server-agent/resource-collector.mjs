@@ -107,8 +107,9 @@ function readInstances(instancesRoot) {
       const metadata = JSON.parse(fs.readFileSync(path.join(directory, "instance.json"), "utf8"));
       const names = metadata.names ?? {};
       if (![metadata.agentId, metadata.runtimeId, metadata.deploymentId].every((item) => typeof item === "string" && IDENTIFIER.test(item))) continue;
-      if (![names.hermes, names.runtime].every((item) => typeof item === "string" && CONTAINER_NAME.test(item))) continue;
-      instances.push({ directory, metadata, roles: [{ role: "hermes", name: names.hermes }, { role: "runtime-boundary", name: names.runtime }] });
+      const dashboardName = names.dashboard ?? `bairui-hermes-dashboard-${String(names.hermes).replace(/^bairui-hermes-/, "")}`;
+      if (![names.hermes, dashboardName, names.runtime].every((item) => typeof item === "string" && CONTAINER_NAME.test(item))) continue;
+      instances.push({ directory, metadata, roles: [{ role: "hermes", name: names.hermes }, { role: "hermes-dashboard", name: dashboardName }, { role: "runtime-boundary", name: names.runtime }] });
     } catch {}
   }
   return instances;

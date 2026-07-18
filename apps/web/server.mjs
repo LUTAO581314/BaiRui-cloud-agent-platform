@@ -7,7 +7,7 @@ import { MemoryPlatformRepository } from "../../packages/db/memory-repository.mj
 import { PostgresPlatformRepository } from "../../packages/db/postgres-repository.mjs";
 import { hashPassword } from "../../packages/auth/password.mjs";
 import { ROLES } from "../../packages/auth/authorization.mjs";
-import { BairuiRuntimeClient } from "../../packages/server-protocol/runtime-client.mjs";
+import { BairuiRuntimeClient, workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
 import { SecretEnvelope } from "../../packages/security/secret-envelope.mjs";
 import { deriveMachineKey } from "../../packages/security/machine-request.mjs";
 import { createBailongmaUi } from "../../packages/bailongma-ui/index.mjs";
@@ -53,12 +53,31 @@ await repository.recordAudit({ organizationId: organization.id, actorUserId: adm
 const runtimeClient = process.env.BAIRUI_RUNTIME_SHARED_SECRET ? new BairuiRuntimeClient({
   baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
   sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET,
+  systemOwnerScope: {
+    organization_id: process.env.BAIRUI_ORGANIZATION_ID ?? organization.id,
+    user_id: process.env.BAIRUI_USER_ID ?? admin.id,
+    agent_id: process.env.BAIRUI_AGENT_ID ?? "agent_bairui",
+    runtime_id: process.env.BAIRUI_RUNTIME_ID ?? "runtime:platform",
+    workspace_id: process.env.BAIRUI_WORKSPACE_ID ?? workspaceIdFromRef(`hermes:${process.env.BAIRUI_ORGANIZATION_ID ?? organization.id}:${process.env.BAIRUI_USER_ID ?? admin.id}:agent_bairui`)
+  },
   resolveRuntime: async (agent) => {
     const route = await repository.getAgentRuntimeRoute(agent.id);
     if (route?.runtime.endpointRef && route.secretEnvelope?.runtimeSharedSecret) {
-      return { baseUrl: route.runtime.endpointRef, sharedSecret: providerVault.open(route.secretEnvelope.runtimeSharedSecret) };
+      return {
+        baseUrl: route.runtime.endpointRef,
+        sharedSecret: providerVault.open(route.secretEnvelope.runtimeSharedSecret),
+        runtimeId: route.runtime.id,
+        workspaceRef: route.runtime.workspaceRef,
+        workspaceId: workspaceIdFromRef(route.runtime.workspaceRef)
+      };
     }
-    if (agent.id === "agent_bairui") return { baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787", sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET };
+    if (agent.id === "agent_bairui") return {
+      baseUrl: process.env.BAIRUI_RUNTIME_URL ?? "http://127.0.0.1:8787",
+      sharedSecret: process.env.BAIRUI_RUNTIME_SHARED_SECRET,
+      runtimeId: process.env.BAIRUI_RUNTIME_ID ?? "runtime:platform",
+      workspaceId: process.env.BAIRUI_WORKSPACE_ID ?? workspaceIdFromRef(`hermes:${organization.id}:${admin.id}:agent_bairui`),
+      workspaceRef: `hermes:${organization.id}:${admin.id}:agent_bairui`
+    };
     throw Object.assign(new Error("Agent Runtime route is unavailable"), { code: "runtime_route_unavailable", statusCode: 503 });
   }
 }) : undefined;
