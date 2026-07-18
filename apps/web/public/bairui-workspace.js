@@ -165,7 +165,7 @@
     content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
     try {
       const renderer = workspaceRegistry.get(view)?.render;
-      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast });
+      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm, noteBody, download });
     } catch (error) { showError(error); }
   }
 
@@ -481,6 +481,7 @@
     window.addEventListener("bairui:workspace-registry-changed", syncNavigation);
     root.querySelector("[data-close]").addEventListener("click", closeWorkspace);
     window.addEventListener("bairui:workspace-open", () => openWorkspace());
+    window.addEventListener("bairui:workspace-refresh", () => { if (!root.hidden) render(workspaceState.view); });
     document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !root.hidden && !document.querySelector("dialog[open]")) closeWorkspace(); });
   }
 

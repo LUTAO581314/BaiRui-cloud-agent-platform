@@ -102,6 +102,9 @@ diagnostics and administrator tooling where they are needed for evidence.
   must provide an Agent-scoped renderer and an explicit navigation order. The
   registry is the migration boundary for moving built-in views out of the host
   adapter one at a time.
+- The `memory` view is the first migrated module: it owns no storage or
+  projection logic, and calls only the Agent-scoped `/memory-notes` and
+  `/memory-sync` bridge commands while showing real Obsidian/Hermes states.
 - UI code emits Scene intents and host commands. It never calls Hermes,
   PostgreSQL, a Provider or an external service directly.
 - A panel without a real snapshot, command, event, persistence, revision,
