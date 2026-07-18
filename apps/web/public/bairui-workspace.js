@@ -2,11 +2,32 @@
   const bridge = window.bairuiPlatform;
   if (!bridge) return;
 
+  const workspaceRegistry = (() => {
+    if (window.BairuiWorkspaceRegistry) return window.BairuiWorkspaceRegistry;
+    const entries = new Map();
+    const api = {
+      register(definition) {
+        if (!definition || !/^[a-z][a-z0-9-]*$/.test(definition.id || "") || typeof definition.render !== "function") throw new Error("invalid_workspace_extension");
+        entries.set(definition.id, Object.freeze({ id: definition.id, label: String(definition.label || definition.id), order: Number(definition.order) || 100, render: definition.render }));
+        window.dispatchEvent(new CustomEvent("bairui:workspace-registry-changed"));
+      },
+      get(id) { return entries.get(id) || null; },
+      list() { return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)); }
+    };
+    Object.defineProperty(window, "BairuiWorkspaceRegistry", { value: Object.freeze(api), configurable: false, enumerable: false, writable: false });
+    return api;
+  })();
+
   const NAV = [
     ["chat", "对话"], ["conversations", "会话"], ["agents", "Agent"], ["memory", "记忆"],
     ["skills", "技能"], ["channels", "渠道"], ["hotspots", "热点"], ["runs", "运行"],
     ["jobs", "任务"], ["usage", "用量"], ["hermes", "能力中心"], ["settings", "设置"]
   ];
+  function navigationEntries() {
+    const entries = new Map(NAV.map(([id, label], order) => [id, { id, label, order, render: null }]));
+    for (const extension of workspaceRegistry.list()) entries.set(extension.id, extension);
+    return [...entries.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
   const CHANNEL_LABELS = { web: "网页", cli: "CLI", feishu: "飞书", wechat: "微信", qq: "QQ" };
   const STATUS_LABELS = {
     ready: "正常", active: "正常", connected: "已连接", applied: "已生效", pending: "待应用",
@@ -140,11 +161,11 @@
     if (view === "chat") return closeWorkspace();
     workspaceState.view = view;
     root.querySelectorAll("[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
-    title.textContent = NAV.find(([key]) => key === view)?.[1] || "工作区";
+    title.textContent = navigationEntries().find((item) => item.id === view)?.label || "工作区";
     content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
     try {
-      const renderer = { conversations: renderConversations, agents: renderAgents, memory: renderMemory, skills: renderSkills, channels: renderChannels, hotspots: renderHotspots, runs: renderRuns, jobs: renderJobs, usage: renderUsage, hermes: renderHermes, settings: renderSettings }[view];
-      if (renderer) await renderer();
+      const renderer = workspaceRegistry.get(view)?.render;
+      if (renderer) await renderer({ bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm, noteBody, download });
     } catch (error) { showError(error); }
   }
 
@@ -434,15 +455,36 @@
     }));
   }
 
+  function registerBuiltInViews() {
+    const views = {
+      conversations: [1, renderConversations], agents: [2, renderAgents], memory: [3, renderMemory], skills: [4, renderSkills],
+      channels: [5, renderChannels], hotspots: [6, renderHotspots], runs: [7, renderRuns], jobs: [8, renderJobs],
+      usage: [9, renderUsage], hermes: [10, renderHermes], settings: [11, renderSettings]
+    };
+    for (const [id, [order, renderView]] of Object.entries(views)) {
+      const label = NAV.find(([key]) => key === id)?.[1] || id;
+      if (!workspaceRegistry.get(id)) workspaceRegistry.register({ id, label, order, render: renderView });
+    }
+  }
+
   function mount() {
     root = document.createElement("section"); root.className = "bairui-workspace"; root.hidden = true;
     root.innerHTML = `<aside class="bw-nav"><header><img src="/assets/bairui-agent-icon.png" alt=""><strong>bairui-agent</strong></header><nav>${NAV.map(([key, label]) => `<button type="button" data-view="${key}">${escapeHtml(label)}</button>`).join("")}</nav></aside><main><header class="bw-header"><div><span>${escapeHtml(activeAgent()?.name || "Agent")}</span><h1></h1></div><button type="button" data-close title="关闭工作区" aria-label="关闭工作区">×</button></header><div class="bw-content"></div></main>`;
-    document.body.appendChild(root); content = root.querySelector(".bw-content"); title = root.querySelector("h1");
-    root.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => render(button.dataset.view)));
+    const extensionHost = document.querySelector("[data-bairui-extension-host]") || document.body;
+    extensionHost.appendChild(root); content = root.querySelector(".bw-content"); title = root.querySelector("h1");
+    const nav = root.querySelector("nav");
+    const syncNavigation = () => {
+      nav.innerHTML = navigationEntries().map(({ id, label }) => `<button type="button" data-view="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join("");
+      nav.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => render(button.dataset.view)));
+    };
+    syncNavigation();
+    window.addEventListener("bairui:workspace-registry-changed", syncNavigation);
     root.querySelector("[data-close]").addEventListener("click", closeWorkspace);
     window.addEventListener("bairui:workspace-open", () => openWorkspace());
+    window.addEventListener("bairui:workspace-refresh", () => { if (!root.hidden) render(workspaceState.view); });
     document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !root.hidden && !document.querySelector("dialog[open]")) closeWorkspace(); });
   }
 
+  registerBuiltInViews();
   window.addEventListener("DOMContentLoaded", mount, { once: true });
 })();

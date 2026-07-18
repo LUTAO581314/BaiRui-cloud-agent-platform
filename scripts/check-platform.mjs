@@ -26,6 +26,7 @@ const required = [
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
   "apps/web/routes/internal-channels.mjs",
+  "apps/web/routes/workspace-assets.mjs",
   "apps/channel-worker/server.mjs",
   "apps/web/server.mjs",
   "apps/web/views.mjs",
@@ -66,10 +67,12 @@ const required = [
   "packages/bailongma-ui/brain-app-transform.mjs",
   "packages/bailongma-ui/app-shell-transform.mjs",
   "packages/bailongma-ui/host-adapter-transform.mjs",
+  "packages/bailongma-ui/patch-queue.mjs",
   "packages/bailongma-ui/build.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
+  "patches/bailongma/manifest.yaml",
   "packages/security/secret-envelope.mjs",
   "packages/memory/obsidian-note.mjs",
   "packages/memory/projection-coordinator.mjs",
@@ -116,6 +119,9 @@ const required = [
   "apps/web/public/bairui-bailongma.css",
   "apps/web/public/bairui-bailongma.js",
   "apps/web/public/bairui-workspace.js",
+  "apps/web/public/bairui-workspace-usage.js",
+  "apps/web/public/bairui-workspace-memory.js",
+  "apps/web/public/bairui-workspace-skills.js",
   "apps/web/public/bairui-scene-bootstrap.js",
   "docs/10-control-plane-architecture.md",
   "docs/11-control-plane-protocol.md",
@@ -211,8 +217,41 @@ for (const evidence of ["/usr/local/lib/node_modules/npm", "/usr/local/lib/node_
 if (!platformDockerfile.includes("apk add --no-cache docker-cli")) failures.push("Platform image must include the Docker CLI required by Server Agent");
 if (!workflow.includes("Validate Server Agent Docker client")) failures.push("Container CI must execute the Server Agent Docker client from the production image");
 const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/build.mjs"), "utf8");
-for (const evidence of [".bairui-build.json", "transformBailongmaHostApp", "transformBailongmaHostChat", "transformBailongmaHostVoiceWake", "BUILD_INTEGRITY_FILES"]) {
+for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD_INTEGRITY_FILES", "sourceCommit", "patchManifestSha256", "appliedPatches"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
+}
+if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
+if (!bailongmaBuild.includes("/assets/bairui-workspace-memory.js")) failures.push("BaiRui build must inject the modular memory workspace extension");
+if (!bailongmaBuild.includes("/assets/bairui-workspace-skills.js")) failures.push("BaiRui build must inject the modular skills workspace extension");
+const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
+for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
+  if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
+}
+if (!platformDockerfile.includes("COPY patches/bailongma ./patches/bailongma")) failures.push("Platform image must include the BaiLongma patch manifest during UI build");
+const patchQueue = fs.readFileSync(path.join(root, "packages/bailongma-ui/patch-queue.mjs"), "utf8");
+for (const evidence of ["readBailongmaPatchManifest", "applyBailongmaPatchQueue", "source commit", "assertAnchors", "manifestSha256"]) {
+  if (!patchQueue.includes(evidence)) failures.push("Missing BaiLongma patch queue enforcement: " + evidence);
+}
+const appShellTransform = fs.readFileSync(path.join(root, "packages/bailongma-ui/app-shell-transform.mjs"), "utf8");
+for (const evidence of ["createBairuiExtensionHost", "data-bairui-extension-host", "createPanelTabs()", "createConsole()"] ) {
+  if (!appShellTransform.includes(evidence)) failures.push("Missing native BaiLongma extension slot evidence: " + evidence);
+}
+const workspaceAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register", "workspaceRegistry.get(view)", "bairui:workspace-registry-changed", "document.querySelector(\"[data-bairui-extension-host]\")"]) {
+  if (!workspaceAdapter.includes(evidence)) failures.push("Missing BaiRui workspace extension registry evidence: " + evidence);
+}
+if (workspaceAdapter.includes("document.body.appendChild(root)")) failures.push("BaiRui workspace must not append a second root directly to document.body");
+const usageExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-usage.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"usage\"", "agentApi(\"/usage\")", "bw-metrics"]) {
+  if (!usageExtension.includes(evidence)) failures.push("Missing modular usage workspace extension evidence: " + evidence);
+}
+const memoryExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-memory.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {
+  if (!memoryExtension.includes(evidence)) failures.push("Missing modular memory workspace extension evidence: " + evidence);
+}
+const skillsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-skills.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\"/skills\")", "agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "data-skill"]) {
+  if (!skillsExtension.includes(evidence)) failures.push("Missing modular skills workspace extension evidence: " + evidence);
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";

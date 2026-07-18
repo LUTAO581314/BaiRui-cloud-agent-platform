@@ -20,11 +20,14 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
   assert.match(html, /\/assets\/bairui-workspace\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-skills\.js/);
   assert.match(html, /<head>[\s\S]*data-bairui-overlay[\s\S]*<\/head>/);
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
-  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createConsole\(\)/);
+  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
 

@@ -138,6 +138,18 @@ jobs:
         env:
           BAIRUI_POSTGRES_INTEGRATION: "1"
         run: node --test tests/postgres-control.test.mjs
+      - name: Exercise U00-03 PostgreSQL storage evidence
+        env:
+          BAIRUI_POSTGRES_INTEGRATION: "1"
+        run: node --test tests/u00-03-postgres-storage.test.mjs
+      - name: Upload PostgreSQL vertical-slice evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u00-03-postgres-${{ github.sha }}
+          path: test-results/u00-03
+          if-no-files-found: warn
+          retention-days: 14
 
   browser-acceptance:
     runs-on: ubuntu-latest
@@ -154,6 +166,10 @@ jobs:
       - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      - name: Capture BaiLongma source design baseline
+        run: node tests/browser/design-baseline.mjs
+      - name: Exercise U00-03 Platform vertical slice
+        run: node --test tests/u00-03-vertical-slice.test.mjs
       - name: Exercise BaiLongma, Hermes, Obsidian and RBAC browser flows
         run: npm run test:browser:remote
       - name: Upload browser evidence
@@ -161,6 +177,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: remote-browser-acceptance-${{ github.sha }}
-          path: test-results/remote-browser-acceptance
+          path: |
+            test-results/remote-browser-acceptance
+            test-results/u00-03
+            test-results/bailongma-design-baseline
           if-no-files-found: warn
           retention-days: 14
