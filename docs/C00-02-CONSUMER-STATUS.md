@@ -1,8 +1,8 @@
 # C00-02 Platform consumer status
 
-This branch consumes the published `@bairui/contracts` `v2.3.0-rc.1` release
-from the immutable codeload tag URL. The annotated tag resolves to merge commit
-`52b4e19043c5e5a8ce45ddefcde6768c06df9151`; `package-lock.json` records the
+This branch consumes the published `@bairui/contracts` `v2.3.0-rc.2` release
+from the immutable codeload tag URL. The tag resolves to merge commit
+`f5c14223e8f26ff00712f4b0ab65402621a1239e`; `package-lock.json` records the
 downloaded archive integrity.
 
 Canonical control delivery uses `LeaseRequestEnvelope`, `LeaseEnvelope`, and
@@ -22,6 +22,10 @@ New canonical traffic cannot issue or lease `config.apply-user`, cannot contain
 raw secret or configuration documents, and cannot report final `succeeded` in
 an executor receipt. Executor completion is `completion_candidate`; final
 success belongs to an Authority-derived `command.verified` event.
+
+The rc.2 audit release also rejects `approval_id` on canonical non-approval
+commands and leases and requires signature, timestamp, and nonce transport
+headers on every control mutation.
 
 The existing PostgreSQL and memory repositories still implement the legacy
 delivery model. This consumer task does not modify those repositories or their
