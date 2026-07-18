@@ -26,6 +26,7 @@ const required = [
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
   "apps/web/routes/internal-channels.mjs",
+  "apps/web/routes/workspace-assets.mjs",
   "apps/channel-worker/server.mjs",
   "apps/web/server.mjs",
   "apps/web/views.mjs",
@@ -120,6 +121,7 @@ const required = [
   "apps/web/public/bairui-workspace.js",
   "apps/web/public/bairui-workspace-usage.js",
   "apps/web/public/bairui-workspace-memory.js",
+  "apps/web/public/bairui-workspace-skills.js",
   "apps/web/public/bairui-scene-bootstrap.js",
   "docs/10-control-plane-architecture.md",
   "docs/11-control-plane-protocol.md",
@@ -220,6 +222,7 @@ for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD
 }
 if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-memory.js")) failures.push("BaiRui build must inject the modular memory workspace extension");
+if (!bailongmaBuild.includes("/assets/bairui-workspace-skills.js")) failures.push("BaiRui build must inject the modular skills workspace extension");
 const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
 for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
   if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
@@ -245,6 +248,10 @@ for (const evidence of ["BairuiWorkspaceRegistry", "id: \"usage\"", "agentApi(\"
 const memoryExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-memory.js"), "utf8");
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {
   if (!memoryExtension.includes(evidence)) failures.push("Missing modular memory workspace extension evidence: " + evidence);
+}
+const skillsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-skills.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\"/skills\")", "agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "data-skill"]) {
+  if (!skillsExtension.includes(evidence)) failures.push("Missing modular skills workspace extension evidence: " + evidence);
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";

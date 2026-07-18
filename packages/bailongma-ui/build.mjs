@@ -30,6 +30,7 @@ function entryHtml(source) {
 <script src="/assets/bairui-workspace.js" defer></script>
 <script src="/assets/bairui-workspace-usage.js" defer></script>
 <script src="/assets/bairui-workspace-memory.js" defer></script>
+<script src="/assets/bairui-workspace-skills.js" defer></script>
 <script type="module" src="${PREFIX}src/ui/brain-ui/app.js"></script>`);
 }
 

@@ -46,3 +46,11 @@ test("the memory view keeps Obsidian and Hermes synchronization in a separate ex
   const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
   assert.match(workspace, /bairui:workspace-refresh/);
 });
+
+test("the skills view stays Agent-scoped while using Hermes discovery and preferences", () => {
+  const skills = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-skills.js"), "utf8");
+  for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\"/skills\")", "agentApi(\"/runtime/discovery\")", "agentApi(\"/authorizations\")", "data-skill"]) {
+    assert.match(skills, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(skills, /window\.fetch\s*=|window\.EventSource\s*=/);
+});
