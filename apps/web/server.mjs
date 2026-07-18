@@ -106,6 +106,7 @@ const server = createPlatformServer({
   bailongmaOverlayScript: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.js"), "utf8"),
   bairuiWorkspaceScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace.js"), "utf8"),
   bairuiWorkspaceConversationsScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace-conversations.js"), "utf8"),
+  bairuiWorkspaceAgentsScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace-agents.js"), "utf8"),
   bairuiWorkspaceUsageScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace-usage.js"), "utf8"),
   bairuiWorkspaceMemoryScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace-memory.js"), "utf8"),
   bairuiWorkspaceSkillsScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace-skills.js"), "utf8"),

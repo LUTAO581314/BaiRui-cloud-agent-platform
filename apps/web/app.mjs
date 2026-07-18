@@ -561,6 +561,7 @@ export function createPlatformApp(options) {
     scripts: {
       "bairui-workspace.js": options.bairuiWorkspaceScript,
       "bairui-workspace-conversations.js": options.bairuiWorkspaceConversationsScript,
+      "bairui-workspace-agents.js": options.bairuiWorkspaceAgentsScript,
       "bairui-workspace-usage.js": options.bairuiWorkspaceUsageScript,
       "bairui-workspace-memory.js": options.bairuiWorkspaceMemoryScript,
       "bairui-workspace-skills.js": options.bairuiWorkspaceSkillsScript
