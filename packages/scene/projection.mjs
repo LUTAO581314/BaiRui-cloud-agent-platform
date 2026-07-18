@@ -53,15 +53,15 @@ export function scenePatch(event, ownerScope, trace = randomUUID()) {
   });
 }
 
-export function sceneIntent({ sceneId, ownerScope, action, payload = {}, trace = randomUUID() }) {
+export function sceneIntent({ sceneId, ownerScope, action, payload = {}, trace = randomUUID(), intentId = `intent_${randomUUID()}`, createdAt = new Date().toISOString() }) {
   return validateSceneIntent({
     schema_version: "2.0",
     scene_id: assertSceneId(sceneId),
     owner_scope: ownerScope,
-    intent_id: `intent_${randomUUID()}`,
+    intent_id: intentId,
     action,
     payload,
-    created_at: new Date().toISOString(),
+    created_at: createdAt,
     trace: { correlation_id: trace }
   });
 }
