@@ -1,0 +1,66 @@
+schemaVersion: "1.0"
+upstream:
+  repository: xiaoyuanda666-ship-it/BaiLongma
+  path: upstreams/bailongma
+  pinnedCommit: 34d939eabe226c561550079cb810090015b49817
+  updatePolicy: candidate-review
+  license: MIT
+patches:
+  - id: entry-shell-host-injection
+    kind: host-injection
+    target: brain-ui.html
+    handler: entryHtml
+    anchors:
+      - "<script type=\"module\" src=\"./src/ui/brain-ui/app.js\"></script>"
+    tests:
+      - tests/bailongma-patch-queue.test.mjs
+    removalCondition: "BaiRui host bootstrapping is provided by an upstream extension slot"
+  - id: semantic-memory-projection
+    kind: source-transform
+    target: src/ui/brain-ui/app.js
+    handler: transformBailongmaBrainApp
+    anchors:
+      - "addRandomVisualLinks(linkSet);"
+    tests:
+      - tests/bailongma-ui.test.mjs
+    removalCondition: "BaiLongma accepts stable semantic memory edges from its upstream data contract"
+  - id: native-panel-tabs
+    kind: source-transform
+    target: src/ui/brain-ui/app-shell.js
+    handler: transformBailongmaAppShell
+    anchors:
+      - "const createPanelTabs"
+      - "createSecondaryPanel(),"
+    tests:
+      - tests/bailongma-ui.test.mjs
+    removalCondition: "BaiLongma exposes the panel tab extension point natively"
+  - id: runtime-brain-host-adapter
+    kind: source-transform
+    target: src/ui/brain-ui/app.js
+    handler: transformBailongmaHostApp
+    anchors:
+      - "const res = await fetch(`${API}/agent-profile`);"
+      - "const rows = await fetch(`${API}/memories?limit=120`).then(r => r.json());"
+      - "const es = new EventSource(`${API}/events`);"
+    tests:
+      - tests/bailongma-ui.test.mjs
+    removalCondition: "BaiLongma provides an owner-scoped host adapter for profile, memory and events"
+  - id: runtime-chat-host-adapter
+    kind: source-transform
+    target: src/ui/brain-ui/chat.js
+    handler: transformBailongmaHostChat
+    anchors:
+      - "const res = await fetch(`${apiBase}/conversations?limit=${maxHistory}`);"
+      - "const resp = await fetch(`${apiBase}/message`, {"
+    tests:
+      - tests/bailongma-ui.test.mjs
+    removalCondition: "BaiLongma chat accepts an injected host transport contract"
+  - id: runtime-voice-host-adapter
+    kind: source-transform
+    target: src/ui/brain-ui/voice-wake.js
+    handler: transformBailongmaHostVoiceWake
+    anchors:
+      - "try { es = new EventSource('/events'); } catch { return; }"
+    tests:
+      - tests/bailongma-ui.test.mjs
+    removalCondition: "BaiLongma voice wake consumes the host event transport natively"
