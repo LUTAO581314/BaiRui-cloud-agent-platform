@@ -224,6 +224,7 @@ export async function startBrowserFixture() {
   const ownerHash = await hashPassword(fixtureCredentials.user.password);
   const adminHash = await hashPassword(fixtureCredentials.admin.password);
   const owner = await repository.createUser({ id: "user_remote", organizationId: organization.id, email: fixtureCredentials.user.email, displayName: "Remote Owner", passwordHash: ownerHash, role: ROLES.USER });
+  await repository.createUser({ id: "peer_remote", organizationId: organization.id, email: "peer@example.test", displayName: "Remote Peer", passwordHash: ownerHash, role: ROLES.USER });
   const admin = await repository.createUser({ id: "admin_remote", organizationId: organization.id, email: fixtureCredentials.admin.email, displayName: "Remote Administrator", passwordHash: adminHash, role: ROLES.PLATFORM_ADMIN });
   const ownerAgent = await repository.createAgent({ id: "agent_remote", organizationId: organization.id, ownerUserId: owner.id, name: "Hermes Memory Agent", description: "BaiLongma remote acceptance Agent", settings: { preferredModel: "fixture/hermes", locale: "zh-CN", notifications: true } });
   const adminAgent = await repository.createAgent({ id: "agent_admin", organizationId: organization.id, ownerUserId: admin.id, name: "Administrator Agent", settings: { preferredModel: "fixture/hermes" } });
