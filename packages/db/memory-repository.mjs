@@ -24,6 +24,8 @@ export class MemoryPlatformRepository {
   #users = new Map();
   #agents = new Map();
   #agentRuntimes = new Map();
+  #agentScenes = new Map();
+  #agentSceneEvents = [];
   #conversations = new Map();
   #messages = new Map();
   #snapshots = [];
@@ -202,6 +204,44 @@ export class MemoryPlatformRepository {
 
   async getAgentRuntimeByAgent(agentId) {
     return [...this.#agentRuntimes.values()].find((runtime) => runtime.agentId === agentId) ?? null;
+  }
+
+  async ensureAgentScene(input) {
+    const agent = this.#agents.get(input.agentId);
+    if (!agent || agent.organizationId !== input.organizationId || agent.ownerUserId !== input.userId) return null;
+    const key = `${input.agentId}:${input.sceneId}`;
+    const existing = this.#agentScenes.get(key);
+    if (existing) return structuredClone(existing);
+    const now = new Date().toISOString();
+    const scene = { organizationId: input.organizationId, userId: input.userId, agentId: input.agentId, sceneId: input.sceneId, revision: 0, view: structuredClone(input.view ?? { surfaces: [] }), createdAt: now, updatedAt: now };
+    this.#agentScenes.set(key, scene);
+    return structuredClone(scene);
+  }
+
+  async getAgentScene(input) {
+    const scene = this.#agentScenes.get(`${input.agentId}:${input.sceneId}`);
+    if (!scene || scene.organizationId !== input.organizationId || scene.userId !== input.userId) return null;
+    return structuredClone(scene);
+  }
+
+  async applyAgentSceneIntent(input) {
+    const key = `${input.agentId}:${input.sceneId}`;
+    const scene = this.#agentScenes.get(key);
+    if (!scene || scene.organizationId !== input.organizationId || scene.userId !== input.userId) return null;
+    if (input.action === "resync") return { scene: structuredClone(scene), patch: null };
+    const baseRevision = scene.revision;
+    scene.revision += 1;
+    scene.view = structuredClone(input.view ?? scene.view);
+    scene.updatedAt = new Date().toISOString();
+    const patch = { id: input.eventId ?? randomUUID(), organizationId: scene.organizationId, userId: scene.userId, agentId: scene.agentId, sceneId: scene.sceneId, baseRevision, revision: scene.revision, operations: [{ op: "replace", path: "/view", value: structuredClone(scene.view) }], createdAt: scene.updatedAt };
+    this.#agentSceneEvents.push(patch);
+    return { scene: structuredClone(scene), patch: structuredClone(patch) };
+  }
+
+  async listAgentSceneEvents(input) {
+    const afterRevision = Math.max(0, Number(input.afterRevision) || 0);
+    const limit = Math.max(1, Math.min(Number(input.limit) || 100, 500));
+    return this.#agentSceneEvents.filter((event) => event.organizationId === input.organizationId && event.userId === input.userId && event.agentId === input.agentId && event.sceneId === input.sceneId && event.revision > afterRevision).slice(0, limit).map((event) => structuredClone(event));
   }
 
   async listAgentRuntimes(organizationId, ownerUserId) {
@@ -1073,9 +1113,11 @@ export class MemoryPlatformRepository {
     let outbound = this.#channelOutbox.find((item) => item.inboxId === inbox.id) ?? null;
     const now = new Date().toISOString();
     if (input.outbound && !outbound) {
+      const channelConversation = this.#channelConversations.find((item) => item.bindingId === inbox.bindingId && item.channelConversationId === inbox.conversation.channel_conversation_id);
+      if (!channelConversation) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
       outbound = {
         id: input.outbound.id ?? randomUUID(), organizationId: inbox.organizationId, userId: inbox.userId, agentId: inbox.agentId, bindingId: inbox.bindingId, inboxId: inbox.id,
-        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: input.outbound.conversation ?? inbox.conversation, content: input.outbound.content,
+        channel: inbox.channel, channelAccountId: inbox.channelAccountId, conversation: { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: channelConversation.runtimeConversationId }, content: input.outbound.content,
         attachments: input.outbound.attachments ?? [], replyToMessageId: input.outbound.replyToMessageId ?? inbox.externalMessageId, trace: input.outbound.trace ?? inbox.trace,
         state: "pending", attempts: 0, maxAttempts: input.outbound.maxAttempts ?? 8, availableAt: now, workerId: null, leaseToken: null, leaseExpiresAt: null,
         channelMessageId: null, lastErrorCode: null, deliveredAt: null, createdAt: now, updatedAt: now
@@ -1107,6 +1149,10 @@ export class MemoryPlatformRepository {
       .slice(0, Math.max(1, Math.min(Number(input.limit) || 10, 100)));
     for (const item of deliveries) Object.assign(item, { state: "leased", attempts: item.attempts + 1, workerId: input.workerId, leaseToken: `${leaseId}:${item.id}`, leaseExpiresAt: new Date(now + leaseSeconds * 1000).toISOString(), updatedAt: new Date(now).toISOString() });
     return { leaseId, deliveries };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    return this.#channelOutbox.find((item) => item.id === outboundId) ?? null;
   }
 
   async recordChannelDeliveryReceipt(input) {

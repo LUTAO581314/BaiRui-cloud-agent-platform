@@ -116,7 +116,7 @@ async function ordinaryDesktop(browser, fixture) {
   await page.locator(".bairui-workspace").waitFor({ state: "visible" });
   for (const view of views) assert.equal(await page.locator(`.bw-nav [data-view="${view}"]`).count(), 1, `missing user workspace view: ${view}`);
   await page.locator('.bw-nav [data-view="memory"]').click();
-  await page.getByText("Hermes memory mapping", { exact: true }).waitFor();
+  await waitForWorkspaceText(page, "Hermes memory mapping");
   await page.getByText("Hermes MEMORY.md", { exact: true }).waitFor();
   await page.getByText("Hermes USER.md", { exact: true }).waitFor();
   await assertNoHorizontalOverflow(page);
@@ -141,7 +141,7 @@ async function ordinaryDesktop(browser, fixture) {
   await page.screenshot({ path: path.join(artifacts, "user-desktop-jobs.png"), fullPage: true });
 
   await page.locator('.bw-nav [data-view="settings"]').click();
-  await page.getByText("第三方授权", { exact: true }).waitFor();
+  await waitForWorkspaceText(page, "第三方授权");
   await page.locator("[data-auth-new]").click();
   const authorizationDialog = page.locator("dialog.bw-dialog");
   await authorizationDialog.locator('select[name="service"]').selectOption("firecrawl");
@@ -229,7 +229,7 @@ async function ordinaryMobile(browser, fixture) {
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   await page.locator('.bairui-platform-tools [data-action="workspace"]').click();
   await page.locator('.bw-nav [data-view="memory"]').click();
-  await page.getByText("Hermes memory mapping", { exact: true }).waitFor();
+  await waitForWorkspaceText(page, "Hermes memory mapping");
   const mobileChrome = await page.evaluate(() => {
     const toolbar = document.querySelector(".bairui-platform-tools").getBoundingClientRect();
     const header = document.querySelector(".bw-header").getBoundingClientRect();

@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { CHANNEL_PROTOCOL_VERSION } from "@bairui/contracts";
 import { FeishuChannelAdapter } from "./adapters/feishu.mjs";
 import { QQChannelAdapter } from "./adapters/qq.mjs";
 import { WechatOfficialChannelAdapter } from "./adapters/wechat-official.mjs";
 import { adapterErrorCode } from "./adapters/utilities.mjs";
 
 const SUPPORTED_CHANNELS = new Set(["feishu", "wechat", "qq"]);
+
+function sameOwnerScope(left, right) {
+  return ["organization_id", "user_id", "agent_id", "workspace_id"].every((field) => left?.[field] === right?.[field]);
+}
 
 export class ChannelWorker {
   constructor(options) {
@@ -35,10 +40,10 @@ export class ChannelWorker {
   }
 
   async startAdapter(descriptor) {
-    const resolved = await this.platform.resolveBinding(descriptor.id);
-    if (resolved.binding.id !== descriptor.id || resolved.binding.channel !== descriptor.channel) throw Object.assign(new Error("Channel binding scope does not match Worker inventory"), { code: "channel_binding_scope_mismatch" });
+    const resolved = await this.platform.resolveBinding(descriptor.id, descriptor.ownerScope);
+    if (resolved.binding.id !== descriptor.id || resolved.binding.channel !== descriptor.channel || !sameOwnerScope(resolved.binding.owner_scope, descriptor.ownerScope)) throw Object.assign(new Error("Channel binding scope does not match Worker inventory"), { code: "channel_binding_scope_mismatch" });
     const factory = this.adapterFactories[descriptor.channel];
-    const adapter = factory({ binding: { id: descriptor.id, channel: descriptor.channel, workerId: this.workerId }, credentials: resolved.credential.values, platform: this.platform, logger: this.logger });
+    const adapter = factory({ binding: { id: descriptor.id, channel: descriptor.channel, workerId: this.workerId, ownerScope: descriptor.ownerScope }, credentials: resolved.credential.values, platform: this.platform, logger: this.logger });
     try {
       await adapter.start();
       this.adapters.set(descriptor.id, adapter);
@@ -57,7 +62,7 @@ export class ChannelWorker {
     this.refreshing = true;
     try {
       const discovered = typeof this.platform.inventory === "function"
-        ? (await this.platform.inventory({ workerId: this.workerId, channels: this.channels })).bindings.map((item) => ({ id: item.id, channel: item.channel, generation: item.connection_generation }))
+        ? (await this.platform.inventory({ workerId: this.workerId, channels: this.channels })).bindings.map((item) => ({ id: item.id, channel: item.channel, generation: item.connection_generation, ownerScope: item.owner_scope }))
         : this.bindings;
       this.inventoryReady = true;
       const next = new Map(discovered.map((item) => [item.id, item]));
@@ -87,7 +92,8 @@ export class ChannelWorker {
       result = { status: error?.retryable === false ? "failed" : "retryable", errorCode: adapterErrorCode(error, "channel_delivery_failed"), retryAfterMs: 5_000 };
     }
     await this.platform.receipt({
-      schema_version: "1.0",
+      schema_version: CHANNEL_PROTOCOL_VERSION,
+      owner_scope: item.owner_scope,
       outbound_id: item.outbound_id,
       binding_id: item.binding_id,
       lease_token: item.lease_token,

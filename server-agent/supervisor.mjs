@@ -33,6 +33,15 @@ function machineSecret(value, name) {
   return text;
 }
 
+function derivedSecret(value, purpose) {
+  return createHash("sha256").update(`${purpose}\0`, "utf8").update(value, "utf8").digest("base64url");
+}
+
+function workspaceIdFromRef(value) {
+  const workspaceRef = envValue(value, "workspace_ref");
+  return `ws_${createHash("sha256").update(workspaceRef, "utf8").digest("hex").slice(0, 48)}`;
+}
+
 function instanceKey(agentId) {
   return createHash("sha256").update(agentId).digest("hex").slice(0, 16);
 }
@@ -130,7 +139,7 @@ export class AgentSupervisor {
 
   names(agentId) {
     const key = instanceKey(agentId);
-    return { key, network: `bairui-agent-${key}`, hermes: `bairui-hermes-${key}`, runtime: `bairui-runtime-${key}` };
+    return { key, network: `bairui-agent-${key}`, hermes: `bairui-hermes-${key}`, dashboard: `bairui-hermes-dashboard-${key}`, runtime: `bairui-runtime-${key}` };
   }
 
   instancePath(agentId) {
@@ -186,6 +195,63 @@ export class AgentSupervisor {
     return memoryPath;
   }
 
+  prepareHermesDataDirectory(dataPath) {
+    fs.mkdirSync(dataPath, { recursive: true, mode: 0o770 });
+    if (this.hermesDataUid !== null) {
+      const pending = [dataPath];
+      while (pending.length) {
+        const current = pending.pop();
+        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+          const item = path.join(current, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) pending.push(item);
+          fs.chownSync(item, this.hermesDataUid, this.hermesDataUid);
+        }
+        fs.chownSync(current, this.hermesDataUid, this.hermesDataUid);
+      }
+    }
+    fs.chmodSync(dataPath, 0o770);
+    this.prepareHermesMemoryDirectory(dataPath);
+  }
+
+  readEnvironmentFile(file) {
+    const values = {};
+    if (!fs.existsSync(file)) return values;
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+      if (match) values[match[1]] = match[2];
+    }
+    return values;
+  }
+
+  ensureManagementConfiguration(metadata, files) {
+    const runtimeValues = this.readEnvironmentFile(files.runtimeEnv);
+    const apiKey = machineSecret(runtimeValues.HERMES_API_SERVER_KEY, "hermes_api_server_key");
+    const runtimeSecret = machineSecret(runtimeValues.BAIRUI_RUNTIME_SHARED_SECRET, "runtime_shared_secret");
+    const organizationId = runtimeValues.BAIRUI_ORGANIZATION_ID ?? metadata.organizationId;
+    const userId = runtimeValues.BAIRUI_USER_ID ?? metadata.userId;
+    const agentId = runtimeValues.BAIRUI_AGENT_ID ?? metadata.agentId;
+    const workspaceRef = runtimeValues.BAIRUI_WORKSPACE_REF ?? metadata.workspaceRef ?? `hermes:${organizationId}:${userId}:${agentId}`;
+    const dashboardUsername = runtimeValues.HERMES_DASHBOARD_USERNAME ?? "bairui-runtime";
+    const dashboardPassword = runtimeValues.HERMES_DASHBOARD_PASSWORD ?? derivedSecret(apiKey, "hermes-dashboard-password");
+    const runtimeUpdated = {
+      ...runtimeValues,
+      HERMES_MANAGEMENT_URL: `http://${metadata.names.dashboard}:9119`,
+      HERMES_DASHBOARD_USERNAME: dashboardUsername,
+      HERMES_DASHBOARD_PASSWORD: dashboardPassword,
+      BAIRUI_HERMES_DATA_PATH: "/opt/data",
+      BAIRUI_WORKSPACE_ID: runtimeValues.BAIRUI_WORKSPACE_ID ?? workspaceIdFromRef(workspaceRef)
+    };
+    if (JSON.stringify(runtimeValues) !== JSON.stringify(runtimeUpdated)) fs.writeFileSync(files.runtimeEnv, envFile(runtimeUpdated), { mode: 0o600 });
+    if (!files.dashboardEnv || !fs.existsSync(files.dashboardEnv)) {
+      const dashboardSecret = derivedSecret(runtimeSecret, "hermes-dashboard-session");
+      const dashboardPath = files.dashboardEnv ?? path.join(this.instancePath(metadata.agentId), "dashboard.env");
+      fs.writeFileSync(dashboardPath, envFile({ HERMES_HOME: "/opt/data", HERMES_DASHBOARD_BASIC_AUTH_USERNAME: dashboardUsername, HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: dashboardPassword, HERMES_DASHBOARD_BASIC_AUTH_SECRET: dashboardSecret, HERMES_DASHBOARD_BASIC_AUTH_TTL_SECONDS: "43200" }), { mode: 0o600 });
+      files.dashboardEnv = dashboardPath;
+    }
+    return files;
+  }
+
   commandAgentId(command) {
     return identifier(command.arguments?.agent_id ?? command.placement?.agent_id, "agent_id");
   }
@@ -197,9 +263,15 @@ export class AgentSupervisor {
     const hermesApiKey = machineSecret(secrets.hermes_api_server_key, "hermes_api_server_key");
     const runtimeSecret = machineSecret(secrets.runtime_shared_secret, "runtime_shared_secret");
     const agentControlToken = machineSecret(secrets.agent_control_token, "agent_control_token");
+    const dashboardUsername = "bairui-runtime";
+    const dashboardPassword = derivedSecret(hermesApiKey, "hermes-dashboard-password");
+    const dashboardSecret = derivedSecret(runtimeSecret, "hermes-dashboard-session");
+    const workspaceRef = command.placement.workspace_ref ?? command.arguments?.workspace_ref ?? command.config.document.runtime?.workspace_ref ?? `hermes:${command.placement.organization_id}:${command.placement.user_id}:${command.placement.agent_id}`;
+    const workspaceId = workspaceIdFromRef(workspaceRef);
     return {
       hermes: { API_SERVER_ENABLED: "true", API_SERVER_HOST: "0.0.0.0", API_SERVER_KEY: hermesApiKey, OPENAI_API_KEY: secrets.provider_api_key, OPENAI_BASE_URL: provider.base_url, MODEL: provider.model },
-      runtime: { HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_HERMES_DATA_PATH: "/opt/hermes-data", BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: command.placement.agent_id, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" },
+      dashboard: { HERMES_HOME: "/opt/data", HERMES_DASHBOARD_BASIC_AUTH_USERNAME: dashboardUsername, HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: dashboardPassword, HERMES_DASHBOARD_BASIC_AUTH_SECRET: dashboardSecret, HERMES_DASHBOARD_BASIC_AUTH_TTL_SECONDS: "43200" },
+      runtime: { HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_MANAGEMENT_URL: `http://${names.dashboard}:9119`, HERMES_API_SERVER_KEY: hermesApiKey, HERMES_DASHBOARD_USERNAME: dashboardUsername, HERMES_DASHBOARD_PASSWORD: dashboardPassword, BAIRUI_HERMES_DATA_PATH: "/opt/data", BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: command.placement.agent_id, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_WORKSPACE_ID: workspaceId, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" },
       soul: String(command.config.document.agent?.soul_markdown ?? ""),
       agentControlToken
     };
@@ -208,8 +280,9 @@ export class AgentSupervisor {
   writeConfiguration(command, directory, names) {
     const values = this.configurationValues(command, names);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const files = { hermesEnv: path.join(directory, "hermes.env"), runtimeEnv: path.join(directory, "runtime.env"), soul: path.join(directory, "SOUL.md"), controlToken: path.join(directory, "agent-control.token") };
+    const files = { hermesEnv: path.join(directory, "hermes.env"), dashboardEnv: path.join(directory, "dashboard.env"), runtimeEnv: path.join(directory, "runtime.env"), soul: path.join(directory, "SOUL.md"), controlToken: path.join(directory, "agent-control.token") };
     fs.writeFileSync(files.hermesEnv, envFile(values.hermes), { mode: 0o600 });
+    fs.writeFileSync(files.dashboardEnv, envFile(values.dashboard), { mode: 0o600 });
     fs.writeFileSync(files.runtimeEnv, envFile(values.runtime), { mode: 0o600 });
     fs.writeFileSync(files.soul, values.soul, { mode: 0o600 });
     fs.writeFileSync(files.controlToken, values.agentControlToken, { mode: 0o600 });
@@ -217,16 +290,23 @@ export class AgentSupervisor {
   }
 
   async runContainers(metadata, files, images = metadata.images) {
+    this.ensureManagementConfiguration(metadata, files);
     const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
-    const memoryPath = this.prepareHermesMemoryDirectory(dataPath);
+    this.prepareHermesDataDirectory(dataPath);
     if (!await this.exists("network", metadata.names.network)) await this.docker(["network", "create", metadata.names.network]);
     await this.runHermesContainer(metadata, files.hermesEnv, images.hermes);
-    await this.replaceContainer(metadata.names.runtime, ["--network", metadata.names.network, "--env-file", files.runtimeEnv, "--volume", `${memoryPath}:/opt/hermes-data/memories`, "--publish", `127.0.0.1:${metadata.runtimePort}:8787`, images.runtime]);
+    await this.runHermesDashboardContainer(metadata, files.dashboardEnv, images.hermes);
+    await this.replaceContainer(metadata.names.runtime, ["--network", metadata.names.network, "--env-file", files.runtimeEnv, "--volume", `${dataPath}:/opt/data`, "--publish", `127.0.0.1:${metadata.runtimePort}:8787`, images.runtime]);
   }
 
   async runHermesContainer(metadata, hermesEnv, image = metadata.images?.hermes ?? this.hermesImage) {
     const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
     await this.replaceContainer(metadata.names.hermes, ["--network", metadata.names.network, "--env-file", hermesEnv, "--volume", `${dataPath}:/opt/data`, image, "gateway", "run"]);
+  }
+
+  async runHermesDashboardContainer(metadata, dashboardEnv, image = metadata.images?.hermes ?? this.hermesImage) {
+    const dataPath = path.join(this.instancePath(metadata.agentId), "hermes-data");
+    await this.replaceContainer(metadata.names.dashboard, ["--network", metadata.names.network, "--env-file", dashboardEnv, "--volume", `${dataPath}:/opt/data`, image, "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open"]);
   }
 
   async restoreHermesLifecycle(name, previousStatus) {
@@ -246,37 +326,36 @@ export class AgentSupervisor {
     const instancePath = this.instancePath(agentId);
     const dataPath = path.join(instancePath, "hermes-data");
     fs.mkdirSync(dataPath, { recursive: true, mode: 0o700 });
-    const memoryPath = this.prepareHermesMemoryDirectory(dataPath);
+    this.prepareHermesDataDirectory(dataPath);
     const runtimePort = this.allocatePort(agentId);
-    const secrets = command.config.secrets;
-    const provider = command.config.document.provider ?? {};
-    const hermesEnvPath = path.join(instancePath, "hermes.env");
-    const runtimeEnvPath = path.join(instancePath, "runtime.env");
     try {
       const previous = this.readMetadata(agentId);
-      if (previous.idempotencyKey === command.idempotency_key && await this.exists("container", previous.names.hermes) && await this.exists("container", previous.names.runtime)) {
-        return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${previous.runtimePort}`, summary: { containers: 2, runtime_port: previous.runtimePort, idempotent_replay: 1 }, evidenceRefs: [`docker:${previous.names.hermes}`, `docker:${previous.names.runtime}`] };
+      const existing = await Promise.all([previous.names.hermes, previous.names.dashboard, previous.names.runtime].map((name) => this.exists("container", name)));
+      if (previous.idempotencyKey === command.idempotency_key && existing.every(Boolean)) {
+        return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${previous.runtimePort}`, summary: { containers: 3, runtime_port: previous.runtimePort, idempotent_replay: 1 }, evidenceRefs: [`docker:${previous.names.hermes}`, `docker:${previous.names.dashboard}`, `docker:${previous.names.runtime}`] };
       }
     } catch {}
-    const hermesApiKey = machineSecret(secrets.hermes_api_server_key, "hermes_api_server_key");
-    const runtimeSecret = machineSecret(secrets.runtime_shared_secret, "runtime_shared_secret");
-    const agentControlToken = machineSecret(secrets.agent_control_token, "agent_control_token");
-    fs.writeFileSync(hermesEnvPath, envFile({ API_SERVER_ENABLED: "true", API_SERVER_HOST: "0.0.0.0", API_SERVER_KEY: hermesApiKey, OPENAI_API_KEY: secrets.provider_api_key, OPENAI_BASE_URL: provider.base_url, MODEL: provider.model }), { mode: 0o600 });
-    fs.writeFileSync(runtimeEnvPath, envFile({ HERMES_API_URL: `http://${names.hermes}:8642`, HERMES_API_SERVER_KEY: hermesApiKey, BAIRUI_HERMES_DATA_PATH: "/opt/hermes-data", BAIRUI_RUNTIME_SHARED_SECRET: runtimeSecret, BAIRUI_PLATFORM_URL: this.platformUrl, BAIRUI_ORGANIZATION_ID: command.placement.organization_id, BAIRUI_USER_ID: command.placement.user_id, BAIRUI_AGENT_ID: agentId, BAIRUI_RUNTIME_ID: command.placement.runtime_id, BAIRUI_CONFIG_REVISION_ID: command.arguments.config_revision_id, BAIRUI_AGENT_CONTROL_TOKEN: agentControlToken, BAIRUI_RUNTIME_HOST: "0.0.0.0", BAIRUI_RUNTIME_PORT: "8787" }), { mode: 0o600 });
-    fs.writeFileSync(path.join(dataPath, "SOUL.md"), String(command.config.document.agent?.soul_markdown ?? ""), { mode: 0o600 });
+    const values = this.configurationValues(command, names);
+    const files = { hermesEnv: path.join(instancePath, "hermes.env"), dashboardEnv: path.join(instancePath, "dashboard.env"), runtimeEnv: path.join(instancePath, "runtime.env") };
+    fs.writeFileSync(files.hermesEnv, envFile(values.hermes), { mode: 0o600 });
+    fs.writeFileSync(files.dashboardEnv, envFile(values.dashboard), { mode: 0o600 });
+    fs.writeFileSync(files.runtimeEnv, envFile(values.runtime), { mode: 0o600 });
+    fs.writeFileSync(path.join(dataPath, "SOUL.md"), values.soul, { mode: 0o600 });
     mergeSkillConfiguration(path.join(dataPath, "config.yaml"), disabledSkills(command.config.document));
-    fs.writeFileSync(path.join(instancePath, "agent-control.token"), agentControlToken, { mode: 0o600 });
+    fs.writeFileSync(path.join(instancePath, "agent-control.token"), values.agentControlToken, { mode: 0o600 });
 
-    if (!await this.exists("network", names.network)) await this.docker(["network", "create", names.network]);
-    await this.replaceContainer(names.hermes, ["--network", names.network, "--env-file", hermesEnvPath, "--volume", `${dataPath}:/opt/data`, this.hermesImage, "gateway", "run"]);
-    await this.replaceContainer(names.runtime, ["--network", names.network, "--env-file", runtimeEnvPath, "--volume", `${memoryPath}:/opt/hermes-data/memories`, "--publish", `127.0.0.1:${runtimePort}:8787`, this.runtimeImage]);
-    const metadata = { schemaVersion: "1.0", agentId, runtimeId: command.placement.runtime_id, deploymentId: command.deployment_id, runtimePort, names, images: { hermes: this.hermesImage, runtime: this.runtimeImage }, configRevisionId: command.arguments.config_revision_id, idempotencyKey: command.idempotency_key, updatedAt: new Date().toISOString() };
+    const metadata = { schemaVersion: "1.0", agentId, organizationId: command.placement.organization_id, userId: command.placement.user_id, workspaceRef: command.placement.workspace_ref ?? command.arguments?.workspace_ref ?? `hermes:${command.placement.organization_id}:${command.placement.user_id}:${agentId}`, runtimeId: command.placement.runtime_id, deploymentId: command.deployment_id, runtimePort, names, images: { hermes: this.hermesImage, runtime: this.runtimeImage }, configRevisionId: command.arguments.config_revision_id, idempotencyKey: command.idempotency_key, updatedAt: new Date().toISOString() };
+    await this.runContainers(metadata, files);
     fs.writeFileSync(path.join(instancePath, "instance.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
-    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${runtimePort}`, summary: { containers: 2, runtime_port: runtimePort }, evidenceRefs: [`docker:${names.hermes}`, `docker:${names.runtime}`] };
+    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${runtimePort}`, summary: { containers: 3, runtime_port: runtimePort }, evidenceRefs: [`docker:${names.hermes}`, `docker:${names.dashboard}`, `docker:${names.runtime}`] };
   }
 
   readMetadata(agentId) {
-    try { return JSON.parse(fs.readFileSync(path.join(this.instancePath(agentId), "instance.json"), "utf8")); }
+    try {
+      const metadata = JSON.parse(fs.readFileSync(path.join(this.instancePath(agentId), "instance.json"), "utf8"));
+      metadata.names = { ...metadata.names, dashboard: metadata.names?.dashboard ?? this.names(metadata.agentId).dashboard };
+      return metadata;
+    }
     catch { throw Object.assign(new Error("Agent instance metadata is missing"), { code: "instance_not_found" }); }
   }
 
@@ -287,26 +366,27 @@ export class AgentSupervisor {
     const action = command.action;
     if (action === "deployment.start" || action === "deployment.resume") {
       const verb = action === "deployment.resume" ? "unpause" : "start";
-      await this.docker(["container", verb, names.hermes, names.runtime]);
+      await this.docker(["container", verb, names.hermes, names.dashboard, names.runtime]);
     } else if (action === "deployment.stop") {
-      await this.docker(["container", "stop", names.runtime, names.hermes]);
+      await this.docker(["container", "stop", names.runtime, names.dashboard, names.hermes]);
     } else if (action === "deployment.suspend") {
-      await this.docker(["container", "pause", names.hermes, names.runtime]);
+      await this.docker(["container", "pause", names.hermes, names.dashboard, names.runtime]);
     } else if (action === "deployment.delete") {
-      for (const name of [names.runtime, names.hermes]) if (await this.exists("container", name)) await this.docker(["container", "rm", "--force", name]);
+      for (const name of [names.runtime, names.dashboard, names.hermes]) if (await this.exists("container", name)) await this.docker(["container", "rm", "--force", name]);
       if (await this.exists("network", names.network)) await this.docker(["network", "rm", names.network]);
       return { summary: { containers: 0, data_retained: 1 }, evidenceRefs: [`retained:${this.instancePath(agentId)}`] };
     } else {
       throw Object.assign(new Error(`Unsupported deployment lifecycle action: ${action}`), { code: "unsupported_supervisor_action" });
     }
-    return { summary: { containers: 2 }, evidenceRefs: [`docker:${names.hermes}`, `docker:${names.runtime}`] };
+    return { summary: { containers: 3 }, evidenceRefs: [`docker:${names.hermes}`, `docker:${names.dashboard}`, `docker:${names.runtime}`] };
   }
 
   async collectSnapshot(command) {
     const agentId = this.commandAgentId(command);
     const metadata = this.readMetadata(agentId);
-    const states = await Promise.all([metadata.names.hermes, metadata.names.runtime].map((name) => this.exists("container", name)));
-    return { summary: { containers: states.filter(Boolean).length, expected_containers: 2 }, evidenceRefs: [states[0] ? `docker:${metadata.names.hermes}` : `missing:${metadata.names.hermes}`, states[1] ? `docker:${metadata.names.runtime}` : `missing:${metadata.names.runtime}`] };
+    const names = [metadata.names.hermes, metadata.names.dashboard, metadata.names.runtime];
+    const states = await Promise.all(names.map((name) => this.exists("container", name)));
+    return { summary: { containers: states.filter(Boolean).length, expected_containers: 3 }, evidenceRefs: names.map((name, index) => states[index] ? `docker:${name}` : `missing:${name}`) };
   }
 
   async collectResourceSamples(options = {}) {
@@ -337,7 +417,7 @@ export class AgentSupervisor {
     const stagePath = path.join(this.instancePath(agentId), "staged-config", revisionId);
     this.writeConfiguration(command, stagePath, metadata.names);
     fs.writeFileSync(path.join(stagePath, "stage.json"), JSON.stringify({ schemaVersion: "1.0", agentId, revisionId, commandId: command.command_id, stagedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
-    return { summary: { files: 5, staged: 1 }, evidenceRefs: [`config:${revisionId}:staged`] };
+    return { summary: { files: 6, staged: 1 }, evidenceRefs: [`config:${revisionId}:staged`] };
   }
 
   async applyConfiguration(command) {
@@ -350,22 +430,22 @@ export class AgentSupervisor {
     const stagePath = path.join(instancePath, "staged-config", revisionId);
     const rollbackPath = path.join(instancePath, "config-history", metadata.configRevisionId ?? `before-${revisionId}`);
     fs.mkdirSync(rollbackPath, { recursive: true, mode: 0o700 });
-    const active = { hermesEnv: path.join(instancePath, "hermes.env"), runtimeEnv: path.join(instancePath, "runtime.env"), soul: path.join(instancePath, "hermes-data", "SOUL.md"), controlToken: path.join(instancePath, "agent-control.token") };
-    const staged = { hermesEnv: path.join(stagePath, "hermes.env"), runtimeEnv: path.join(stagePath, "runtime.env"), soul: path.join(stagePath, "SOUL.md"), controlToken: path.join(stagePath, "agent-control.token") };
+    const active = { hermesEnv: path.join(instancePath, "hermes.env"), dashboardEnv: path.join(instancePath, "dashboard.env"), runtimeEnv: path.join(instancePath, "runtime.env"), soul: path.join(instancePath, "hermes-data", "SOUL.md"), controlToken: path.join(instancePath, "agent-control.token") };
+    const staged = { hermesEnv: path.join(stagePath, "hermes.env"), dashboardEnv: path.join(stagePath, "dashboard.env"), runtimeEnv: path.join(stagePath, "runtime.env"), soul: path.join(stagePath, "SOUL.md"), controlToken: path.join(stagePath, "agent-control.token") };
     for (const [key, source] of Object.entries(active)) if (fs.existsSync(source)) copyFileSecure(source, path.join(rollbackPath, path.basename(source)));
     try {
       for (const key of Object.keys(active)) copyFileSecure(staged[key], active[key]);
       await this.runContainers(metadata, active, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage });
       this.writeMetadata(agentId, { ...metadata, configRevisionId: revisionId, idempotencyKey: command.idempotency_key });
     } catch (error) {
-      const rollback = { hermesEnv: path.join(rollbackPath, "hermes.env"), runtimeEnv: path.join(rollbackPath, "runtime.env"), soul: path.join(rollbackPath, "SOUL.md"), controlToken: path.join(rollbackPath, "agent-control.token") };
+      const rollback = { hermesEnv: path.join(rollbackPath, "hermes.env"), dashboardEnv: path.join(rollbackPath, "dashboard.env"), runtimeEnv: path.join(rollbackPath, "runtime.env"), soul: path.join(rollbackPath, "SOUL.md"), controlToken: path.join(rollbackPath, "agent-control.token") };
       if (Object.values(rollback).every((file) => fs.existsSync(file))) {
         for (const key of Object.keys(active)) copyFileSecure(rollback[key], active[key]);
         await this.runContainers(metadata, active, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage }).catch(() => {});
       }
       throw error;
     }
-    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { files: 4, containers: 2, applied: 1 }, evidenceRefs: [`config:${revisionId}:applied`, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
+    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { files: 5, containers: 3, applied: 1 }, evidenceRefs: [`config:${revisionId}:applied`, `config:${metadata.configRevisionId ?? "initial"}:rollback-ready`] };
   }
 
   async applyUserConfiguration(command) {
@@ -429,7 +509,7 @@ export class AgentSupervisor {
     fs.mkdirSync(this.backupRoot, { recursive: true, mode: 0o700 });
     const plainPath = path.join(this.backupRoot, `.${backupId}.tar.gz`);
     try {
-      await this.execFile("tar", ["-czf", plainPath, "-C", instancePath, "hermes-data", "instance.json", "hermes.env", "runtime.env"], { encoding: "utf8", timeout: 300_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+      await this.execFile("tar", ["-czf", plainPath, "-C", instancePath, "hermes-data", "instance.json", "hermes.env", "dashboard.env", "runtime.env"], { encoding: "utf8", timeout: 300_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
       const plain = fs.readFileSync(plainPath);
       const iv = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", this.backupKey, iv);
@@ -439,7 +519,7 @@ export class AgentSupervisor {
       size.writeUInt32BE(header.length);
       const output = Buffer.concat([size, header, encrypted]);
       fs.writeFileSync(this.backupPath(backupId), output, { mode: 0o600 });
-      return { summary: { bytes: output.length, encrypted: 1, files: 4 }, evidenceRefs: [`backup:${backupId}`, `sha256:${createHash("sha256").update(output).digest("hex")}`] };
+      return { summary: { bytes: output.length, encrypted: 1, files: 5 }, evidenceRefs: [`backup:${backupId}`, `sha256:${createHash("sha256").update(output).digest("hex")}`] };
     } finally {
       fs.rmSync(plainPath, { force: true });
     }
@@ -492,9 +572,11 @@ export class AgentSupervisor {
     const historyPath = path.join(instancePath, "restore-history", restoreId);
     const activeData = path.join(instancePath, "hermes-data");
     const activeHermesEnv = path.join(instancePath, "hermes.env");
+    const activeDashboardEnv = path.join(instancePath, "dashboard.env");
     const activeRuntimeEnv = path.join(instancePath, "runtime.env");
     const hadData = fs.existsSync(activeData);
     const hadHermesEnv = fs.existsSync(activeHermesEnv);
+    const hadDashboardEnv = fs.existsSync(activeDashboardEnv);
     const hadRuntimeEnv = fs.existsSync(activeRuntimeEnv);
     fs.mkdirSync(this.backupRoot, { recursive: true, mode: 0o700 });
     fs.rmSync(stagePath, { recursive: true, force: true });
@@ -503,34 +585,37 @@ export class AgentSupervisor {
     try {
       const { stdout } = await this.execFile("tar", ["-tzf", plainPath], { encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
       const entries = stdout.split(/\r?\n/).map((item) => item.replace(/^\.\/+/, "").replace(/\/$/, "")).filter(Boolean);
-      if (!entries.length || entries.some((entry) => path.isAbsolute(entry) || entry.includes("\\") || entry.split("/").includes("..") || !["hermes-data", "instance.json", "hermes.env", "runtime.env"].includes(entry.split("/")[0]))) throw Object.assign(new Error("Backup archive contains an unsafe path"), { code: "unsafe_backup_content" });
+      if (!entries.length || entries.some((entry) => path.isAbsolute(entry) || entry.includes("\\") || entry.split("/").includes("..") || !["hermes-data", "instance.json", "hermes.env", "dashboard.env", "runtime.env"].includes(entry.split("/")[0]))) throw Object.assign(new Error("Backup archive contains an unsafe path"), { code: "unsafe_backup_content" });
       await this.execFile("tar", ["-xzf", plainPath, "-C", stagePath, "--no-same-owner", "--no-same-permissions"], { encoding: "utf8", timeout: 300_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
       assertSafeTree(stagePath);
       const archivedMetadata = JSON.parse(fs.readFileSync(path.join(stagePath, "instance.json"), "utf8"));
       if (archivedMetadata.agentId !== agentId) throw Object.assign(new Error("Backup Agent identity does not match"), { code: "backup_identity_mismatch" });
-      for (const required of [path.join(stagePath, "hermes-data"), path.join(stagePath, "hermes.env"), path.join(stagePath, "runtime.env")]) if (!fs.existsSync(required)) throw Object.assign(new Error("Backup content is incomplete"), { code: "invalid_backup" });
+      for (const required of [path.join(stagePath, "hermes-data"), path.join(stagePath, "hermes.env"), path.join(stagePath, "dashboard.env"), path.join(stagePath, "runtime.env")]) if (!fs.existsSync(required)) throw Object.assign(new Error("Backup content is incomplete"), { code: "invalid_backup" });
 
       fs.rmSync(historyPath, { recursive: true, force: true });
       fs.mkdirSync(historyPath, { recursive: true, mode: 0o700 });
       if (hadData) fs.cpSync(activeData, path.join(historyPath, "hermes-data"), { recursive: true, force: false, errorOnExist: true });
       if (hadHermesEnv) copyFileSecure(activeHermesEnv, path.join(historyPath, "hermes.env"));
+      if (hadDashboardEnv) copyFileSecure(activeDashboardEnv, path.join(historyPath, "dashboard.env"));
       if (hadRuntimeEnv) copyFileSecure(activeRuntimeEnv, path.join(historyPath, "runtime.env"));
-      for (const name of [metadata.names.runtime, metadata.names.hermes]) if (await this.exists("container", name)) await this.docker(["container", "stop", name]);
+      for (const name of [metadata.names.runtime, metadata.names.dashboard, metadata.names.hermes]) if (await this.exists("container", name)) await this.docker(["container", "stop", name]);
       try {
         fs.rmSync(activeData, { recursive: true, force: true });
         fs.renameSync(path.join(stagePath, "hermes-data"), activeData);
         copyFileSecure(path.join(stagePath, "hermes.env"), activeHermesEnv);
+        copyFileSecure(path.join(stagePath, "dashboard.env"), activeDashboardEnv);
         copyFileSecure(path.join(stagePath, "runtime.env"), activeRuntimeEnv);
-        await this.runContainers(metadata, { hermesEnv: activeHermesEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage });
+        await this.runContainers(metadata, { hermesEnv: activeHermesEnv, dashboardEnv: activeDashboardEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage });
       } catch (error) {
         fs.rmSync(activeData, { recursive: true, force: true });
         if (hadData) fs.cpSync(path.join(historyPath, "hermes-data"), activeData, { recursive: true });
         if (hadHermesEnv) copyFileSecure(path.join(historyPath, "hermes.env"), activeHermesEnv); else fs.rmSync(activeHermesEnv, { force: true });
+        if (hadDashboardEnv) copyFileSecure(path.join(historyPath, "dashboard.env"), activeDashboardEnv); else fs.rmSync(activeDashboardEnv, { force: true });
         if (hadRuntimeEnv) copyFileSecure(path.join(historyPath, "runtime.env"), activeRuntimeEnv); else fs.rmSync(activeRuntimeEnv, { force: true });
-        if (hadHermesEnv && hadRuntimeEnv) await this.runContainers(metadata, { hermesEnv: activeHermesEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage }).catch(() => {});
+        if (hadHermesEnv && hadDashboardEnv && hadRuntimeEnv) await this.runContainers(metadata, { hermesEnv: activeHermesEnv, dashboardEnv: activeDashboardEnv, runtimeEnv: activeRuntimeEnv }, metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage }).catch(() => {});
         throw error;
       }
-      return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { restored: 1, files: 4, containers: 2 }, evidenceRefs: [`backup:${backupId}:restored`, `restore:${restoreId}:succeeded`, `plaintext-sha256:${digest}`, `restore-history:${restoreId}`] };
+      return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { restored: 1, files: 5, containers: 3 }, evidenceRefs: [`backup:${backupId}:restored`, `restore:${restoreId}:succeeded`, `plaintext-sha256:${digest}`, `restore-history:${restoreId}`] };
     } finally {
       fs.rmSync(plainPath, { force: true });
       fs.rmSync(stagePath, { recursive: true, force: true });
@@ -575,10 +660,10 @@ export class AgentSupervisor {
     const history = path.join(this.instancePath(agentId), "release-history");
     fs.mkdirSync(history, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(history, `${metadata.releaseId ?? "initial"}.json`), JSON.stringify({ id: metadata.releaseId ?? "initial", version: metadata.releaseVersion ?? "initial", images: metadata.images ?? { hermes: this.hermesImage, runtime: this.runtimeImage }, recordedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
-    const files = { hermesEnv: path.join(this.instancePath(agentId), "hermes.env"), runtimeEnv: path.join(this.instancePath(agentId), "runtime.env") };
+    const files = { hermesEnv: path.join(this.instancePath(agentId), "hermes.env"), dashboardEnv: path.join(this.instancePath(agentId), "dashboard.env"), runtimeEnv: path.join(this.instancePath(agentId), "runtime.env") };
     await this.runContainers(metadata, files, descriptor.images);
     this.writeMetadata(agentId, { ...metadata, images: descriptor.images, releaseId: descriptor.id, releaseVersion: descriptor.version, idempotencyKey: command.idempotency_key });
-    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { images: 2, containers: 2, applied: 1 }, evidenceRefs: [`release:${descriptor.id}:applied`, `release:${metadata.releaseId ?? "initial"}:rollback-ready`] };
+    return { runtimeEndpointRef: `http://${this.runtimeAdvertiseHost}:${metadata.runtimePort}`, summary: { images: 2, containers: 3, applied: 1 }, evidenceRefs: [`release:${descriptor.id}:applied`, `release:${metadata.releaseId ?? "initial"}:rollback-ready`] };
   }
 
   async checkUpstream(command) {
@@ -598,7 +683,7 @@ export class AgentSupervisor {
     const agentId = this.commandAgentId(command);
     const metadata = this.readMetadata(agentId);
     const serviceId = identifier(command.arguments?.service_id, "service_id");
-    const container = serviceId === "hermes" ? metadata.names.hermes : serviceId === "runtime-boundary" ? metadata.names.runtime : null;
+    const container = serviceId === "hermes" ? metadata.names.hermes : serviceId === "hermes-dashboard" ? metadata.names.dashboard : serviceId === "runtime-boundary" ? metadata.names.runtime : null;
     if (!container) throw Object.assign(new Error("Service is not restartable"), { code: "unsupported_service" });
     await this.docker(["container", "restart", container]);
     return { summary: { containers: 1, restarted: 1 }, evidenceRefs: [`docker:${container}:restarted`] };

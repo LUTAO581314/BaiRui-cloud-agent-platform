@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { CHANNEL_PROTOCOL_VERSION } from "@bairui/contracts";
 import { adapterErrorCode, jsonResponse, retryAfterMs, stableIdentifier, submitIngress } from "./utilities.mjs";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -46,7 +47,7 @@ export class WechatOfficialChannelAdapter {
   }
 
   async report(status, capabilities, error = null) {
-    return this.platform.health({ schema_version: "1.0", binding_id: this.binding.id, channel: "wechat", worker_id: this.binding.workerId, sequence: ++this.sequence, status, capabilities, adapter_version: "bairui-wechat-official/1.0.0", ...(error ? { error_code: adapterErrorCode(error, "wechat_connection_failed") } : {}), observed_at: new Date().toISOString() });
+    return this.platform.health({ schema_version: CHANNEL_PROTOCOL_VERSION, owner_scope: this.binding.ownerScope, binding_id: this.binding.id, channel: "wechat", worker_id: this.binding.workerId, sequence: ++this.sequence, status, capabilities, adapter_version: "bairui-wechat-official/1.0.0", ...(error ? { error_code: adapterErrorCode(error, "wechat_connection_failed") } : {}), observed_at: new Date().toISOString() });
   }
 
   signature(timestamp, nonce) {
@@ -113,7 +114,8 @@ export class WechatOfficialChannelAdapter {
     const receivedAt = Number(message.CreateTime) * 1000;
     if (!Number.isFinite(receivedAt) || receivedAt <= 0) return text(response, 400, "invalid request");
     await submitIngress(this.platform, {
-      schema_version: "1.0",
+      schema_version: CHANNEL_PROTOCOL_VERSION,
+      owner_scope: this.binding.ownerScope,
       ingress_id: stableIdentifier("wechat-ingress", `wechat:${this.binding.id}:${sourceId}`),
       binding_id: this.binding.id,
       channel: "wechat",

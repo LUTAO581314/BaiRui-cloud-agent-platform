@@ -35,10 +35,13 @@ test("Supervisor provisions fixed local images without executing remote shell or
   assert.ok(calls.some((call) => call.args.includes("local/runtime:verified")));
   const instanceDir = fs.readdirSync(root)[0];
   if (process.platform !== "win32") assert.equal(fs.statSync(path.join(root, instanceDir, "hermes.env")).mode & 0o777, 0o600);
-  assert.match(fs.readFileSync(path.join(root, instanceDir, "runtime.env"), "utf8"), /BAIRUI_HERMES_DATA_PATH=\/opt\/hermes-data/);
+  assert.match(fs.readFileSync(path.join(root, instanceDir, "runtime.env"), "utf8"), /BAIRUI_HERMES_DATA_PATH=\/opt\/data/);
   const runtimeRun = calls.find((call) => call.args.includes("local/runtime:verified"));
   assert.ok(runtimeRun.args.includes("--volume"));
-  assert.ok(runtimeRun.args.some((value) => value.endsWith(":/opt/hermes-data/memories")));
+  assert.ok(runtimeRun.args.some((value) => value.endsWith(":/opt/data")));
+  const dashboardRun = calls.find((call) => call.args.includes("dashboard"));
+  assert.ok(dashboardRun.args.includes("--port"));
+  assert.ok(fs.existsSync(path.join(root, instanceDir, "dashboard.env")));
   assert.doesNotMatch(fs.readFileSync(path.join(root, instanceDir, "instance.json"), "utf8"), /provider-secret|runtime-secret/);
 });
 
@@ -157,14 +160,15 @@ test("Supervisor encrypts, verifies, and restores Agent backups with rollback hi
   let unsafeArchive = false;
   const execFile = async (file, args) => {
     if (file === "tar" && args.includes("-czf")) { fs.writeFileSync(args[args.indexOf("-czf") + 1], "archive-contains-provider-secret"); return { stdout: "", stderr: "" }; }
-    if (file === "tar" && args.includes("-tzf")) return { stdout: unsafeArchive ? "../escape\n" : "hermes-data/\nhermes-data/MEMORY.md\ninstance.json\nhermes.env\nruntime.env\n", stderr: "" };
+    if (file === "tar" && args.includes("-tzf")) return { stdout: unsafeArchive ? "../escape\n" : "hermes-data/\nhermes-data/MEMORY.md\ninstance.json\nhermes.env\ndashboard.env\nruntime.env\n", stderr: "" };
     if (file === "tar" && args.includes("-xzf")) {
       const destination = args[args.indexOf("-C") + 1];
       fs.mkdirSync(path.join(destination, "hermes-data"), { recursive: true });
       fs.writeFileSync(path.join(destination, "hermes-data", "MEMORY.md"), "memory-before-backup");
       fs.writeFileSync(path.join(destination, "instance.json"), JSON.stringify({ agentId: "agent_a" }));
       fs.writeFileSync(path.join(destination, "hermes.env"), "RESTORED_HERMES=1\n");
-      fs.writeFileSync(path.join(destination, "runtime.env"), "RESTORED_RUNTIME=1\n");
+      fs.writeFileSync(path.join(destination, "dashboard.env"), "RESTORED_DASHBOARD=1\n");
+      fs.writeFileSync(path.join(destination, "runtime.env"), "HERMES_API_SERVER_KEY=hermes-secret-that-is-longer-than-thirty-two\nBAIRUI_RUNTIME_SHARED_SECRET=runtime-secret-that-is-longer-than-thirty-two\n");
       return { stdout: "", stderr: "" };
     }
     if (args[1] === "inspect") throw new Error("missing");

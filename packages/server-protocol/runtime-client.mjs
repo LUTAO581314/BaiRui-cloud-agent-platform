@@ -1,5 +1,7 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
+  DATA_PROTOCOL_VERSION,
+  RUNTIME_PROTOCOL_VERSION,
   validateIntegrationRequestEnvelope,
   validateRuntimeOperationEnvelope,
   validateRuntimeRequestEnvelope,
@@ -10,11 +12,24 @@ function sign(body, timestamp, nonce, secret) {
   return createHmac("sha256", secret).update(`${timestamp}.${nonce}.${body}`).digest("base64url");
 }
 
+export function workspaceIdFromRef(workspaceRef) {
+  const value = String(workspaceRef ?? "").trim();
+  if (!value) throw Object.assign(new Error("Agent Runtime workspace reference is missing"), { code: "runtime_scope_unavailable", statusCode: 503 });
+  return `ws_${createHash("sha256").update(value, "utf8").digest("hex").slice(0, 48)}`;
+}
+
 export class BairuiRuntimeClient {
   constructor(options = {}) {
     this.baseUrl = String(options.baseUrl ?? "http://127.0.0.1:8787").replace(/\/$/, "");
     this.sharedSecret = options.sharedSecret;
     this.resolveRuntime = options.resolveRuntime ?? (() => ({ baseUrl: this.baseUrl, sharedSecret: this.sharedSecret }));
+    this.systemOwnerScope = options.systemOwnerScope ?? {
+      organization_id: options.organizationId ?? "org_bairui",
+      user_id: options.userId ?? "system",
+      agent_id: options.agentId ?? "agent_bairui",
+      runtime_id: options.runtimeId ?? "runtime:system",
+      workspace_id: options.workspaceId ?? workspaceIdFromRef(options.workspaceRef ?? "hermes:system")
+    };
     this.fetch = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 125_000;
     if (!this.sharedSecret || this.sharedSecret.length < 32) throw new TypeError("Runtime shared secret must contain at least 32 characters");
@@ -55,6 +70,8 @@ export class BairuiRuntimeClient {
     if (!agent?.id || agent.ownerUserId !== principal.userId || agent.organizationId !== principal.organizationId) {
       throw Object.assign(new Error("Agent ownership does not match the authenticated principal"), { code: "agent_ownership_mismatch", statusCode: 403 });
     }
+    const runtime = await this.resolveRuntime(agent);
+    const ownerScope = this.ownerScope(principal, agent, runtime, conversation?.id);
     const requestId = randomUUID();
     const configId = `config:${principal.organizationId}:${agent.id}`;
     const channel = typeof channelContext.channel === "string" && channelContext.channel ? channelContext.channel : "web";
@@ -68,10 +85,11 @@ export class BairuiRuntimeClient {
       ...(channelContext.conversationKind ? { conversation_kind: channelContext.conversationKind } : {})
     };
     const payload = {
+      schema_version: RUNTIME_PROTOCOL_VERSION,
       request: {
         request_id: requestId,
         request_type: "message",
-        tenant: { organization_id: principal.organizationId, agent_id: agent.id },
+        owner_scope: ownerScope,
         actor: { user_id: principal.userId, roles: [principal.role] },
         channel_context: runtimeChannelContext,
         input: { content },
@@ -90,7 +108,7 @@ export class BairuiRuntimeClient {
         channel_policy: { channel }
       }
     };
-    const response = await this.signedPost("/v1/runtime/requests", validateRuntimeRequestEnvelope(payload), { runtime: await this.resolveRuntime(agent) });
+    const response = await this.signedPost("/v1/runtime/requests", validateRuntimeRequestEnvelope(payload), { runtime });
     const result = response.result;
     if (result?.status === "completed") return { content: result.reply?.content ?? "", metadata: { requestId, runId: result.run_id, status: result.status } };
     if (result?.status === "requires_approval") return { content: "This action requires administrator approval.", metadata: { requestId, runId: result.run_id, status: result.status, approval: result.approval_request } };
@@ -100,10 +118,14 @@ export class BairuiRuntimeClient {
   async invokeIntegration({ integrationId, capability, input = {}, authorizationId, principal, agent }) {
     if ((principal && !agent) || (!principal && agent)) throw new TypeError("Integration requests require both principal and Agent");
     if (principal && agent) this.validateAgent(principal, agent);
+    const runtime = agent ? await this.resolveRuntime(agent) : undefined;
+    const ownerScope = principal && agent ? this.ownerScope(principal, agent, runtime) : { ...this.systemOwnerScope };
     const requestId = randomUUID();
     return this.signedPost("/v1/integrations/requests", validateIntegrationRequestEnvelope({
+      schema_version: DATA_PROTOCOL_VERSION,
       request: {
         request_id: requestId,
+        ...(ownerScope ? { owner_scope: ownerScope } : {}),
         integration_id: integrationId,
         capability,
         input,
@@ -111,7 +133,7 @@ export class BairuiRuntimeClient {
         timeout_ms: this.timeoutMs,
         trace: { correlation_id: requestId }
       }
-    }), agent ? { runtime: await this.resolveRuntime(agent) } : {});
+    }), agent ? { runtime } : {});
   }
 
   validateAgent(principal, agent) {
@@ -120,11 +142,27 @@ export class BairuiRuntimeClient {
     }
   }
 
-  operationEnvelope({ principal, agent, operation, input = {} }) {
+  ownerScope(principal, agent, runtime = {}, conversationId) {
+    this.validateAgent(principal, agent);
+    const runtimeId = runtime.runtimeId ?? runtime.runtime_id ?? runtime.runtime?.id ?? agent.runtimeId ?? `runtime:${agent.id}`;
+    const workspaceRef = runtime.workspaceRef ?? runtime.workspace_ref ?? runtime.runtime?.workspaceRef ?? agent.workspaceRef ?? `hermes:${principal.organizationId}:${principal.userId}:${agent.id}`;
+    const scope = {
+      organization_id: principal.organizationId,
+      user_id: principal.userId,
+      agent_id: agent.id,
+      runtime_id: runtimeId,
+      workspace_id: runtime.workspaceId ?? runtime.workspace_id ?? workspaceIdFromRef(workspaceRef)
+    };
+    if (conversationId) scope.conversation_id = conversationId;
+    return scope;
+  }
+
+  operationEnvelope({ principal, agent, operation, input = {}, runtime }) {
     this.validateAgent(principal, agent);
     return {
+      schema_version: RUNTIME_PROTOCOL_VERSION,
       operation,
-      tenant: { organization_id: principal.organizationId, agent_id: agent.id },
+      owner_scope: this.ownerScope(principal, agent, runtime, input.session_id ?? input.conversation_id),
       actor: { user_id: principal.userId, roles: [principal.role] },
       channel_context: { channel: "web", conversation_id: input.session_id },
       input,
@@ -134,12 +172,14 @@ export class BairuiRuntimeClient {
   }
 
   async operation(options) {
-    const envelope = validateRuntimeOperationEnvelope(this.operationEnvelope(options));
-    return this.signedPost("/v1/runtime/operations", envelope, { runtime: await this.resolveRuntime(options.agent) });
+    const runtime = await this.resolveRuntime(options.agent);
+    const envelope = validateRuntimeOperationEnvelope(this.operationEnvelope({ ...options, runtime }));
+    return this.signedPost("/v1/runtime/operations", envelope, { runtime });
   }
 
   async streamOperation(options) {
-    const envelope = validateRuntimeStreamEnvelope(this.operationEnvelope(options));
-    return this.signedPost("/v1/runtime/streams", envelope, { runtime: await this.resolveRuntime(options.agent), signal: options.signal, stream: true });
+    const runtime = await this.resolveRuntime(options.agent);
+    const envelope = validateRuntimeStreamEnvelope(this.operationEnvelope({ ...options, runtime }));
+    return this.signedPost("/v1/runtime/streams", envelope, { runtime, signal: options.signal, stream: true });
   }
 }

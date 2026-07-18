@@ -14,6 +14,8 @@ const mapUser = (row, includeHash = false) => row ? {
 const mapAgent = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, name: row.name, description: row.description, avatarUrl: row.avatar_url, soulMarkdown: row.soul_markdown, status: row.status, initializationStatus: row.initialization_status, desiredRuntimeState: row.desired_runtime_state, settings: row.settings, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentRuntime = (row) => row ? ({ id: row.id, organizationId: row.organization_id, ownerUserId: row.owner_user_id, agentId: row.agent_id, deploymentId: row.deployment_id, workspaceRef: row.workspace_ref, runtimeKind: row.runtime_kind, status: row.status, endpointRef: row.endpoint_ref, routeUpdatedAt: row.route_updated_at?.toISOString?.() ?? row.route_updated_at, hermesVersion: row.hermes_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, lastHeartbeatAt: row.last_heartbeat_at?.toISOString?.() ?? row.last_heartbeat_at, lastErrorCode: row.last_error_code, lastErrorDetail: row.last_error_detail, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
 const mapAgentRun = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, parentRunId: row.parent_run_id, inputText: row.input_text, model: row.model, status: row.status, lastError: row.last_error, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at, completedAt: row.completed_at?.toISOString?.() ?? row.completed_at }) : null;
+const mapAgentScene = (row) => row ? ({ organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, sceneId: row.scene_id, revision: Number(row.revision), view: row.view ?? { surfaces: [] }, createdAt: row.created_at?.toISOString?.() ?? row.created_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at }) : null;
+const mapAgentSceneEvent = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, sceneId: row.scene_id, baseRevision: Number(row.base_revision), revision: Number(row.revision), operations: row.operations ?? [], createdAt: row.created_at?.toISOString?.() ?? row.created_at }) : null;
 const mapHeartbeat = (row) => row ? ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, sequence: Number(row.sequence), status: row.status, runtimeVersion: row.runtime_version, boundaryVersion: row.boundary_version, configRevisionId: row.config_revision_id, queueDepth: row.queue_depth, activeRuns: row.active_runs, failedRuns: row.failed_runs, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, receivedAt: row.received_at?.toISOString?.() ?? row.received_at }) : null;
 const mapAgentComponent = (row) => ({ id: row.id, organizationId: row.organization_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, moduleId: row.module_id, status: row.status, version: row.version, upstreamRef: row.upstream_ref, capabilities: row.capabilities, metrics: row.metrics, observedAt: row.observed_at?.toISOString?.() ?? row.observed_at, updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at });
 const nullableNumber = (value) => value === null || value === undefined ? null : Number(value);
@@ -214,6 +216,73 @@ export class PostgresPlatformRepository {
   async getAgentRuntimeByAgent(agentId) {
     const { rows } = await this.pool.query("SELECT * FROM agent_runtimes WHERE agent_id = $1", [agentId]);
     return mapAgentRuntime(rows[0]);
+  }
+
+  async ensureAgentScene(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows: owners } = await client.query(
+        "SELECT id FROM agents WHERE id=$1 AND organization_id=$2 AND owner_user_id=$3",
+        [input.agentId, input.organizationId, input.userId]
+      );
+      if (!owners[0]) return null;
+      await client.query(
+        `INSERT INTO agent_scenes (organization_id, user_id, agent_id, scene_id, view)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (agent_id, scene_id) DO NOTHING`,
+        [input.organizationId, input.userId, input.agentId, input.sceneId, input.view ?? { surfaces: [] }]
+      );
+      const { rows } = await client.query(
+        "SELECT * FROM agent_scenes WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND scene_id=$4",
+        [input.organizationId, input.userId, input.agentId, input.sceneId]
+      );
+      return mapAgentScene(rows[0]);
+    });
+  }
+
+  async getAgentScene(input) {
+    const { rows } = await this.pool.query(
+      "SELECT * FROM agent_scenes WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND scene_id=$4",
+      [input.organizationId, input.userId, input.agentId, input.sceneId]
+    );
+    return mapAgentScene(rows[0]);
+  }
+
+  async applyAgentSceneIntent(input) {
+    return transaction(this.pool, async (client) => {
+      const { rows } = await client.query(
+        "SELECT * FROM agent_scenes WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND scene_id=$4 FOR UPDATE",
+        [input.organizationId, input.userId, input.agentId, input.sceneId]
+      );
+      const current = rows[0];
+      if (!current) return null;
+      if (input.action === "resync") return { scene: mapAgentScene(current), patch: null };
+      const baseRevision = Number(current.revision);
+      const revision = baseRevision + 1;
+      const view = input.view ?? current.view ?? { surfaces: [] };
+      const operations = [{ op: "replace", path: "/view", value: view }];
+      const { rows: updatedRows } = await client.query(
+        "UPDATE agent_scenes SET revision=$5, view=$6, updated_at=now() WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND scene_id=$4 RETURNING *",
+        [input.organizationId, input.userId, input.agentId, input.sceneId, revision, view]
+      );
+      const { rows: eventRows } = await client.query(
+        `INSERT INTO agent_scene_events (id, organization_id, user_id, agent_id, scene_id, base_revision, revision, operations)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [input.eventId ?? randomUUID(), input.organizationId, input.userId, input.agentId, input.sceneId, baseRevision, revision, JSON.stringify(operations)]
+      );
+      return { scene: mapAgentScene(updatedRows[0]), patch: mapAgentSceneEvent(eventRows[0]) };
+    });
+  }
+
+  async listAgentSceneEvents(input) {
+    const afterRevision = Math.max(0, Number(input.afterRevision) || 0);
+    const limit = Math.max(1, Math.min(Number(input.limit) || 100, 500));
+    const { rows } = await this.pool.query(
+      `SELECT * FROM agent_scene_events
+       WHERE organization_id=$1 AND user_id=$2 AND agent_id=$3 AND scene_id=$4 AND revision>$5
+       ORDER BY revision ASC LIMIT $6`,
+      [input.organizationId, input.userId, input.agentId, input.sceneId, afterRevision, limit]
+    );
+    return rows.map(mapAgentSceneEvent);
   }
 
   async listAgentRuntimes(organizationId, ownerUserId) {
@@ -1527,13 +1596,16 @@ export class PostgresPlatformRepository {
       if (!inbox) return null;
       let outbound = null;
       if (input.outbound) {
+        const { rows: conversationRows } = await client.query("SELECT runtime_conversation_id FROM channel_conversations WHERE binding_id=$1 AND channel_conversation_id=$2", [inbox.bindingId, inbox.conversation.channel_conversation_id]);
+        if (!conversationRows[0]) throw Object.assign(new Error("Channel conversation does not have a Runtime scope"), { code: "channel_conversation_scope_unavailable" });
+        const outboundConversation = { ...(input.outbound.conversation ?? inbox.conversation), runtime_conversation_id: conversationRows[0].runtime_conversation_id };
         const result = await client.query(
           `INSERT INTO channel_outbox
             (id, organization_id, user_id, agent_id, binding_id, inbox_id, channel, channel_account_id, conversation, content, attachments, reply_to_message_id, trace)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            ON CONFLICT (inbox_id) DO UPDATE SET updated_at=channel_outbox.updated_at
            RETURNING *`,
-          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, input.outbound.conversation ?? inbox.conversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
+          [input.outbound.id ?? randomUUID(), inbox.organizationId, inbox.userId, inbox.agentId, inbox.bindingId, inbox.id, inbox.channel, inbox.channelAccountId, outboundConversation, input.outbound.content, input.outbound.attachments ?? [], input.outbound.replyToMessageId ?? inbox.externalMessageId, input.outbound.trace ?? inbox.trace]
         );
         outbound = mapChannelOutbound(result.rows[0]);
       }
@@ -1589,6 +1661,11 @@ export class PostgresPlatformRepository {
       [input.agentId ?? null, input.organizationId ?? null, input.channels, bindingIds, limit, input.workerId, leaseId, leaseSeconds]
     );
     return { leaseId, deliveries: rows.map(mapChannelOutbound) };
+  }
+
+  async getChannelOutboundById(outboundId) {
+    const { rows } = await this.pool.query("SELECT * FROM channel_outbox WHERE id=$1", [outboundId]);
+    return mapChannelOutbound(rows[0]);
   }
 
   async recordChannelDeliveryReceipt(input) {

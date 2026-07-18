@@ -1,3 +1,4 @@
+import { CHANNEL_PROTOCOL_VERSION } from "@bairui/contracts";
 import { adapterErrorCode, jsonResponse, retryAfterMs, stableIdentifier, submitIngress } from "./utilities.mjs";
 
 const FULL_INTENTS = (1 << 30) | (1 << 12) | (1 << 25) | (1 << 26);
@@ -77,7 +78,7 @@ export class QQChannelAdapter {
   }
 
   async report(status, capabilities, error = null) {
-    return this.platform.health({ schema_version: "1.0", binding_id: this.binding.id, channel: "qq", worker_id: this.binding.workerId, sequence: ++this.sequence, status, capabilities, adapter_version: "bairui-qq/1.0.0", ...(error ? { error_code: adapterErrorCode(error, "qq_connection_failed") } : {}), observed_at: new Date().toISOString() });
+    return this.platform.health({ schema_version: CHANNEL_PROTOCOL_VERSION, owner_scope: this.binding.ownerScope, binding_id: this.binding.id, channel: "qq", worker_id: this.binding.workerId, sequence: ++this.sequence, status, capabilities, adapter_version: "bairui-qq/1.0.0", ...(error ? { error_code: adapterErrorCode(error, "qq_connection_failed") } : {}), observed_at: new Date().toISOString() });
   }
 
   async accessToken(force = false) {
@@ -122,7 +123,8 @@ export class QQChannelAdapter {
     const normalized = normalizeEvent(type, event);
     if (!normalized) return;
     await submitIngress(this.platform, {
-      schema_version: "1.0",
+      schema_version: CHANNEL_PROTOCOL_VERSION,
+      owner_scope: this.binding.ownerScope,
       ingress_id: stableIdentifier("qq-ingress", `qq:${this.binding.id}:${normalized.messageId}`),
       binding_id: this.binding.id,
       channel: "qq",

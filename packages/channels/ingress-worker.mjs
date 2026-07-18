@@ -55,7 +55,12 @@ export class ChannelIngressWorker {
       const completed = await this.repository.completeChannelIngress({
         id: job.id,
         leaseToken: job.leaseToken,
-        outbound: reply ? { content: { kind: "text", text: reply }, trace: job.trace, replyToMessageId: job.externalMessageId } : null
+        outbound: reply ? {
+          conversation: { ...job.conversation, runtime_conversation_id: conversation.runtimeConversationId },
+          content: { kind: "text", text: reply },
+          trace: job.trace,
+          replyToMessageId: job.externalMessageId
+        } : null
       });
       if (!completed) throw Object.assign(new Error("Channel ingress lease was lost"), { code: "channel_ingress_lease_lost" });
       return completed;

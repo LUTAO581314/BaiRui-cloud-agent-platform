@@ -5,7 +5,7 @@
   const NAV = [
     ["chat", "对话"], ["conversations", "会话"], ["agents", "Agent"], ["memory", "记忆"],
     ["skills", "技能"], ["channels", "渠道"], ["hotspots", "热点"], ["runs", "运行"],
-    ["jobs", "任务"], ["usage", "用量"], ["settings", "设置"]
+    ["jobs", "任务"], ["usage", "用量"], ["hermes", "能力中心"], ["settings", "设置"]
   ];
   const CHANNEL_LABELS = { web: "网页", cli: "CLI", feishu: "飞书", wechat: "微信", qq: "QQ" };
   const STATUS_LABELS = {
@@ -143,7 +143,7 @@
     title.textContent = NAV.find(([key]) => key === view)?.[1] || "工作区";
     content.innerHTML = '<div class="bw-loading"><span></span>正在读取真实状态</div>';
     try {
-      const renderer = { conversations: renderConversations, agents: renderAgents, memory: renderMemory, skills: renderSkills, channels: renderChannels, hotspots: renderHotspots, runs: renderRuns, jobs: renderJobs, usage: renderUsage, settings: renderSettings }[view];
+      const renderer = { conversations: renderConversations, agents: renderAgents, memory: renderMemory, skills: renderSkills, channels: renderChannels, hotspots: renderHotspots, runs: renderRuns, jobs: renderJobs, usage: renderUsage, hermes: renderHermes, settings: renderSettings }[view];
       if (renderer) await renderer();
     } catch (error) { showError(error); }
   }
@@ -397,6 +397,40 @@
       if (!await openForm({ heading: "吊销第三方授权", submitLabel: "确认吊销", danger: true, fields: [] })) return;
       await bridge.request(agentApi(`/authorizations/${encodeURIComponent(button.dataset.authRevoke)}`), { method: "DELETE" });
       toast("授权已吊销，密钥密文已清除"); renderSettings();
+    }));
+  }
+
+  const HERMES_CAPABILITY_GROUPS = [
+    { title: "模型与认证", description: "读取当前 Agent 的 Hermes Provider、模型和辅助模型状态", operations: ["provider.catalog", "provider.oauth.list", "model.info", "model.options", "model.auxiliary"] },
+    { title: "工具与技能", description: "读取工具集、技能来源和可用能力", operations: ["toolsets.list", "skills.list", "skills.hub.sources", "mcp.list", "mcp.catalog"] },
+    { title: "身份与自动化", description: "读取 Profile、定时任务和交付目标", operations: ["profiles.list", "profiles.active.get", "cron.delivery_targets", "cron.blueprints"] },
+    { title: "诊断与文件", description: "读取 Agent 范围内的健康、检查点和工作区目录", operations: ["diagnostics.status", "diagnostics.checkpoints", "files.list"] }
+  ];
+
+  function operationSummary(value) {
+    if (Array.isArray(value)) return `${value.length} 项`;
+    if (!value || typeof value !== "object") return value == null ? "无数据" : String(value);
+    const arrays = Object.entries(value).filter(([, item]) => Array.isArray(item));
+    if (arrays.length) return arrays.map(([key, item]) => `${key}: ${item.length}`).join(" · ");
+    if (typeof value.status === "string") return value.status;
+    return `${Object.keys(value).length} 个字段`;
+  }
+
+  async function renderHermes() {
+    content.innerHTML = `<div class="bw-section-head"><div><h3>Hermes 能力中心</h3><p>所有请求经过当前 Agent 的 Runtime Boundary；密钥、主机配置和其他用户数据不会进入这里。</p></div><span class="bw-status bw-status-ready">Agent 范围</span></div><div class="bw-capability-grid">${HERMES_CAPABILITY_GROUPS.map((group, index) => `<section class="bw-capability-card"><header><div><h3>${escapeHtml(group.title)}</h3><p>${escapeHtml(group.description)}</p></div><span>${group.operations.length}</span></header><div class="bw-list">${group.operations.map((operation) => `<button type="button" class="bw-capability-row" data-hermes-operation="${escapeHtml(operation)}"><span>${escapeHtml(operation)}</span><strong data-hermes-result="${escapeHtml(operation)}">读取</strong></button>`).join("")}</div></section>`).join("")}</div><section class="bw-security-note"><strong>高级操作</strong><p>需要写入配置、安装技能、修改 Profile、MCP 或文件的动作会在对应工作台中显示确认、权限和真实执行结果。</p></section>`;
+    content.querySelectorAll("[data-hermes-operation]").forEach((button) => button.addEventListener("click", async () => {
+      const operation = button.dataset.hermesOperation;
+      const target = content.querySelector(`[data-hermes-result="${CSS.escape(operation)}"]`);
+      button.disabled = true;
+      if (target) target.textContent = "读取中";
+      try {
+        const result = await bridge.request(agentApi(`/hermes/operations/${encodeURIComponent(operation)}`));
+        if (target) target.textContent = operationSummary(result);
+        button.classList.add("loaded");
+      } catch (error) {
+        if (target) target.textContent = STATUS_LABELS[error.message] || "不可用";
+        toast(error.message || "Hermes 能力读取失败", "error");
+      } finally { button.disabled = false; }
     }));
   }
 
