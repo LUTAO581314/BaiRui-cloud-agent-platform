@@ -22,7 +22,13 @@ function sha256(value) {
 }
 
 function readSourceCommit(sourceRoot) {
-  if (!fs.existsSync(path.join(sourceRoot, ".git"))) return null;
+  const gitMetadata = path.join(sourceRoot, ".git");
+  if (!fs.existsSync(gitMetadata)) return null;
+  if (fs.statSync(gitMetadata).isFile()) {
+    const match = fs.readFileSync(gitMetadata, "utf8").trim().match(/^gitdir:\s*(.+)$/);
+    const gitDirectory = match ? path.resolve(sourceRoot, match[1]) : null;
+    if (!gitDirectory || !fs.existsSync(gitDirectory)) return null;
+  }
   try {
     return execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   } catch (error) {
