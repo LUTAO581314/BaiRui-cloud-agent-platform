@@ -20,6 +20,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/bailongma-ui\/src\/ui\/brain-ui\/app\.js/);
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
   assert.match(html, /\/assets\/bairui-workspace\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-conversations\.js/);
   assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
   assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
   assert.match(html, /\/assets\/bairui-workspace-skills\.js/);

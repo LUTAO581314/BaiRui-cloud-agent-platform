@@ -28,6 +28,7 @@ function entryHtml(source) {
     .replace("/vendor/d3/d3.min.js", `${PREFIX}vendor/d3/d3.min.js`)
     .replace('<script type="module" src="./src/ui/brain-ui/app.js"></script>', `<script src="/assets/bairui-bailongma.js" defer></script>
 <script src="/assets/bairui-workspace.js" defer></script>
+<script src="/assets/bairui-workspace-conversations.js" defer></script>
 <script src="/assets/bairui-workspace-usage.js" defer></script>
 <script src="/assets/bairui-workspace-memory.js" defer></script>
 <script src="/assets/bairui-workspace-skills.js" defer></script>

@@ -37,6 +37,18 @@ test("the usage view is a separately served workspace extension", () => {
   assert.doesNotMatch(usage, /window\.fetch\s*=|window\.EventSource\s*=/);
 });
 
+test("the conversations view is a separately served workspace extension", () => {
+  const conversations = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-conversations.js"), "utf8");
+  assert.match(conversations, /window\.BairuiWorkspaceRegistry/);
+  assert.match(conversations, /id: "conversations"/);
+  assert.match(conversations, /bridge\.listSessions\(\)/);
+  assert.match(conversations, /bridge\.createSession/);
+  assert.match(conversations, /agentApi\(`\/sessions\//);
+  assert.doesNotMatch(conversations, /window\.fetch\s*=|window\.EventSource\s*=/);
+  const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
+  assert.doesNotMatch(workspace, /function renderConversations|conversations:\s*\[1,/);
+});
+
 test("the memory view keeps Obsidian and Hermes synchronization in a separate extension", () => {
   const memory = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-memory.js"), "utf8");
   for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {
