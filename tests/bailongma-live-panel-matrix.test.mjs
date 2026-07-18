@@ -75,6 +75,14 @@ test("every BaiLongma panel records a complete five-layer handling decision", ()
   }
 });
 
+test("the executable U01-05 panel contract identifies every P0 panel and its evidence", () => {
+  assert.equal(matrix.panelContract.schema, "bairui.panel-manifest.v1");
+  assert.equal(matrix.panelContract.implementation, "packages/bailongma-ui/panel-contracts.mjs");
+  assert.match(matrix.panelContract.route, /:agent_id/);
+  assert.deepEqual(matrix.panelContract.p0Panels, ["shell-layout", "memory-graph", "chat", "scene-shell", "settings", "social-channels", "hotspots", "person-card"]);
+  for (const evidence of ["tests/u01-05-panel-contract-golden.test.mjs", "tests/u01-05-live-panel.test.mjs", "tests/browser/remote-acceptance.mjs"]) assert.ok(matrix.panelContract.tests.includes(evidence));
+});
+
 test("unsupported panels fail visibly and the matrix does not claim Gate U01", () => {
   for (const panel of matrix.panels.filter((item) => item.treatment === "unsupported")) {
     assert.equal(panel.status, "unsupported");

@@ -6,6 +6,17 @@
     "version": "2.1.515",
     "sourceRoots": ["src/ui/brain-ui", "src/ui/scene-shell"]
   },
+  "panelContract": {
+    "schema": "bairui.panel-manifest.v1",
+    "implementation": "packages/bailongma-ui/panel-contracts.mjs",
+    "route": "/api/user/agents/:agent_id/ui/panels",
+    "p0Panels": ["shell-layout", "memory-graph", "chat", "scene-shell", "settings", "social-channels", "hotspots", "person-card"],
+    "tests": [
+      "tests/u01-05-panel-contract-golden.test.mjs",
+      "tests/u01-05-live-panel.test.mjs",
+      "tests/browser/remote-acceptance.mjs"
+    ]
+  },
   "treatments": ["native-equivalent", "bairui-equivalent", "unsupported"],
   "statuses": ["implemented", "partial", "planned", "unsupported"],
   "sourceCallBaseline": [

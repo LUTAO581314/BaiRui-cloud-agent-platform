@@ -1,0 +1,100 @@
+{
+  "ownerScope": {
+    "organization_id": "org_u01_05",
+    "user_id": "user_u01_05",
+    "agent_id": "agent_u01_05",
+    "workspace_id": "workspace_u01_05"
+  },
+  "facts": {
+    "operationalCode": "ready",
+    "hermesManagementReady": false,
+    "connectedChannelCount": 1,
+    "hotspotRunStatus": "completed",
+    "hotspotItemCount": 1,
+    "profileConfigured": true
+  },
+  "generatedAt": "2026-07-18T12:00:00.000Z",
+  "p0States": {
+    "shell-layout": "available",
+    "memory-graph": "available",
+    "chat": "available",
+    "scene-shell": "available",
+    "settings": "needs_configuration",
+    "social-channels": "available",
+    "hotspots": "available",
+    "person-card": "available"
+  },
+  "hotspotSource": {
+    "run": {
+      "id": "run_hotspot_1",
+      "status": "completed",
+      "completedAt": "2026-07-18T12:00:00.000Z"
+    },
+    "items": [
+      {
+        "id": "item_1",
+        "sourceId": "weibo",
+        "sourceName": "微博",
+        "rank": 1,
+        "title": "真实热点样本",
+        "url": "https://example.test/hotspot/1",
+        "heat": "1000",
+        "category": "technology",
+        "fetchedAt": "2026-07-18T12:00:00.000Z"
+      }
+    ]
+  },
+  "hotspotNative": {
+    "platforms": {
+      "douyin": [],
+      "xiaohongshu": [],
+      "wechat": [],
+      "weibo": [
+        {
+          "rank": 1,
+          "text": "真实热点样本",
+          "heat": "1000",
+          "trend": "same",
+          "isNew": false,
+          "url": "https://example.test/hotspot/1"
+        }
+      ]
+    },
+    "platformLabels": { "weibo": "微博" },
+    "fetchedAt": "2026-07-18T12:00:00.000Z",
+    "stale": false,
+    "refreshMinutes": 30,
+    "status": { "weibo": { "ok": true, "source": "微博" } }
+  },
+  "sceneMessages": {
+    "snapshot": {
+      "v": 1,
+      "type": "scene",
+      "rev": 1,
+      "view": {
+        "surfaces": [
+          {
+            "id": "hotspots",
+            "kind": "metric",
+            "order": 0,
+            "intent": "inform",
+            "focus": true,
+            "data": {
+              "label": "实时热点",
+              "value": 1,
+              "detail": "2026-07-18T12:00:00.000Z",
+              "status": "completed"
+            }
+          }
+        ],
+        "panel": {
+          "id": "hotspots",
+          "visible": true,
+          "run_id": "run_hotspot_1",
+          "fetched_at": "2026-07-18T12:00:00.000Z",
+          "item_count": 1
+        }
+      }
+    }
+  }
+}

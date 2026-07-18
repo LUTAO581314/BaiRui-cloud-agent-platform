@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { transformBailongmaBrainApp } from "./brain-app-transform.mjs";
 import { transformBailongmaAppShell } from "./app-shell-transform.mjs";
-import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostVoiceWake } from "./host-adapter-transform.mjs";
+import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostHotspot, transformBailongmaHostVoiceWake } from "./host-adapter-transform.mjs";
 
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const MANIFEST_RELATIVE_PATH = "patches/bailongma/manifest.yaml";
@@ -14,6 +14,7 @@ const HANDLERS = Object.freeze({
   transformBailongmaAppShell,
   transformBailongmaHostApp,
   transformBailongmaHostChat,
+  transformBailongmaHostHotspot,
   transformBailongmaHostVoiceWake
 });
 

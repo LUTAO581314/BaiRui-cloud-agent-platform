@@ -47,10 +47,10 @@ import { createAdminControlRoutes } from "./routes/admin-control.mjs";
 import { createInternalChannelRoutes } from "./routes/internal-channels.mjs";
 import { createInternalControlRoutes } from "./routes/internal-control.mjs";
 import { createUserRuntimeRoutes } from "./routes/user-runtime.mjs";
+import { createUserPanelRoutes } from "./routes/user-panels.mjs";
 import { createWorkspaceAssetRoutes } from "./routes/workspace-assets.mjs";
 import { createAgentInitializationProvider } from "./services/agent-initialization.mjs";
 import { workspaceIdFromRef } from "../../packages/server-protocol/runtime-client.mjs";
-
 const MAX_CHAT_BODY_BYTES = 9 * 1024 * 1024;
 const MAX_CHARACTER_CARD_BODY_BYTES = 12 * 1024 * 1024;
 const USER_CHANNELS = new Set(["web", "cli", "feishu", "wechat", "qq"]);
@@ -540,6 +540,7 @@ export function createPlatformApp(options) {
     publicAgentRun,
     terminalAgentRunStatuses: TERMINAL_AGENT_RUN_STATUSES
   });
+  const routeUserPanels = createUserPanelRoutes({ repository, runtimeClient, requireLogin, ownedAgent, requireOperationalAgent, agentOperationalView });
   const routeAdminControl = createAdminControlRoutes({
     repository,
     requireLogin,
@@ -802,7 +803,7 @@ export function createPlatformApp(options) {
         return json(response, result.command ? 202 : 200, result);
       }
 
-      if (await routeUserRuntime({ method, url, request, response, principal })) return;
+      if (await routeUserPanels({ method, url, request, response, principal }) || await routeUserRuntime({ method, url, request, response, principal })) return;
 
       const memoryNotesMatch = url.pathname.match(/^\/api\/user\/agents\/([^/]+)\/memory-notes$/);
       if (memoryNotesMatch && ["GET", "POST"].includes(method)) {
@@ -1024,12 +1025,12 @@ export function createPlatformApp(options) {
       }
       if (method === "GET" && url.pathname === "/audit/stats") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
-        return json(response, 200, { recall: { count: 0, avg: 0 }, extract: { count: 0, avg: 0 } });
+        return json(response, 501, { error: "unsupported", panel_id: "memory-graph", state: "unsupported", reason: "memory_audit_projection_not_implemented" });
       }
       if (method === "POST" && ["/hotspot-state", "/worldcup-state", "/doc-panel-state", "/person-card-state"].includes(url.pathname)) {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });
         await readJson(request);
-        return json(response, 200, { ok: true });
+        return json(response, 410, { error: "agent_scoped_panel_command_required", state: "unsupported" });
       }
       if (method === "GET" && url.pathname === "/api/user/hotspots") {
         requirePermission(requireLogin(principal), PERMISSIONS.AGENT_USE, { organizationId: principal.organizationId });

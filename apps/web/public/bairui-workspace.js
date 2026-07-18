@@ -3,6 +3,19 @@
   if (!bridge) return;
 
   const entries = new Map();
+  const EXTENSION_PANEL_CONTRACTS = Object.freeze({
+    conversations: "chat",
+    agents: "settings",
+    memory: "memory-graph",
+    skills: "settings",
+    channels: "social-channels",
+    hotspots: "hotspots",
+    runs: "chat",
+    jobs: "settings",
+    usage: "settings",
+    hermes: "settings",
+    settings: "settings"
+  });
   const workspaceRegistry = {
     register(definition) {
       if (!definition || !/^[a-z][a-z0-9-]*$/.test(definition.id || "") || typeof definition.render !== "function") {
@@ -12,6 +25,7 @@
         id: definition.id,
         label: String(definition.label || definition.id),
         order: Number(definition.order) || 100,
+        panelId: String(definition.panelId || EXTENSION_PANEL_CONTRACTS[definition.id] || ""),
         render: definition.render,
         dispose: typeof definition.dispose === "function" ? definition.dispose : null
       }));
@@ -58,7 +72,7 @@
     memory_projection_conflict: "Hermes 记忆在同步期间发生变化，请重新同步"
   });
 
-  const workspaceState = { view: "conversations", renderRevision: 0 };
+  const workspaceState = { view: "conversations", renderRevision: 0, panelManifest: null };
   let root;
   let nav;
   let content;
@@ -239,7 +253,8 @@
   function context() {
     return {
       bridge, content, activeAgent, agentApi, escapeHtml, formatTime, status, toast, openForm,
-      noteBody, download, normalizeList, statusLabels: STATUS_LABELS, workspaceState, closeWorkspace
+      noteBody, download, normalizeList, statusLabels: STATUS_LABELS, workspaceState, closeWorkspace,
+      panelContract(panelId) { return workspaceState.panelManifest?.panels?.find((panel) => panel.id === panelId) ?? null; }
     };
   }
 
@@ -255,7 +270,11 @@
         className: `settings-nav-item${extension.id === workspaceState.view ? " active" : ""}`,
         text: extension.label,
         type: "button",
-        attributes: { "data-view": extension.id }
+        attributes: {
+          "data-view": extension.id,
+          "data-panel-id": extension.panelId,
+          "data-panel-state": workspaceState.panelManifest?.panels?.find((panel) => panel.id === extension.panelId)?.state ?? "unknown"
+        }
       });
       button.addEventListener("click", () => render(extension.id));
       return button;
@@ -332,6 +351,7 @@
     title = root.querySelector("#bairui-workspace-title");
     agentLabel = root.querySelector("[data-bairui-workspace-agent]");
     modal = root.querySelector(".bairui-workspace-modal");
+    workspaceState.panelManifest = bridge.state.panelManifest;
     root.inert = true;
     syncNavigation();
     root.querySelector("[data-bairui-workspace-close]")?.addEventListener("click", closeWorkspace);
@@ -339,6 +359,10 @@
     window.addEventListener("bairui:workspace-open", (event) => openWorkspace(event.detail?.view));
     window.addEventListener("bairui:workspace-refresh", () => { if (!root.hidden) render(workspaceState.view); });
     window.addEventListener("bairui:workspace-registry-changed", syncNavigation);
+    window.addEventListener("bairui:panel-manifest", (event) => {
+      workspaceState.panelManifest = event.detail;
+      syncNavigation();
+    });
     window.addEventListener("resize", () => { if (!root.hidden) syncWorkspaceGeometry(); }, { passive: true });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !root.hidden && !document.querySelector("dialog[open]")) closeWorkspace();

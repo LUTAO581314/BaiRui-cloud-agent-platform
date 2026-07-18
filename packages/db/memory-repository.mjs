@@ -229,6 +229,9 @@ export class MemoryPlatformRepository {
     const scene = this.#agentScenes.get(key);
     if (!scene || scene.organizationId !== input.organizationId || scene.userId !== input.userId) return null;
     if (input.action === "resync") return { scene: structuredClone(scene), patch: null };
+    if (input.expectedRevision !== undefined && Number(input.expectedRevision) !== scene.revision) {
+      return { conflict: true, scene: structuredClone(scene), patch: null };
+    }
     const baseRevision = scene.revision;
     scene.revision += 1;
     scene.view = structuredClone(input.view ?? scene.view);
