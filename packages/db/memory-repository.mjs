@@ -973,7 +973,10 @@ export class MemoryPlatformRepository {
 
   async leaseMemoryProjectionJobs(input = {}) {
     const now = Date.now();
-    for (const expired of this.#memoryProjectionOutbox.filter((item) => item.state === "processing" && Date.parse(item.leaseExpiresAt) <= now)) {
+    const matchesScope = (item) => (!input.organizationId || item.organizationId === input.organizationId)
+      && (!input.userId || item.userId === input.userId)
+      && (!input.agentId || item.agentId === input.agentId);
+    for (const expired of this.#memoryProjectionOutbox.filter((item) => item.state === "processing" && Date.parse(item.leaseExpiresAt) <= now && matchesScope(item))) {
       const newer = this.#memoryProjectionOutbox.some((item) => item.agentId === expired.agentId && item.id !== expired.id && ["pending", "retry"].includes(item.state));
       Object.assign(expired, newer
         ? { state: "completed", resultSummary: { status: "superseded" }, completedAt: new Date(now).toISOString() }
@@ -984,7 +987,7 @@ export class MemoryPlatformRepository {
     const leaseSeconds = Math.max(15, Math.min(600, Number(input.leaseSeconds) || 60));
     const leased = [];
     const candidates = this.#memoryProjectionOutbox
-      .filter((item) => ["pending", "retry"].includes(item.state) && Date.parse(item.availableAt) <= now)
+      .filter((item) => ["pending", "retry"].includes(item.state) && Date.parse(item.availableAt) <= now && matchesScope(item))
       .sort((left, right) => Date.parse(left.availableAt) - Date.parse(right.availableAt) || Date.parse(left.createdAt) - Date.parse(right.createdAt));
     for (const job of candidates) {
       if (leased.length >= limit) break;

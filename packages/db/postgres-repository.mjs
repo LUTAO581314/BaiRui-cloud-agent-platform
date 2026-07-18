@@ -1383,6 +1383,7 @@ export class PostgresPlatformRepository {
   async leaseMemoryProjectionJobs(input = {}) {
     const limit = Math.max(1, Math.min(20, Number(input.limit) || 1));
     const leaseSeconds = Math.max(15, Math.min(600, Number(input.leaseSeconds) || 60));
+    const scope = [input.organizationId ?? null, input.userId ?? null, input.agentId ?? null];
     const leased = [];
     for (let index = 0; index < limit; index += 1) {
       let job;
@@ -1392,18 +1393,30 @@ export class PostgresPlatformRepository {
             `UPDATE memory_projection_outbox expired SET state='completed', lease_token=NULL, lease_expires_at=NULL,
                result_summary='{"status":"superseded"}'::jsonb, completed_at=now(), updated_at=now()
              WHERE expired.state='processing' AND expired.lease_expires_at <= now()
-               AND EXISTS (SELECT 1 FROM memory_projection_outbox newer WHERE newer.agent_id=expired.agent_id AND newer.state IN ('pending','retry'))`
+               AND ($1::text IS NULL OR expired.organization_id=$1)
+               AND ($2::text IS NULL OR expired.user_id=$2)
+               AND ($3::text IS NULL OR expired.agent_id=$3)
+               AND EXISTS (SELECT 1 FROM memory_projection_outbox newer WHERE newer.agent_id=expired.agent_id AND newer.state IN ('pending','retry'))`,
+            scope
           );
           await client.query(
             `UPDATE memory_projection_outbox SET state='retry', lease_token=NULL, lease_expires_at=NULL, available_at=now(), updated_at=now()
-             WHERE state='processing' AND lease_expires_at <= now()`
+             WHERE state='processing' AND lease_expires_at <= now()
+               AND ($1::text IS NULL OR organization_id=$1)
+               AND ($2::text IS NULL OR user_id=$2)
+               AND ($3::text IS NULL OR agent_id=$3)`,
+            scope
           );
           const { rows } = await client.query(
             `SELECT * FROM memory_projection_outbox candidate
-             WHERE candidate.state IN ('pending','retry') AND candidate.available_at <= now()
-               AND NOT EXISTS (SELECT 1 FROM memory_projection_outbox active WHERE active.agent_id=candidate.agent_id AND active.state='processing')
-             ORDER BY candidate.available_at, candidate.created_at
-             FOR UPDATE SKIP LOCKED LIMIT 1`
+              WHERE candidate.state IN ('pending','retry') AND candidate.available_at <= now()
+                AND ($1::text IS NULL OR candidate.organization_id=$1)
+                AND ($2::text IS NULL OR candidate.user_id=$2)
+                AND ($3::text IS NULL OR candidate.agent_id=$3)
+                AND NOT EXISTS (SELECT 1 FROM memory_projection_outbox active WHERE active.agent_id=candidate.agent_id AND active.state='processing')
+              ORDER BY candidate.available_at, candidate.created_at
+              FOR UPDATE SKIP LOCKED LIMIT 1`,
+            scope
           );
           if (!rows[0]) return null;
           const leaseToken = randomUUID();

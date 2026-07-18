@@ -91,7 +91,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     await repository.updateObsidianNote({ ...note, markdown: "# PostgreSQL note\n\nUpdated" });
     assert.match((await repository.getObsidianNote(organizationId, userId, agentId, note.id)).markdown, /Updated/);
     assert.equal((await repository.getMemoryProjectionStatus(organizationId, userId, agentId)).id, queuedProjection.id);
-    const [projectionLease] = await repository.leaseMemoryProjectionJobs({ limit: 1, leaseSeconds: 30 });
+    const [projectionLease] = await repository.leaseMemoryProjectionJobs({ organizationId, userId, agentId, limit: 1, leaseSeconds: 30 });
     assert.equal(projectionLease.agentId, agentId);
     assert.equal((await repository.completeMemoryProjectionJob({ id: projectionLease.id, leaseToken: projectionLease.leaseToken, resultSummary: { status: "materialized" } })).state, "completed");
 
