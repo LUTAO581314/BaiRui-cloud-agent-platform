@@ -167,7 +167,7 @@ for (const evidence of ["User data plane", "Memory contract", "Control plane and
   if (!integrationGuide.includes(evidence)) failures.push(`Missing platform-Agent integration guidance: ${evidence}`);
 }
 const hermesFrontendMap = fs.readFileSync(path.join(root, "docs/HERMES_FRONTEND_CAPABILITY_MAP.md"), "utf8");
-for (const evidence of ["abc22cdf1a5c0fe30bf1a226bfe3caf489e8316e", "???????", "Owner-scoped Management Bridge", "??????????", "HERMES_API_SERVER_KEY", "??????"]) {
+for (const evidence of ["abc22cdf1a5c0fe30bf1a226bfe3caf489e8316e", "完整初始化流程", "Owner-scoped Management Bridge", "明确不向普通用户暴露", "HERMES_API_SERVER_KEY", "完整验收标准"]) {
   if (!hermesFrontendMap.includes(evidence)) failures.push(`Missing Hermes frontend capability guidance: ${evidence}`);
 }
 const server = fs.existsSync(path.join(root, "apps/web/app.mjs")) ? fs.readFileSync(path.join(root, "apps/web/app.mjs"), "utf8") : "";
@@ -217,9 +217,10 @@ for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
 }
 const bailongmaPatchManifest = fs.readFileSync(path.join(root, "patches/bailongma/manifest.yaml"), "utf8");
-for (const evidence of ["schemaVersion: \"1.0\"", "repository: xiaoyuanda666-ship-it/BaiLongma", "pinnedCommit: 34d939eabe226c561550079cb810090015b49817", "removalCondition:", "kind: source-transform"]) {
+for (const evidence of ["\"schemaVersion\": \"1.0\"", "\"repository\": \"xiaoyuanda666-ship-it/BaiLongma\"", "\"pinnedCommit\": \"34d939eabe226c561550079cb810090015b49817\"", "\"removalCondition\":", "\"kind\": \"source-transform\""]) {
   if (!bailongmaPatchManifest.includes(evidence)) failures.push("Missing BaiLongma patch queue evidence: " + evidence);
 }
+if (!platformDockerfile.includes("COPY patches/bailongma ./patches/bailongma")) failures.push("Platform image must include the BaiLongma patch manifest during UI build");
 const patchQueue = fs.readFileSync(path.join(root, "packages/bailongma-ui/patch-queue.mjs"), "utf8");
 for (const evidence of ["readBailongmaPatchManifest", "applyBailongmaPatchQueue", "source commit", "assertAnchors", "manifestSha256"]) {
   if (!patchQueue.includes(evidence)) failures.push("Missing BaiLongma patch queue enforcement: " + evidence);
@@ -229,7 +230,7 @@ const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, 
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
   if (!workspace.includes(view)) failures.push(`Missing BaiRui user workspace view: ${view}`);
 }
-for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "??????"]) {
+for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {
   if (!workspace.includes(evidence)) failures.push(`Missing exposed Hermes user capability: ${evidence}`);
 }
 for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "config.apply-user", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {

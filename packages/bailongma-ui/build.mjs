@@ -50,6 +50,7 @@ export function buildBailongmaUi(options) {
   try {
     for (const file of ["LICENSE", "package.json"]) fs.copyFileSync(path.join(sourceRoot, file), path.join(staging, file));
     fs.cpSync(path.join(sourceRoot, "src", "ui"), path.join(staging, "src", "ui"), { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, "brain-ui.html"), path.join(staging, "brain-ui.html"));
     const patchQueue = applyBailongmaPatchQueue({
       sourceRoot,
       stagingRoot: staging,

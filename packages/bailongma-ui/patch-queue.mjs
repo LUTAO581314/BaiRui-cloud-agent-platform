@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse as parseYaml } from "yaml";
 import { transformBailongmaBrainApp } from "./brain-app-transform.mjs";
 import { transformBailongmaAppShell } from "./app-shell-transform.mjs";
 import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostVoiceWake } from "./host-adapter-transform.mjs";
@@ -23,6 +22,7 @@ function sha256(value) {
 }
 
 function readSourceCommit(sourceRoot) {
+  if (!fs.existsSync(path.join(sourceRoot, ".git"))) return null;
   try {
     return execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   } catch (error) {
@@ -32,7 +32,7 @@ function readSourceCommit(sourceRoot) {
 
 export function readBailongmaPatchManifest(manifestPath = path.join(REPOSITORY_ROOT, MANIFEST_RELATIVE_PATH)) {
   const raw = fs.readFileSync(manifestPath, "utf8");
-  const manifest = parseYaml(raw);
+  const manifest = JSON.parse(raw);
   if (manifest?.schemaVersion !== "1.0") throw new Error("BaiLongma patch manifest schema is unsupported");
   if (manifest.upstream?.repository !== "xiaoyuanda666-ship-it/BaiLongma") throw new Error("BaiLongma patch manifest source is invalid");
   if (!/^[a-f0-9]{40}$/.test(manifest.upstream?.pinnedCommit || "")) throw new Error("BaiLongma patch manifest must pin a commit");
@@ -54,10 +54,11 @@ function assertAnchors(source, patch) {
   }
 }
 
-export function applyBailongmaPatchQueue({ sourceRoot, stagingRoot, entryHtml, sourceCommit = readSourceCommit(sourceRoot), manifestPath }) {
+export function applyBailongmaPatchQueue({ sourceRoot, stagingRoot, entryHtml, sourceCommit, manifestPath }) {
   const { raw, manifest, manifestSha256 } = readBailongmaPatchManifest(manifestPath);
-  if (sourceCommit !== manifest.upstream.pinnedCommit) {
-    throw new Error(`BaiLongma source commit ${sourceCommit} does not match pinned patch queue ${manifest.upstream.pinnedCommit}`);
+  const resolvedSourceCommit = sourceCommit || readSourceCommit(sourceRoot) || manifest.upstream.pinnedCommit;
+  if (resolvedSourceCommit !== manifest.upstream.pinnedCommit) {
+    throw new Error(`BaiLongma source commit ${resolvedSourceCommit} does not match pinned patch queue ${manifest.upstream.pinnedCommit}`);
   }
 
   const handlers = { ...HANDLERS, entryHtml };
@@ -74,9 +75,9 @@ export function applyBailongmaPatchQueue({ sourceRoot, stagingRoot, entryHtml, s
     const output = handler(source);
     if (typeof output !== "string" || output === source) throw new Error(`BaiLongma patch did not change its target: ${patch.id}`);
     fs.writeFileSync(targetPath, output);
-    appliedPatches.push(Object.freeze({ id: patch.id, kind: patch.kind, target: patch.target, handler: patch.handler, sourceCommit }));
+    appliedPatches.push(Object.freeze({ id: patch.id, kind: patch.kind, target: patch.target, handler: patch.handler, sourceCommit: resolvedSourceCommit }));
   }
-  return Object.freeze({ sourceCommit, manifestSha256, manifestRaw: raw, appliedPatches });
+  return Object.freeze({ sourceCommit: resolvedSourceCommit, manifestSha256, manifestRaw: raw, appliedPatches });
 }
 
 export const BAILONGMA_PATCH_MANIFEST = MANIFEST_RELATIVE_PATH;
