@@ -47,7 +47,12 @@ test("U00-03 web chat crosses UI command, BFF, Runtime, storage, events and cont
   const scene = await fetch(`${agentBase}/scenes/brain`, { headers: { cookie: ownerCookie } });
   assert.equal(scene.status, 200);
   const sceneBody = await scene.json();
-  assert.deepEqual(sceneBody.owner_scope, { ...scope, workspace_id: sceneBody.owner_scope.workspace_id });
+  assert.deepEqual(sceneBody.owner_scope, {
+    organization_id: scope.organization_id,
+    user_id: scope.user_id,
+    agent_id: scope.agent_id,
+    workspace_id: sceneBody.owner_scope.workspace_id
+  });
 
   const peerScene = await fetch(`${agentBase}/scenes/brain`, { headers: { cookie: peerCookie } });
   assert.equal(peerScene.status, 404, "a peer must not read the owner's scene");
