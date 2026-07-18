@@ -67,7 +67,7 @@ test("every BaiLongma panel records a complete five-layer handling decision", ()
     assert.ok(Array.isArray(panel.nativeInterfaces) && panel.nativeInterfaces.length > 0, `Missing interfaces for ${panel.id}`);
     for (const field of requiredStrings) assert.ok(typeof panel[field] === "string" && panel[field].trim(), `Missing ${field} for ${panel.id}`);
     assert.deepEqual(Object.keys(panel.layers).sort(), ["channel", "integration", "runtime", "storage", "ui"]);
-    assert.match(markdown, new RegExp(`\\| \\`${panel.id}\\``));
+    assert.ok(markdown.includes("| `" + panel.id + "`"), `Missing markdown row for ${panel.id}`);
     for (const source of panel.sources) assert.ok(fs.existsSync(path.join(upstream, source)), `Missing upstream source ${source}`);
   }
   for (const required of ["chat", "scene-shell", "memory-graph", "settings", "voice-tts", "social-channels", "hotspots", "docs", "person-card", "media-video"]) {
