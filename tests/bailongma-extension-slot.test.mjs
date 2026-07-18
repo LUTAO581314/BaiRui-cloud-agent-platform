@@ -21,3 +21,10 @@ test("BaiRui workspace consumes the native slot and keeps a compatibility fallba
   assert.match(workspace, /extensionHost\.appendChild\(root\)/);
   assert.doesNotMatch(workspace, /document\.body\.appendChild\(root\)/);
 });
+
+test("BaiRui workspace views are registered through an extension registry", () => {
+  const workspace = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace.js"), "utf8");
+  for (const evidence of ["BairuiWorkspaceRegistry", "workspaceRegistry.register", "workspaceRegistry.get(view)", "bairui:workspace-registry-changed", "registerBuiltInViews"]) {
+    assert.match(workspace, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+});
