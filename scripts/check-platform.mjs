@@ -119,6 +119,7 @@ const required = [
   "apps/web/public/bairui-bailongma.css",
   "apps/web/public/bairui-bailongma.js",
   "apps/web/public/bairui-workspace.js",
+  "apps/web/public/bairui-workspace-conversations.js",
   "apps/web/public/bairui-workspace-usage.js",
   "apps/web/public/bairui-workspace-memory.js",
   "apps/web/public/bairui-workspace-skills.js",
@@ -220,6 +221,7 @@ const bailongmaBuild = fs.readFileSync(path.join(root, "packages/bailongma-ui/bu
 for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD_INTEGRITY_FILES", "sourceCommit", "patchManifestSha256", "appliedPatches"]) {
   if (!bailongmaBuild.includes(evidence)) failures.push("Missing deterministic BaiLongma build evidence: " + evidence);
 }
+if (!bailongmaBuild.includes("/assets/bairui-workspace-conversations.js")) failures.push("BaiRui build must inject the modular conversations workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-memory.js")) failures.push("BaiRui build must inject the modular memory workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-skills.js")) failures.push("BaiRui build must inject the modular skills workspace extension");
@@ -245,6 +247,11 @@ const usageExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-w
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"usage\"", "agentApi(\"/usage\")", "bw-metrics"]) {
   if (!usageExtension.includes(evidence)) failures.push("Missing modular usage workspace extension evidence: " + evidence);
 }
+const conversationsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-conversations.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"conversations\"", "bridge.listSessions()", "bridge.createSession", "agentApi(`/sessions/"]) {
+  if (!conversationsExtension.includes(evidence)) failures.push("Missing modular conversations workspace extension evidence: " + evidence);
+}
+if (workspaceAdapter.includes("function renderConversations") || workspaceAdapter.includes("conversations: [1,")) failures.push("Conversations view must not remain built into the core workspace script");
 const memoryExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-memory.js"), "utf8");
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {
   if (!memoryExtension.includes(evidence)) failures.push("Missing modular memory workspace extension evidence: " + evidence);
@@ -255,7 +262,7 @@ for (const evidence of ["BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
-for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
+for (const view of ["renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
   if (!workspace.includes(view)) failures.push(`Missing BaiRui user workspace view: ${view}`);
 }
 for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {
