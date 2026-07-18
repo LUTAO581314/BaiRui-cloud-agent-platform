@@ -100,7 +100,7 @@ jobs:
           mkdir -p dist/bundle
           node distribution/bin/build-manifest.mjs dist/bundle/release-manifest.json
           node distribution/bin/verify-manifest.mjs dist/bundle/release-manifest.json
-          cp distribution/compose.yaml distribution/Caddyfile dist/bundle/
+          cp distribution/compose.yaml distribution/compose.external-proxy.yaml distribution/Caddyfile dist/bundle/
           BAIRUI_BUNDLE_DIR="$PWD/dist/bundle" bash distribution/install.sh --verify-only --version "$BAIRUI_RELEASE_VERSION"
 
   postgres-migrations:

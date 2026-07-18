@@ -103,8 +103,13 @@ test("external proxy bind rejects non-loopback and privileged endpoints", { skip
 test("release bundle contract includes the external proxy override", () => {
   const installer = fs.readFileSync(path.join(root, "distribution/install.sh"), "utf8");
   const override = fs.readFileSync(path.join(root, "distribution/compose.external-proxy.yaml"), "utf8");
+  const ciWorkflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const distributionWorkflow = fs.readFileSync(path.join(root, ".github/workflows/distribution.yml"), "utf8");
   assert.match(installer, /release-manifest\.json compose\.yaml compose\.external-proxy\.yaml Caddyfile/);
   assert.match(override, /ports: !override/);
+  for (const workflow of [ciWorkflow, distributionWorkflow]) {
+    assert.match(workflow, /cp distribution\/compose\.yaml distribution\/compose\.external-proxy\.yaml distribution\/Caddyfile dist\/bundle\//);
+  }
 });
 
 test("installer force-recreates services after registration and while rolling back", () => {
