@@ -595,6 +595,8 @@ body.bairui-streaming #send-btn {
 
 .bairui-workspace[hidden] { display: none; }
 
+[data-bairui-extension-host] { display: contents; }
+
 .bairui-workspace {
   position: fixed;
   z-index: 3000;

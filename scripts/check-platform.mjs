@@ -225,6 +225,13 @@ const patchQueue = fs.readFileSync(path.join(root, "packages/bailongma-ui/patch-
 for (const evidence of ["readBailongmaPatchManifest", "applyBailongmaPatchQueue", "source commit", "assertAnchors", "manifestSha256"]) {
   if (!patchQueue.includes(evidence)) failures.push("Missing BaiLongma patch queue enforcement: " + evidence);
 }
+const appShellTransform = fs.readFileSync(path.join(root, "packages/bailongma-ui/app-shell-transform.mjs"), "utf8");
+for (const evidence of ["createBairuiExtensionHost", "data-bairui-extension-host", "createPanelTabs()", "createConsole()"] ) {
+  if (!appShellTransform.includes(evidence)) failures.push("Missing native BaiLongma extension slot evidence: " + evidence);
+}
+const workspaceAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace.js"), "utf8");
+if (!workspaceAdapter.includes('document.querySelector("[data-bairui-extension-host]")')) failures.push("BaiRui workspace must mount through the native BaiLongma extension host");
+if (workspaceAdapter.includes("document.body.appendChild(root)")) failures.push("BaiRui workspace must not append a second root directly to document.body");
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
 for (const view of ["renderConversations", "renderAgents", "renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
