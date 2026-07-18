@@ -28,3 +28,11 @@ test("BaiRui workspace views are registered through an extension registry", () =
     assert.match(workspace, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
+
+test("the usage view is a separately served workspace extension", () => {
+  const usage = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-usage.js"), "utf8");
+  assert.match(usage, /window\.BairuiWorkspaceRegistry/);
+  assert.match(usage, /id: "usage"/);
+  assert.match(usage, /agentApi\("\/usage"\)/);
+  assert.doesNotMatch(usage, /window\.fetch\s*=|window\.EventSource\s*=/);
+});
