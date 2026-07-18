@@ -164,6 +164,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Capture BaiLongma source design baseline
+        run: node tests/browser/design-baseline.mjs
       - name: Exercise U00-03 Platform vertical slice
         run: node --test tests/u00-03-vertical-slice.test.mjs
       - name: Install Chromium
@@ -178,5 +180,6 @@ jobs:
           path: |
             test-results/remote-browser-acceptance
             test-results/u00-03
+            test-results/bailongma-design-baseline
           if-no-files-found: warn
           retention-days: 14
