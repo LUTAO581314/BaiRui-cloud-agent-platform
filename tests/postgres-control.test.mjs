@@ -50,6 +50,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
   const runtimeId = `runtime_pg_${suffix}`;
   const serverId = `server_pg_${suffix}`;
   const keyHash = (purpose) => createHash("sha256").update(`postgres-control:${purpose}:${suffix}`).digest("hex");
+  const artifactDigest = (purpose) => createHash("sha256").update(`postgres-control-artifact:${purpose}:${suffix}`).digest("hex");
   try {
     await repository.createOrganization({ id: organizationId, name: "PostgreSQL Control Test" });
     await repository.createUser({ id: userId, organizationId, email: `${suffix}@postgres.test`, displayName: "Postgres User", passwordHash: "not-used", role: "user" });
@@ -91,7 +92,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     await repository.updateObsidianNote({ ...note, markdown: "# PostgreSQL note\n\nUpdated" });
     assert.match((await repository.getObsidianNote(organizationId, userId, agentId, note.id)).markdown, /Updated/);
     assert.equal((await repository.getMemoryProjectionStatus(organizationId, userId, agentId)).id, queuedProjection.id);
-    const [projectionLease] = await repository.leaseMemoryProjectionJobs({ limit: 1, leaseSeconds: 30 });
+    const [projectionLease] = await repository.leaseMemoryProjectionJobs({ organizationId, userId, agentId, limit: 1, leaseSeconds: 30 });
     assert.equal(projectionLease.agentId, agentId);
     assert.equal((await repository.completeMemoryProjectionJob({ id: projectionLease.id, leaseToken: projectionLease.leaseToken, resultSummary: { status: "materialized" } })).state, "completed");
 
@@ -227,7 +228,7 @@ test("PostgreSQL leases and completes an Agent provision transaction", { skip: p
     assert.ok(chain.rows.some((row) => row.audit_event_id === null));
     assert.ok(chain.rows.some((row) => row.audit_event_id !== null));
 
-    const manifest = await repository.createReleaseManifest({ id: `manifest_${suffix}`, version: `1.0.${suffix}`, agentCommit: "a".repeat(40), imageDigest: `ghcr.io/bairui/bundle@sha256:${"a".repeat(64)}`, sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64), compatibility: { hermes_image: `ghcr.io/bairui/hermes@sha256:${"b".repeat(64)}`, runtime_image: `ghcr.io/bairui/runtime@sha256:${"c".repeat(64)}` }, createdBy: userId });
+    const manifest = await repository.createReleaseManifest({ id: `manifest_${suffix}`, version: `1.0.${suffix}`, agentCommit: "a".repeat(40), imageDigest: `ghcr.io/bairui/bundle@sha256:${artifactDigest("platform")}`, sbomUri: "https://evidence.example.test/sbom.json", provenanceUri: "https://evidence.example.test/provenance.json", signature: "s".repeat(64), compatibility: { hermes_image: `ghcr.io/bairui/hermes@sha256:${artifactDigest("hermes")}`, runtime_image: `ghcr.io/bairui/runtime@sha256:${artifactDigest("runtime")}` }, createdBy: userId });
     assert.equal((await repository.listReleaseManifests())[0].id, manifest.id);
 
     assert.equal(await repository.deleteObsidianNote(organizationId, userId, agentId, note.id), true);
