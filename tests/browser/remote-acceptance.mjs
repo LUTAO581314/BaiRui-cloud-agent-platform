@@ -28,6 +28,31 @@ async function assertNoHorizontalOverflow(page) {
   assert.ok(metrics.documentWidth <= metrics.viewportWidth + 1, `horizontal overflow: ${metrics.documentWidth}px > ${metrics.viewportWidth}px`);
 }
 
+async function inspectHit(page, selector) {
+  return page.locator(selector).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const target = document.elementFromPoint(point.x, point.y);
+    const scene = target?.closest("#stage");
+    return {
+      point,
+      target: target ? { tag: target.tagName, id: target.id, className: typeof target.className === "string" ? target.className : target.className?.baseVal || "" } : null,
+      isControl: target === element || element.contains(target),
+      sceneSurface: scene?.matches(".surface") ? scene.dataset.id || null : null
+    };
+  });
+}
+
+async function assertNativeControlHit(page, selector, label) {
+  const hit = await inspectHit(page, selector);
+  assert.ok(hit.isControl && !hit.sceneSurface, `${label} is occluded by the Scene projection: ${JSON.stringify(hit)}`);
+}
+
+async function assertNoSceneOcclusion(page, selector, label) {
+  const hit = await inspectHit(page, selector);
+  assert.equal(hit.sceneSurface, null, `${label} is occluded by the Scene projection: ${JSON.stringify(hit)}`);
+}
+
 async function waitForVisibleGraph(page, browserErrors = []) {
   const graph = page.locator("#graph");
   await graph.waitFor({ state: "attached" });
@@ -83,7 +108,14 @@ async function ordinaryDesktop(browser, fixture) {
   });
   assert.equal(hostAdapter.configurable, false);
   assert.equal(hostAdapter.writable, false);
-  assert.deepEqual(hostAdapter.methods, ["agentProfile", "conversations", "memories", "openEvents", "sendMessage"]);
+  assert.deepEqual(hostAdapter.methods, ["agentProfile", "conversations", "hotspots", "loadPanelManifest", "memories", "openEvents", "openPanelEvents", "panelCapability", "panelCommand", "panelSnapshot", "panelState", "sendMessage"]);
+  await page.waitForFunction(() => window.BairuiPanelTransport?.client("hotspots") && window.BairuiPanelTransport?.client("scene-shell"));
+  const panelContracts = await page.evaluate(() => ({
+    upstream: window.BairuiPanelTransport.manifest.upstream,
+    p0: window.BairuiPanelTransport.manifest.panels.filter((panel) => panel.priority === "P0").map((panel) => ({ id: panel.id, state: panel.state, snapshot: panel.snapshot.status, command: panel.command.status, events: panel.events.status }))
+  }));
+  assert.equal(panelContracts.upstream.commit, "34d939eabe226c561550079cb810090015b49817");
+  assert.deepEqual(panelContracts.p0.map((panel) => panel.id), ["shell-layout", "memory-graph", "chat", "scene-shell", "settings", "social-channels", "hotspots", "person-card"]);
   assert.equal(await page.locator("#panel-l1-tab").count(), 1, "missing left panel control");
   assert.equal(await page.locator("#panel-l2-tab").count(), 1, "missing right panel control");
   const chatWidthBeforeCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
@@ -122,8 +154,8 @@ async function ordinaryDesktop(browser, fixture) {
   assert.equal(await initializationDialog.locator('input[name="modelMode"][value="agent"]').count(), 1);
   assert.equal(await initializationDialog.locator('input[name="modelMode"][value="platform"]').count(), 1);
   for (const field of ["hermesProvider", "hermesBaseUrl", "hermesModel", "hermesAuthType", "hermesApiKey"]) assert.equal(await initializationDialog.locator(`[name="${field}"]`).count(), 1, `missing Hermes initialization field: ${field}`);
-  const modalLayers = await page.evaluate(() => ({ overlay: Number(getComputedStyle(document.querySelector(".bairui-onboarding")).zIndex), toolbar: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex) }));
-  assert.ok(modalLayers.overlay > modalLayers.toolbar, `Hermes initialization must cover the Agent toolbar: ${JSON.stringify(modalLayers)}`);
+  const modalLayers = await page.evaluate(() => ({ overlay: Number(getComputedStyle(document.querySelector(".bairui-onboarding")).zIndex), toolbar: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex), scene: Number(getComputedStyle(document.querySelector("#stage")).zIndex) }));
+  assert.ok(modalLayers.overlay > modalLayers.toolbar && modalLayers.overlay > modalLayers.scene, `Hermes initialization must cover the Agent toolbar and Scene: ${JSON.stringify(modalLayers)}`);
   await page.screenshot({ path: path.join(artifacts, "user-desktop-hermes-initialization.png"), fullPage: true });
   await initializationDialog.locator("[data-later]").click();
   await initializationDialog.waitFor({ state: "detached" });
@@ -139,6 +171,22 @@ async function ordinaryDesktop(browser, fixture) {
   await workspaceButton.click();
   await page.locator(workspaceHost).waitFor({ state: "visible" });
   for (const view of workspaceViews) assert.equal(await page.locator(`${workspaceNav} [data-view="${view}"]`).count(), 1, `missing user workspace view: ${view}`);
+  await page.locator(`${workspaceNav} [data-view="hotspots"]`).click();
+  await page.locator('[data-panel-empty="needs_configuration"]').waitFor();
+  assert.equal(await page.locator(`${workspaceNav} [data-view="hotspots"]`).getAttribute("data-panel-id"), "hotspots");
+  assert.equal(await page.locator(`${workspaceNav} [data-view="hotspots"]`).getAttribute("data-panel-state"), "needs_configuration");
+  await page.locator("[data-refresh-hotspots]").click();
+  await page.getByText("U01-05 真实链路热点", { exact: true }).waitFor();
+  const hotspotOperation = await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "integration:trendradar.list_hotspots");
+  assert.equal(hotspotOperation.operation, "integration:trendradar.list_hotspots");
+  const hotspotSnapshot = await (await page.request.get(`${baseUrl}/api/user/agents/agent_remote/ui/panels/hotspots/snapshot`)).json();
+  assert.equal(hotspotSnapshot.state, "available");
+  assert.equal(hotspotSnapshot.revision, 1);
+  assert.equal(hotspotSnapshot.data.items[0].title, "U01-05 真实链路热点");
+  await page.evaluate(() => window.BairuiPanelTransport.resync("hotspots", "playwright_acceptance"));
+  assert.equal(await page.evaluate(() => window.BairuiPanelTransport.client("hotspots").revision), 1);
+  await page.screenshot({ path: path.join(artifacts, "user-desktop-hotspots-live-panel.png"), fullPage: true });
+
   await page.locator(`${workspaceNav} [data-view="memory"]`).click();
   await waitForWorkspaceText(page, "Hermes memory mapping");
   await page.getByText("Hermes MEMORY.md", { exact: true }).waitFor();
@@ -215,6 +263,15 @@ async function ordinaryDesktop(browser, fixture) {
   const stopOperation = await waitForRuntimeOperation(runtimeOperations, (item) => item.operation === "runs.stop" && item.input.run_id === "run_stop_remote");
   assert.equal(stopOperation.input.run_id, "run_stop_remote");
   await page.waitForFunction(() => !document.body.classList.contains("bairui-streaming"));
+
+  const peerContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const peerPage = await peerContext.newPage();
+  await login(peerPage, baseUrl, { email: "peer@example.test", password: fixtureCredentials.user.password }, "/app");
+  const crossOwner = await peerPage.request.get(`${baseUrl}/api/user/agents/agent_remote/ui/panels`);
+  assert.equal(crossOwner.status(), 404, "a peer must not read another user's panel manifest");
+  assert.doesNotMatch(await crossOwner.text(), /U01-05 真实链路热点|user_remote|owner@example/i);
+  await peerContext.close();
+
   assert.deepEqual(browserErrors, [], `browser errors: ${browserErrors.join("; ")}`);
   await context.close();
 }
@@ -234,6 +291,10 @@ async function ordinaryShellViewport(browser, fixture, name, viewport) {
 
   const left = page.locator("#panel-l1-tab");
   const right = page.locator("#panel-l2-tab");
+  await assertNativeControlHit(page, "#panel-l1-tab", `${name}: left panel tab`);
+  await assertNativeControlHit(page, "#panel-l2-tab", `${name}: right panel tab`);
+  await assertNoSceneOcclusion(page, "#msg-input", `${name}: chat input`);
+  await assertNoSceneOcclusion(page, "#send-btn", `${name}: send button`);
   await left.click();
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && !document.body.classList.contains("l2-collapsed"));
   assert.equal(await left.getAttribute("aria-expanded"), "false", `${name}: left panel state is not exposed`);
@@ -241,6 +302,7 @@ async function ordinaryShellViewport(browser, fixture, name, viewport) {
   assert.equal(await page.locator("#panel-l1").getAttribute("aria-hidden"), "true");
   assert.equal(await page.locator("#panel-l2").getAttribute("aria-hidden"), "false");
   await left.click();
+  await assertNativeControlHit(page, "#panel-l2-tab", `${name}: right panel tab after left toggle`);
   await right.click();
   await page.waitForFunction(() => !document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
   assert.equal(await left.getAttribute("aria-expanded"), "true", `${name}: left panel must remain independently open`);
@@ -252,9 +314,17 @@ async function ordinaryShellViewport(browser, fixture, name, viewport) {
   for (const view of workspaceViews) assert.equal(await page.locator(`${workspaceNav} [data-view="${view}"]`).count(), 1, `${name}: missing ${view} extension`);
   const geometry = await page.locator(`${workspaceHost} .bairui-workspace-modal`).evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, viewportWidth: innerWidth, viewportHeight: innerHeight };
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, viewportWidth: innerWidth, viewportHeight: innerHeight, hostZIndex: Number(getComputedStyle(element.closest("[data-bairui-extension-host]")).zIndex), sceneZIndex: Number(getComputedStyle(document.querySelector("#stage")).zIndex) };
   });
+  const nativeLayers = await page.evaluate(() => ({
+    scene: Number(getComputedStyle(document.querySelector("#stage")).zIndex),
+    panel: Number(getComputedStyle(document.querySelector("#panel-l1")).zIndex),
+    chat: Number(getComputedStyle(document.querySelector("#chat-area")).zIndex),
+    tab: Number(getComputedStyle(document.querySelector("#panel-l1-tab")).zIndex)
+  }));
+  assert.ok(nativeLayers.scene < nativeLayers.panel && nativeLayers.scene < nativeLayers.chat && nativeLayers.scene < nativeLayers.tab, `${name}: Scene layer must stay below native controls: ${JSON.stringify(nativeLayers)}`);
   assert.ok(geometry.left >= 0 && geometry.top >= 0 && geometry.right <= geometry.viewportWidth && geometry.bottom <= geometry.viewportHeight, `${name}: workspace is outside viewport: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.hostZIndex > geometry.sceneZIndex, `${name}: workspace must cover the Scene projection: ${JSON.stringify(geometry)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, `user-${name}-workspace.png`), fullPage: true });
   await page.locator("[data-bairui-workspace-close]").click();
@@ -283,6 +353,8 @@ async function ordinaryMobile(browser, fixture) {
   await initializationDialog.locator("[data-later]").click();
   await initializationDialog.waitFor({ state: "detached" });
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed") && document.body.classList.contains("l2-collapsed"));
+  await assertNativeControlHit(page, "#panel-l1-tab", "mobile: left panel tab");
+  await assertNativeControlHit(page, "#panel-l2-tab", "mobile: right panel tab");
   await page.locator("#panel-l1-tab").click();
   await page.waitForFunction(() => {
     const panel = document.querySelector("#panel-l1");
@@ -304,9 +376,9 @@ async function ordinaryMobile(browser, fixture) {
     const toolbar = document.querySelector(".bairui-platform-tools").getBoundingClientRect();
     const host = document.querySelector("[data-bairui-extension-host]");
     const header = host.querySelector(".settings-header").getBoundingClientRect();
-    return { toolbarBottom: toolbar.bottom, headerTop: header.top, headerBottom: header.bottom, viewportHeight: innerHeight, hostZIndex: Number(getComputedStyle(host).zIndex), toolbarZIndex: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex) };
+    return { toolbarBottom: toolbar.bottom, headerTop: header.top, headerBottom: header.bottom, viewportHeight: innerHeight, hostZIndex: Number(getComputedStyle(host).zIndex), toolbarZIndex: Number(getComputedStyle(document.querySelector(".bairui-platform-tools")).zIndex), sceneZIndex: Number(getComputedStyle(document.querySelector("#stage")).zIndex) };
   });
-  assert.ok(mobileChrome.hostZIndex > mobileChrome.toolbarZIndex, `mobile workspace must cover the toolbar: ${JSON.stringify(mobileChrome)}`);
+  assert.ok(mobileChrome.hostZIndex > mobileChrome.toolbarZIndex && mobileChrome.hostZIndex > mobileChrome.sceneZIndex, `mobile workspace must cover the toolbar and Scene projection: ${JSON.stringify(mobileChrome)}`);
   assert.ok(mobileChrome.headerTop >= 0 && mobileChrome.headerBottom <= mobileChrome.viewportHeight, `mobile workspace header is outside the viewport: ${JSON.stringify(mobileChrome)}`);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(artifacts, "user-mobile-memory.png"), fullPage: true });

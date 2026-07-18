@@ -256,6 +256,9 @@ export class PostgresPlatformRepository {
       const current = rows[0];
       if (!current) return null;
       if (input.action === "resync") return { scene: mapAgentScene(current), patch: null };
+      if (input.expectedRevision !== undefined && Number(input.expectedRevision) !== Number(current.revision)) {
+        return { conflict: true, scene: mapAgentScene(current), patch: null };
+      }
       const baseRevision = Number(current.revision);
       const revision = baseRevision + 1;
       const view = input.view ?? current.view ?? { surfaces: [] };

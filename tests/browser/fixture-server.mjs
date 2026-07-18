@@ -162,6 +162,30 @@ function createRuntimeFixture() {
   return {
     operations,
     operation,
+    async invokeIntegration({ integrationId, capability, input = {} }) {
+      operations.push({ operation: `integration:${integrationId}.${capability}`, input: structuredClone(input) });
+      if (integrationId !== "trendradar" || capability !== "list_hotspots") {
+        return { status: "unsupported", output: { items: [], sources: [] }, completed_at: new Date().toISOString() };
+      }
+      return {
+        status: "completed",
+        output: {
+          sources: input.sources?.length ? input.sources : ["weibo"],
+          items: [{
+            external_id: "fixture-hotspot-1",
+            source_id: "weibo",
+            source_name: "微博",
+            rank: 1,
+            title: "U01-05 真实链路热点",
+            url: "https://example.test/hotspots/u01-05",
+            heat: "1000",
+            category: "technology",
+            fetched_at: "2026-07-18T12:00:00.000Z"
+          }]
+        },
+        completed_at: "2026-07-18T12:00:00.000Z"
+      };
+    },
     async streamOperation({ operation: name, input = {} }) {
       operations.push({ operation: name, input: structuredClone(input) });
       if (name !== "sessions.chat.stream") return new Response("", { headers: { "content-type": "text/event-stream" } });

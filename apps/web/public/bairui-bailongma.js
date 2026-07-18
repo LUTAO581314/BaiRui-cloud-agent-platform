@@ -11,7 +11,9 @@
     stopPromise: null,
     approvalDialog: null,
     lastMessage: null,
-    user: null
+    user: null,
+    panelManifest: null,
+    panelManifestAgentId: null
   };
   const compatibilityStreams = new Set();
 
@@ -34,6 +36,97 @@
       throw error;
     }
     return body;
+  }
+
+  function panelApi(agentId, panelId = "", suffix = "") {
+    const base = `/api/user/agents/${encodeURIComponent(agentId)}/ui/panels`;
+    return panelId ? `${base}/${encodeURIComponent(panelId)}${suffix}` : base;
+  }
+
+  async function loadPanelManifest(force = false) {
+    const agent = await loadActiveAgent();
+    if (!force && state.panelManifest && state.panelManifestAgentId === agent.id) return state.panelManifest;
+    const manifest = await requestJson(panelApi(agent.id));
+    state.panelManifest = manifest;
+    state.panelManifestAgentId = agent.id;
+    window.dispatchEvent(new CustomEvent("bairui:panel-manifest", { detail: manifest }));
+    return manifest;
+  }
+
+  async function panelSnapshot(panelId) {
+    const agent = await loadActiveAgent();
+    return requestJson(panelApi(agent.id, panelId, "/snapshot"));
+  }
+
+  async function panelCommand(panelId, command, payload = {}, options = {}) {
+    const agent = await loadActiveAgent();
+    const body = {
+      command,
+      payload,
+      ...(options.commandId ? { command_id: options.commandId } : {}),
+      ...(options.baseRevision !== undefined ? { base_revision: options.baseRevision } : {})
+    };
+    const result = await requestJson(panelApi(agent.id, panelId, "/commands"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    await loadPanelManifest(true);
+    return result;
+  }
+
+  function openPanelEvents(panelId, afterRevision = 0) {
+    const agent = state.activeAgent;
+    if (!agent?.id) throw new Error("active_agent_required");
+    const url = new URL(panelApi(agent.id, panelId, "/events"), location.origin);
+    url.searchParams.set("after", String(Math.max(0, Number(afterRevision) || 0)));
+    return new EventSource(`${url.pathname}${url.search}`);
+  }
+
+  async function panelCapability(panelId, capability) {
+    const manifest = await loadPanelManifest();
+    const panel = manifest.panels?.find((item) => item.id === panelId);
+    const stateName = panel?.[capability === "audit-stats" ? "events" : capability]?.status || "unsupported";
+    return jsonResponse({ error: stateName, panel_id: panelId, state: stateName, reason: `${capability}_not_available` }, stateName === "needs_configuration" ? 409 : 501);
+  }
+
+  async function panelState(panelId, options = {}) {
+    const body = typeof options.body === "string" ? JSON.parse(options.body) : options.body || {};
+    return jsonResponse(await panelCommand(panelId, "visibility", { visible: body.visible !== false, source: body.source || "brain-ui" }));
+  }
+
+  async function hotspots() {
+    const snapshot = await panelSnapshot("hotspots");
+    return jsonResponse(snapshot.data?.native || { platforms: {}, stale: true, state: snapshot.state });
+  }
+
+  function applyPanelAvailability(manifest) {
+    const roots = Object.freeze({
+      "voice-tts": "#voice-panel",
+      hotspots: "#hotspot-panel",
+      docs: "#doc-panel",
+      "person-card": "#person-card-panel",
+      typhoon: "#typhoon-panel",
+      worldcup: "#worldcup-panel",
+      "media-video": "#aivideo-panel"
+    });
+    const labels = { needs_configuration: "需要配置", temporarily_unavailable: "暂时不可用", unsupported: "当前版本不支持" };
+    for (const panel of manifest.panels || []) {
+      document.body.dataset[`bairuiPanel${panel.id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()).replace(/^./, (letter) => letter.toUpperCase())}`] = panel.state;
+      const root = document.querySelector(roots[panel.id]);
+      if (!root || panel.state === "available") continue;
+      root.dataset.bairuiPanelState = panel.state;
+      let notice = root.querySelector("[data-bairui-panel-availability]");
+      if (!notice) {
+        notice = document.createElement("div");
+        notice.dataset.bairuiPanelAvailability = "true";
+        notice.className = "bairui-panel-availability";
+        notice.setAttribute("role", "status");
+        root.prepend(notice);
+      }
+      notice.textContent = labels[panel.state] || panel.state;
+      notice.title = panel.reason || panel.state;
+    }
   }
 
   function openRunEvents(runId, options = {}) {
@@ -720,12 +813,16 @@
       return jsonResponse({ name: agent.name, agentId: agent.id, runtime: "Hermes", runtimeStatus: agent.runtime?.status || "uninitialized", ui: "BaiLongma Brain UI" });
     },
     async memories(options = {}) {
-      const agent = await loadActiveAgent();
-      const url = new URL("/memories", location.origin);
-      url.searchParams.set("agent_id", agent.id);
-      url.searchParams.set("limit", String(Math.max(1, Math.min(Number(options.limit) || 120, 200))));
-      return platformRequest(`${url.pathname}${url.search}`);
+      const snapshot = await panelSnapshot("memory-graph");
+      return jsonResponse((snapshot.data?.native || []).slice(0, Math.max(1, Math.min(Number(options.limit) || 120, 200))));
     },
+    hotspots,
+    loadPanelManifest,
+    panelSnapshot,
+    panelCommand,
+    panelCapability,
+    panelState,
+    openPanelEvents,
     openEvents() {
       return new BairuiCompatibilityStream();
     }
@@ -1065,6 +1162,8 @@
   async function mountPlatformTools() {
     const [me, agent] = await Promise.all([requestJson("/api/me"), loadActiveAgent()]);
     state.user = me.user;
+    const panelManifest = await loadPanelManifest();
+    applyPanelAvailability(panelManifest);
     const originalSettings = document.querySelector("#settings-btn");
     if (originalSettings) {
       originalSettings.hidden = false;
@@ -1154,7 +1253,11 @@
     prefillChat,
     initializationLabel,
     operationalCode,
-    operationalFailure
+    operationalFailure,
+    loadPanelManifest,
+    panelSnapshot,
+    panelCommand,
+    openPanelEvents
   });
 
   window.addEventListener("DOMContentLoaded", () => mountPlatformTools().catch((error) => console.warn("[bairui]", error.message)), { once: true });

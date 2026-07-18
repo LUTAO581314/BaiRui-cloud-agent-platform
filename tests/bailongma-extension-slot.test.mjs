@@ -76,7 +76,7 @@ test("channel and hotspot views are separate Agent-scoped workspace extensions",
   }
   assert.doesNotMatch(channels, /window\.fetch\s*=|window\.EventSource\s*=/);
   const hotspots = fs.readFileSync(path.join(root, "apps", "web", "public", "bairui-workspace-hotspots.js"), "utf8");
-  for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"hotspots\"", "agentApi(\"/hotspots\")", "bridge.prefillChat", "closeWorkspace"]) {
+  for (const evidence of ["window.BairuiWorkspaceRegistry", "id: \"hotspots\"", "bridge.panelSnapshot(\"hotspots\")", "bridge.panelCommand(\"hotspots\", \"refresh\")", "bridge.prefillChat", "closeWorkspace"]) {
     assert.match(hotspots, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.doesNotMatch(hotspots, /window\.fetch\s*=|window\.EventSource\s*=/);

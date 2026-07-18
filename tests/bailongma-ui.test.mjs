@@ -8,7 +8,7 @@ import { createBailongmaUi } from "../packages/bailongma-ui/index.mjs";
 import { toBailongmaHotspots, toBailongmaMemories } from "../packages/bailongma-ui/compatibility.mjs";
 import { transformBailongmaBrainApp } from "../packages/bailongma-ui/brain-app-transform.mjs";
 import { transformBailongmaAppShell } from "../packages/bailongma-ui/app-shell-transform.mjs";
-import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostVoiceWake } from "../packages/bailongma-ui/host-adapter-transform.mjs";
+import { transformBailongmaHostApp, transformBailongmaHostChat, transformBailongmaHostHotspot, transformBailongmaHostVoiceWake } from "../packages/bailongma-ui/host-adapter-transform.mjs";
 import { bailongmaBuildRoot, bailongmaSourceRoot, createTestBailongmaUi } from "./helpers/bailongma-ui.mjs";
 
 const root = bailongmaSourceRoot;
@@ -31,10 +31,13 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-workspace-jobs\.js/);
   assert.match(html, /\/assets\/bairui-workspace-hermes\.js/);
   assert.match(html, /\/assets\/bairui-workspace-settings\.js/);
+  assert.doesNotMatch(html, /<script[^>]+src="\/bailongma-ui\/src\/ui\/scene-shell\/bootstrap\.js"/);
   assert.match(html, /<head>[\s\S]*data-bairui-overlay[\s\S]*<\/head>/);
   assert.doesNotMatch(html, /<body>\s*<link rel="stylesheet"/);
   assert.match(ui.readAsset("/bailongma-ui/LICENSE").body.toString(), /MIT License/);
-  assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString(), /addProjectedMemoryLinks/);
+  const builtApp = ui.readAsset("/bailongma-ui/src/ui/brain-ui/app.js").body.toString();
+  assert.match(builtApp, /addProjectedMemoryLinks/);
+  assert.match(builtApp, /import \{ bootstrapScene \} from "\.\.\/scene-shell\/bootstrap\.js"/);
   assert.match(ui.readAsset("/bailongma-ui/src/ui/brain-ui/app-shell.js").body.toString(), /createSecondaryPanel\(\),\s+createThemeSwitcher\(\),\s+createPanelTabs\(\),\s+createBairuiExtensionHost\(\),\s+createConsole\(\)/);
   assert.equal(ui.readAsset("/bailongma-ui/../../package.json"), null);
 });
@@ -59,9 +62,11 @@ test("serves only a verified build-time BaiLongma patch artifact", () => {
 test("compiles BaiLongma network calls to the explicit immutable host adapter", () => {
   const app = transformBailongmaHostApp(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "app.js"), "utf8"));
   const chat = transformBailongmaHostChat(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "chat.js"), "utf8"));
+  const hotspot = transformBailongmaHostHotspot(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "hotspot.js"), "utf8"));
   const wake = transformBailongmaHostVoiceWake(fs.readFileSync(path.join(root, "src", "ui", "brain-ui", "voice-wake.js"), "utf8"));
-  for (const method of ["agentProfile", "memories", "openEvents"]) assert.match(app, new RegExp("hostAdapter\\." + method));
+  for (const method of ["agentProfile", "memories", "panelCapability", "openEvents"]) assert.match(app, new RegExp("hostAdapter\\." + method));
   for (const method of ["conversations", "sendMessage"]) assert.match(chat, new RegExp("hostAdapter\\." + method));
+  for (const method of ["hotspots", "panelState"]) assert.match(hotspot, new RegExp("hostAdapter\\." + method));
   assert.match(wake, /BairuiHostAdapter\?\.openEvents/);
   assert.throws(() => transformBailongmaHostChat("export const unrelated = true;"), /anchor/);
 });
@@ -83,10 +88,17 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
   assert.match(adapter, /submitAgentInitialization\(agent, configuration/);
   assert.doesNotMatch(adapter, /memory-sync/);
   assert.match(adapter, /Object\.defineProperty\(window, "BairuiHostAdapter"/);
+  for (const method of ["loadPanelManifest", "panelSnapshot", "panelCommand", "openPanelEvents", "panelCapability"]) assert.match(adapter, new RegExp(method));
   assert.match(adapter, /approval\.request/);
   assert.match(adapter, /runs\/\$\{encodeURIComponent\(runId\)\}\/stop/);
   assert.doesNotMatch(adapter, /window\.fetch\s*=/);
   assert.doesNotMatch(adapter, /window\.EventSource\s*=/);
+  assert.doesNotMatch(adapter, /window\.WebSocket\s*=/);
+  const sceneAdapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-scene-bootstrap.js"), "utf8");
+  for (const evidence of ["export function bootstrapScene", "bootstrapPanelTransport", "panel.snapshot.endpoint", "panel.events.endpoint", "transport.client(\"scene-shell\")"]) {
+    assert.match(sceneAdapter, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(sceneAdapter, /new WebSocket|window\.fetch\s*=|window\.EventSource\s*=|window\.WebSocket\s*=/);
 });
 
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {

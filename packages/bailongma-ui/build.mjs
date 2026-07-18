@@ -9,6 +9,7 @@ const BUILD_INTEGRITY_FILES = Object.freeze([
   "src/ui/brain-ui/app.js",
   "src/ui/brain-ui/app-shell.js",
   "src/ui/brain-ui/chat.js",
+  "src/ui/brain-ui/hotspot.js",
   "src/ui/brain-ui/voice-wake.js"
 ]);
 

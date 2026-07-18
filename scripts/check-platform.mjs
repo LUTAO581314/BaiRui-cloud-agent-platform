@@ -28,6 +28,7 @@ const required = [
   "apps/web/app.mjs",
   "apps/web/http.mjs",
   "apps/web/routes/auth.mjs",
+  "apps/web/routes/user-panels.mjs",
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
   "apps/web/routes/internal-control.mjs",
@@ -74,11 +75,13 @@ const required = [
   "packages/bailongma-ui/brain-app-transform.mjs",
   "packages/bailongma-ui/app-shell-transform.mjs",
   "packages/bailongma-ui/host-adapter-transform.mjs",
+  "packages/bailongma-ui/panel-contracts.mjs",
   "packages/bailongma-ui/patch-queue.mjs",
   "packages/bailongma-ui/build.mjs",
   "packages/server-protocol/control-plane.mjs",
   "packages/bailongma-ui/index.mjs",
   "packages/bailongma-ui/compatibility.mjs",
+  "packages/scene/sse-transport.mjs",
   "patches/bailongma/manifest.yaml",
   "packages/security/secret-envelope.mjs",
   "packages/security/control-mutation.mjs",
@@ -102,6 +105,9 @@ const required = [
   "tests/control-authority-route.test.mjs",
   "tests/contracts-candidate.test.mjs",
   "tests/bailongma-ui.test.mjs",
+  "tests/u01-05-live-panel.test.mjs",
+  "tests/u01-05-panel-contract-golden.test.mjs",
+  "tests/fixtures/u01-05-panel-golden.json",
   "tests/memory-projection-worker.test.mjs",
   "tests/channel-adapters.test.mjs",
   "tests/channel-delivery.test.mjs",
@@ -152,7 +158,10 @@ const required = [
   "docs/17-agent-resource-telemetry.md",
   "docs/23-durable-channel-bridge.md",
   "docs/24-immutable-release-pipeline.md",
-  "docs/U01-04-SHELL-EVIDENCE.md"
+  "docs/U01-04-SHELL-EVIDENCE.md",
+  "docs/BAILONGMA-LIVE-PANEL-MATRIX.md",
+  "docs/BAILONGMA-LIVE-PANEL-MATRIX.json",
+  "docs/U01-05-LIVE-PANEL-EVIDENCE.md"
 ];
 const failures = [];
 for (const file of required) if (!fs.existsSync(path.join(root, file))) failures.push(`Missing required platform file: ${file}`);
@@ -283,7 +292,7 @@ for (const evidence of ["BairuiWorkspaceRegistry", "id: \"channels\"", "agentApi
 }
 if (workspaceAdapter.includes("function renderChannels") || workspaceAdapter.includes("channels: [5,")) failures.push("Channels view must not remain built into the core workspace script");
 const hotspotsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-hotspots.js"), "utf8");
-for (const evidence of ["BairuiWorkspaceRegistry", "id: \"hotspots\"", "agentApi(\"/hotspots\")", "bridge.prefillChat", "closeWorkspace"]) {
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"hotspots\"", "bridge.panelSnapshot(\"hotspots\")", "bridge.panelCommand(\"hotspots\", \"refresh\")", "bridge.prefillChat", "closeWorkspace"]) {
   if (!hotspotsExtension.includes(evidence)) failures.push("Missing modular hotspots workspace extension evidence: " + evidence);
 }
 if (workspaceAdapter.includes("function renderHotspots") || workspaceAdapter.includes("hotspots: [6,")) failures.push("Hotspots view must not remain built into the core workspace script");
@@ -317,6 +326,13 @@ for (const forbidden of ["!important", ".bw-dialog", ".bw-form", ".bairui-card-d
 }
 const unscopedCssRules = bailongmaOverlayCss.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes("{") && !line.startsWith("@") && !line.startsWith("body[data-bairui-shell]"));
 if (unscopedCssRules.length) failures.push(`BaiRui overlay contains unscoped CSS rules: ${unscopedCssRules.slice(0, 3).join(" | ")}`);
+const sceneAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-scene-bootstrap.js"), "utf8");
+for (const evidence of ["export function bootstrapScene", "bootstrapPanelTransport", "panel.snapshot.endpoint", "panel.events.endpoint", "transport.client(\"scene-shell\")", "openPanelEvents"]) {
+  if (!sceneAdapter.includes(evidence)) failures.push(`Missing BaiLongma Scene interface compatibility evidence: ${evidence}`);
+}
+for (const forbidden of ["new WebSocket", "window.fetch =", "window.EventSource =", "window.WebSocket ="]) {
+  if (sceneAdapter.includes(forbidden)) failures.push(`BaiLongma Scene adapter must not replace or open an unmanaged browser transport: ${forbidden}`);
+}
 const userShellAdapter = fs.readFileSync(path.join(root, "apps/web/public/bairui-bailongma.js"), "utf8");
 for (const forbidden of ["href = \"/admin\"", "href=\"/admin\"", "总控后台", "管理后台"]) {
   if (userShellAdapter.includes(forbidden)) failures.push(`Ordinary user Shell must not expose administrator navigation: ${forbidden}`);
@@ -329,6 +345,13 @@ const u0104Evidence = fs.readFileSync(path.join(root, "docs/U01-04-SHELL-EVIDENC
 for (const evidence of ["U01-04 only", "does not complete U01-05", "does not claim that Gate U01 passes", "1920x1080", "390x844"]) {
   if (!u0104Evidence.includes(evidence)) failures.push(`U01-04 evidence boundary is missing: ${evidence}`);
 }
+const u0105Evidence = fs.readFileSync(path.join(root, "docs/U01-05-LIVE-PANEL-EVIDENCE.md"), "utf8");
+for (const evidence of ["U01-05 changes are limited", "bairui.panel-manifest.v1", "95ad7d2259932b7882e9e1c2de6ee968b75291e284fae7d7d7149341514a6544", "1920x1080", "390x844", "Status: `IN_PROGRESS`", "GATE-U01` remains `PENDING"]) {
+  if (!u0105Evidence.includes(evidence)) failures.push(`U01-05 evidence boundary is missing: ${evidence}`);
+}
+const browserAcceptance = fs.readFileSync(path.join(root, "tests/browser/remote-acceptance.mjs"), "utf8");
+if (!browserAcceptance.includes('polling: "raf"')) failures.push("U01-05 browser acceptance must retain the PR #63 layout convergence wait");
+if (browserAcceptance.includes("waitForTimeout(450)")) failures.push("U01-05 browser acceptance must not duplicate the PR #63 fixed-wait regression");
 for (const action of ["snapshot.collect", "deployment.provision", "deployment.start", "deployment.stop", "deployment.suspend", "deployment.resume", "deployment.delete", "credential.revoke", "probe.run", "contract.test", "smoke.test", "upstream.check", "config.stage", "config.apply", "backup.create", "backup.verify", "backup.restore", "backup.expire", "release.stage", "release.apply", "release.rollback", "service.restart"]) {
   if (!CONTROL_ACTIONS.includes(action)) failures.push(`Missing allowed control action: ${action}`);
 }

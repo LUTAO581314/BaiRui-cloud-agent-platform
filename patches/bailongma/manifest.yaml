@@ -43,6 +43,7 @@
       "anchors": [
         "const res = await fetch(`${API}/agent-profile`);",
         "const rows = await fetch(`${API}/memories?limit=120`).then(r => r.json());",
+        "const res = await fetch(\"/audit/stats?hours=1\", { cache: \"no-store\" });",
         "const es = new EventSource(`${API}/events`);"
       ],
       "tests": ["tests/bailongma-ui.test.mjs"],
@@ -59,6 +60,18 @@
       ],
       "tests": ["tests/bailongma-ui.test.mjs"],
       "removalCondition": "BaiLongma chat accepts an injected host transport contract"
+    },
+    {
+      "id": "runtime-hotspot-panel-adapter",
+      "kind": "source-transform",
+      "target": "src/ui/brain-ui/hotspot.js",
+      "handler": "transformBailongmaHostHotspot",
+      "anchors": [
+        "const res = await fetch(apiUrl(`/hotspots${query ? `?${query}` : ''}`));",
+        "fetch(apiUrl('/hotspot-state'), {"
+      ],
+      "tests": ["tests/bailongma-ui.test.mjs", "tests/u01-05-live-panel.test.mjs"],
+      "removalCondition": "BaiLongma hotspot panel accepts an Agent-scoped snapshot, command and event contract"
     },
     {
       "id": "runtime-voice-host-adapter",
