@@ -121,6 +121,8 @@ const required = [
   "apps/web/public/bairui-workspace.js",
   "apps/web/public/bairui-workspace-conversations.js",
   "apps/web/public/bairui-workspace-agents.js",
+  "apps/web/public/bairui-workspace-channels.js",
+  "apps/web/public/bairui-workspace-hotspots.js",
   "apps/web/public/bairui-workspace-usage.js",
   "apps/web/public/bairui-workspace-memory.js",
   "apps/web/public/bairui-workspace-skills.js",
@@ -224,6 +226,8 @@ for (const evidence of [".bairui-build.json", "applyBailongmaPatchQueue", "BUILD
 }
 if (!bailongmaBuild.includes("/assets/bairui-workspace-conversations.js")) failures.push("BaiRui build must inject the modular conversations workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-agents.js")) failures.push("BaiRui build must inject the modular Agent workspace extension");
+if (!bailongmaBuild.includes("/assets/bairui-workspace-channels.js")) failures.push("BaiRui build must inject the modular channels workspace extension");
+if (!bailongmaBuild.includes("/assets/bairui-workspace-hotspots.js")) failures.push("BaiRui build must inject the modular hotspots workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-usage.js")) failures.push("BaiRui build must inject the modular usage workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-memory.js")) failures.push("BaiRui build must inject the modular memory workspace extension");
 if (!bailongmaBuild.includes("/assets/bairui-workspace-skills.js")) failures.push("BaiRui build must inject the modular skills workspace extension");
@@ -259,6 +263,16 @@ for (const evidence of ["BairuiWorkspaceRegistry", "id: \"agents\"", "bridge.req
   if (!agentsExtension.includes(evidence)) failures.push("Missing modular Agent workspace extension evidence: " + evidence);
 }
 if (workspaceAdapter.includes("function renderAgents") || workspaceAdapter.includes("agents: [2,")) failures.push("Agent view must not remain built into the core workspace script");
+const channelsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-channels.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"channels\"", "agentApi(\"/channels\")", "credentialMasked", "data-unbind"]) {
+  if (!channelsExtension.includes(evidence)) failures.push("Missing modular channels workspace extension evidence: " + evidence);
+}
+if (workspaceAdapter.includes("function renderChannels") || workspaceAdapter.includes("channels: [5,")) failures.push("Channels view must not remain built into the core workspace script");
+const hotspotsExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-hotspots.js"), "utf8");
+for (const evidence of ["BairuiWorkspaceRegistry", "id: \"hotspots\"", "agentApi(\"/hotspots\")", "bridge.prefillChat", "closeWorkspace"]) {
+  if (!hotspotsExtension.includes(evidence)) failures.push("Missing modular hotspots workspace extension evidence: " + evidence);
+}
+if (workspaceAdapter.includes("function renderHotspots") || workspaceAdapter.includes("hotspots: [6,")) failures.push("Hotspots view must not remain built into the core workspace script");
 const memoryExtension = fs.readFileSync(path.join(root, "apps/web/public/bairui-workspace-memory.js"), "utf8");
 for (const evidence of ["BairuiWorkspaceRegistry", "id: \"memory\"", "agentApi(\"/memory-notes\")", "agentApi(\"/memory-sync\")", "Obsidian 主记忆库", "hermesTarget"]) {
   if (!memoryExtension.includes(evidence)) failures.push("Missing modular memory workspace extension evidence: " + evidence);
@@ -269,7 +283,7 @@ for (const evidence of ["BairuiWorkspaceRegistry", "id: \"skills\"", "agentApi(\
 }
 const workspacePath = path.join(root, "apps/web/public/bairui-workspace.js");
 const workspace = fs.existsSync(workspacePath) ? fs.readFileSync(workspacePath, "utf8") : "";
-for (const view of ["renderMemory", "renderSkills", "renderChannels", "renderHotspots", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
+for (const view of ["renderMemory", "renderSkills", "renderRuns", "renderJobs", "renderUsage", "renderSettings"]) {
   if (!workspace.includes(view)) failures.push(`Missing BaiRui user workspace view: ${view}`);
 }
 for (const evidence of ["Runtime Capabilities", "Hermes Toolsets", "discovery.capabilities", "discovery.toolsets", "data-edit-job", "编辑定时任务"]) {

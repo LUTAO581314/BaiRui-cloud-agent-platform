@@ -22,6 +22,8 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-workspace\.js/);
   assert.match(html, /\/assets\/bairui-workspace-conversations\.js/);
   assert.match(html, /\/assets\/bairui-workspace-agents\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-channels\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-hotspots\.js/);
   assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
   assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
   assert.match(html, /\/assets\/bairui-workspace-skills\.js/);
@@ -87,9 +89,13 @@ test("Bairui workspace exposes complete user views through Agent-scoped APIs", (
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
   const conversations = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-conversations.js"), "utf8");
   const agents = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-agents.js"), "utf8");
+  const channels = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-channels.js"), "utf8");
+  const hotspots = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-hotspots.js"), "utf8");
   assert.match(conversations, /renderConversations/);
   assert.match(agents, /renderAgents/);
-  for (const view of ["memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
+  assert.match(channels, /renderChannels/);
+  assert.match(hotspots, /renderHotspots/);
+  for (const view of ["memory", "skills", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
   for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
   assert.match(workspace, /Hermes MEMORY\.md/);
   assert.match(workspace, /Hermes USER\.md/);

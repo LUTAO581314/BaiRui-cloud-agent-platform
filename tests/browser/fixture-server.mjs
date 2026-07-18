@@ -263,6 +263,8 @@ export async function startBrowserFixture() {
     bairuiWorkspaceScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace.js"), "utf8"),
     bairuiWorkspaceConversationsScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-conversations.js"), "utf8"),
     bairuiWorkspaceAgentsScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-agents.js"), "utf8"),
+    bairuiWorkspaceChannelsScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-channels.js"), "utf8"),
+    bairuiWorkspaceHotspotsScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-hotspots.js"), "utf8"),
     bairuiWorkspaceUsageScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-usage.js"), "utf8"),
     bairuiWorkspaceMemoryScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-memory.js"), "utf8"),
     bairuiWorkspaceSkillsScript: fs.readFileSync(path.join(publicRoot, "bairui-workspace-skills.js"), "utf8"),
