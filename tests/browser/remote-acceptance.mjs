@@ -89,7 +89,11 @@ async function ordinaryDesktop(browser, fixture) {
   const chatWidthBeforeCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
   await page.locator("#panel-l1-tab").click();
   await page.waitForFunction(() => document.body.classList.contains("l1-collapsed"));
-  await page.waitForTimeout(450);
+  await page.waitForFunction(
+    (minimumWidth) => document.querySelector("#chat-area")?.getBoundingClientRect().width > minimumWidth,
+    chatWidthBeforeCollapse + 200,
+    { polling: "raf", timeout: 5_000 }
+  );
   const chatWidthAfterCollapse = await page.locator("#chat-area").evaluate((element) => element.getBoundingClientRect().width);
   assert.ok(chatWidthAfterCollapse > chatWidthBeforeCollapse + 200, "collapsing the left panel must expand the Hermes chat column");
   await page.locator("#panel-l1-tab").click();
