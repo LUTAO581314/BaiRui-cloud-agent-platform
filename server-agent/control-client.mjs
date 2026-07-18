@@ -152,7 +152,7 @@ export async function leaseControlCommands(options) {
     limit: options.limit ?? 5,
     lease_seconds: options.leaseSeconds ?? 120,
     requested_at: fields.created_at,
-    capability_refs: ["ref:control-lease-v1", "ref:contracts-v2.3.0-rc.1"]
+    capability_refs: ["ref:control-lease-v1", "ref:contracts-v2.3.0-rc.2"]
   }, options));
   const response = await signedMachinePost({
     ...options,

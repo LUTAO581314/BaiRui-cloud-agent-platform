@@ -6,7 +6,7 @@ import { CONTRACTS_VERSION, CONTROL_ACTIONS, CONTROL_QUARANTINED_ACTIONS, CONTRO
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const expectedContractsVersion = "2.3.0-rc.1";
+const expectedContractsVersion = "2.3.0-rc.2";
 const expectedContracts = `https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v${expectedContractsVersion}`;
 if (CONTRACTS_VERSION !== expectedContractsVersion) throw new Error(`@bairui/contracts must expose ${expectedContractsVersion}`);
 if (manifest.dependencies?.["@bairui/contracts"] !== expectedContracts) throw new Error(`@bairui/contracts must be pinned to ${expectedContracts}`);

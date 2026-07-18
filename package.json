@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v2.3.0-rc.1",
+    "@bairui/contracts": "https://codeload.github.com/LUTAO581314/BaiRui-contracts/tar.gz/refs/tags/v2.3.0-rc.2",
     "@larksuiteoapi/node-sdk": "1.71.1",
     "@tencent-connect/qqbot-connector": "1.1.0",
     "pg": "^8.16.0",

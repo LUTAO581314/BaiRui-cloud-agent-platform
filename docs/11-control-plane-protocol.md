@@ -55,7 +55,7 @@ arguments contain revision/release/backup/probe/service identifiers, never raw
 secret values, user content, or executable text.
 
 `config.apply-user` is a legacy-readable, quarantined action. Contracts
-`v2.3.0-rc.1` rejects it in new command and lease envelopes, and consumers must
+`v2.3.0-rc.2` rejects it in new command and lease envelopes, and consumers must
 not translate it into another canonical action. Existing repository rows and
 the legacy Supervisor handler remain migration input for C00-03; they are not a
 valid issuance path. The general `config.apply` path remains
