@@ -62,7 +62,14 @@ const required = [
   "packages/db/migrations/016_agent_authorizations.sql",
   "packages/db/migrations/017_memory_projection_outbox.sql",
   "packages/db/migrations/018_durable_channel_delivery.sql",
+  "packages/db/migrations/019_agent_owned_model_provider.sql",
+  "packages/db/migrations/020_scene_projection.sql",
+  "packages/db/migrations/021_control_authority_model.sql",
+  "packages/db/control-authority-repository.mjs",
+  "packages/control-authority/policy.mjs",
+  "packages/control-authority/service.mjs",
   "docs/README.md",
+  "docs/C00-03-POSTGRES-CONTROL-MODEL.md",
   "docs/18-hermes-obsidian-memory.md",
   "docs/19-remote-browser-acceptance.md",
   "docs/20-platform-agent-integration-guide.md",
@@ -101,6 +108,8 @@ const required = [
   "tests/control-mutation.test.mjs",
   "tests/control-authority-route.test.mjs",
   "tests/contracts-candidate.test.mjs",
+  "tests/control-authority-schema.test.mjs",
+  "tests/postgres-control-authority.test.mjs",
   "tests/bailongma-ui.test.mjs",
   "tests/memory-projection-worker.test.mjs",
   "tests/channel-adapters.test.mjs",
@@ -344,6 +353,21 @@ const controlMigration = fs.existsSync(controlMigrationPath) ? fs.readFileSync(c
 for (const table of ["control_deployments", "module_instances", "desired_states", "observations", "control_commands", "command_attempts", "control_approvals", "config_revisions", "release_manifests", "release_rollouts", "release_gates", "test_runs", "test_artifacts", "upstream_candidates", "backup_records", "incidents", "control_events", "alert_rules", "agent_identities", "audit_hash_chain", "control_outbox", "control_dead_letters"]) {
   if (!controlMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing control-plane table: ${table}`);
 }
+const authorityMigration = fs.readFileSync(path.join(root, "packages/db/migrations/021_control_authority_model.sql"), "utf8");
+for (const table of ["control_secret_references", "control_command_leases", "command_verifications", "control_idempotency_records", "control_audit_events"]) {
+  if (!authorityMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing C00-03 Authority table: ${table}`);
+}
+for (const evidence of ["bairui_control_json_is_safe", "bairui_secret_refs_are_opaque", "bairui_prepare_desired_state_revision", "desired_states_prepare_revision", "control_outbox_authority_ready_idx", "completion_candidate", "freshness"]) {
+  if (!authorityMigration.includes(evidence)) failures.push(`Missing C00-03 Authority persistence evidence: ${evidence}`);
+}
+const authorityPolicy = fs.readFileSync(path.join(root, "packages/control-authority/policy.mjs"), "utf8");
+for (const forbidden of ["config.apply-user", "runtime.shell", "prompt.run", "memory.read"]) {
+  if (authorityPolicy.includes(`\"${forbidden}\": {`)) failures.push(`C00-03 Authority action dictionary must quarantine ${forbidden}`);
+}
+const authorityService = fs.readFileSync(path.join(root, "packages/control-authority/service.mjs"), "utf8");
+for (const evidence of ["validateDesiredState", "validateObservation", "validateControlCommandEnvelope", "validateApproval", "validateReleaseManifest", "validateLeaseRequestEnvelope", "validateReceiptEnvelope", "assertSecretReference", "observationVersion"]) {
+  if (!authorityService.includes(evidence)) failures.push(`C00-03 Authority canonical adapter is missing ${evidence}`);
+}
 const tenantMigrationPath = path.join(root, "packages/db/migrations/005_multi_tenant_agents.sql");
 const tenantMigration = fs.existsSync(tenantMigrationPath) ? fs.readFileSync(tenantMigrationPath, "utf8") : "";
 for (const table of ["agent_memberships", "agent_runtimes"]) {
@@ -382,8 +406,13 @@ for (const table of ["server_credentials", "agent_runtime_credentials", "machine
   if (!deliveryMigration.includes(`CREATE TABLE IF NOT EXISTS ${table}`)) failures.push(`Missing command delivery table: ${table}`);
 }
 const controlDeliverySource = server + routeSources.join("\n");
-for (const evidence of ["/api/internal/control-plane/commands/lease", "controlAuthority.leaseCommands", "controlAuthority.recordReceipt", "validateLeaseRequestEnvelope", "validateReceiptEnvelope", "verifyMachineRequest", "verifyControlMutationSignature", "control-authority-migration-required"]) {
+for (const evidence of ["/api/internal/control-plane/leases", "/api/internal/control-plane/receipts", "controlAuthority.leaseCommands", "controlAuthority.recordReceipt", "validateLeaseRequestEnvelope", "validateReceiptEnvelope", "verifyMachineRequest", "verifyControlMutationSignature", "control-authority-migration-required"]) {
   if (!controlDeliverySource.includes(evidence)) failures.push(`Missing command delivery server evidence: ${evidence}`);
+}
+const internalControlRouteSource = fs.readFileSync(path.join(root, "apps/web/routes/internal-control.mjs"), "utf8");
+const controlClientSource = fs.readFileSync(path.join(root, "server-agent/control-client.mjs"), "utf8");
+for (const legacyPath of ["/api/internal/control-plane/commands/lease", "/api/internal/control-plane/commands/receipts", "/api/internal/control-plane/commands/${encodeURIComponent(command.command_id)}/receipts"]) {
+  if ((internalControlRouteSource + controlClientSource).includes(legacyPath)) failures.push(`Legacy command delivery path must not remain a production entry: ${legacyPath}`);
 }
 const userSurfaceMigrationPath = path.join(root, "packages/db/migrations/008_user_agent_surfaces.sql");
 const userSurfaceMigration = fs.existsSync(userSurfaceMigrationPath) ? fs.readFileSync(userSurfaceMigrationPath, "utf8") : "";
@@ -399,6 +428,7 @@ for (const fragment of ["memory_kind", "hermes_target", "hermes_sync_status"]) i
 const memoryOutboxMigration = fs.readFileSync(path.join(root, "packages/db/migrations/017_memory_projection_outbox.sql"), "utf8");
 for (const fragment of ["CREATE TABLE IF NOT EXISTS memory_projection_outbox", "memory_projection_outbox_pending_agent_idx", "memory_projection_outbox_processing_agent_idx"]) if (!memoryOutboxMigration.includes(fragment)) failures.push(`Memory outbox migration is missing ${fragment}`);
 const platformStartup = fs.readFileSync(path.join(root, "apps/web/server.mjs"), "utf8");
+for (const evidence of ["ControlAuthorityRepository", "ControlAuthorityService", "controlAuthority,"]) if (!platformStartup.includes(evidence)) failures.push(`Control Authority production wiring is missing ${evidence}`);
 for (const evidence of ["MemoryProjectionWorker", ".start()", "memoryProjectionWorker?.stop()"] ) if (!platformStartup.includes(evidence)) failures.push(`Memory projection worker lifecycle is missing ${evidence}`);
 for (const evidence of ["memory_projection_outbox", "background projection worker", "browser"] ) if (!integrationGuide.includes(evidence)) failures.push(`Memory reliability guidance is missing ${evidence}`);
 const channelMigration = fs.readFileSync(path.join(root, "packages/db/migrations/018_durable_channel_delivery.sql"), "utf8");

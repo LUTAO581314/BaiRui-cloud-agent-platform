@@ -32,4 +32,10 @@ delivery model. This consumer task does not modify those repositories or their
 migrations. Canonical HTTP routes therefore require an injected C00-03 Control
 Authority and fail closed while that service is absent.
 
+The production HTTP entry is exactly `POST /api/internal/control-plane/leases`
+for lease requests and `POST /api/internal/control-plane/receipts` for receipts.
+The former `/commands/lease`, `/commands/receipts`, and command-id receipt paths
+remain Contracts compatibility descriptions only; Platform does not route or
+silently translate them into the Authority.
+
 This is a cross-repository consumer candidate, not a `GATE-C00` result.

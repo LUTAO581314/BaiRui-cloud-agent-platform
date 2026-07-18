@@ -10,7 +10,7 @@ function authorityFetch(options = {}) {
   const fetch = async (url, request) => {
     const body = JSON.parse(request.body);
     requests.push({ url, body, headers: request.headers });
-    if (url.endsWith("/lease")) {
+    if (url.endsWith("/leases")) {
       const leaseRequest = validateLeaseRequestEnvelope(body);
       const lease = canonicalLease(leaseRequest, options.lease ?? {});
       if (options.mutateLease) options.mutateLease(lease);
@@ -32,6 +32,8 @@ test("Server Agent sends canonical owner-scoped envelopes and completion candida
   assert.deepEqual(authority.receipts.map((receipt) => receipt.state), ["accepted", "running", "completion_candidate"]);
   assert.equal(authority.requests[0].body.organization_id, "org_a");
   assert.equal(authority.requests[0].body.agent_id, "agent_a");
+  assert.equal(new URL(authority.requests[0].url).pathname, "/api/internal/control-plane/leases");
+  assert.ok(authority.requests.slice(1).every((item) => new URL(item.url).pathname === "/api/internal/control-plane/receipts"));
   assert.ok(authority.requests.every((item) => item.headers["x-bairui-timestamp"] && item.headers["x-bairui-nonce"] && item.headers["x-bairui-signature"]));
   assert.ok(authority.requests.every((item) => item.body.signature?.value));
   assert.doesNotMatch(JSON.stringify(authority.requests), /state":"succeeded"/);
@@ -43,6 +45,7 @@ test("Server Agent rejects invalid signatures, placement, expiry, raw payloads, 
     { lease: { placement: { server_id: "server_b" } }, code: "invalid_lease_envelope" },
     { lease: { commandMilliseconds: -1 }, code: "invalid_lease_envelope" },
     { lease: { extraCommand: { config: { secrets: { api_key: "raw-secret" } } } }, code: "invalid_lease_envelope" },
+    { lease: { extraCommand: { approval_id: "approval_unexpected" } }, code: "invalid_lease_envelope" },
     { lease: { action: "config.apply-user", arguments: { config_revision_id: "config_a" } }, code: "invalid_lease_envelope" }
   ]) {
     let executed = false;
@@ -95,7 +98,7 @@ test("a rejected completion receipt is not rewritten as an executor failure", as
   const receipts = [];
   const fetch = async (url, request) => {
     const body = JSON.parse(request.body);
-    if (url.endsWith("/lease")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(body)));
+    if (url.endsWith("/leases")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(body)));
     receipts.push(validateReceiptEnvelope(body));
     if (body.state === "completion_candidate") {
       return Response.json({ schema_version: "1.0", error_code: "verification_failed", retryable: true, request_id: body.request_id, correlation_id: body.correlation_id, occurred_at: new Date().toISOString() }, { status: 503 });

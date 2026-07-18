@@ -17,7 +17,7 @@ test("control daemon runs one signed lease cycle through the injected Supervisor
   let executed = 0;
   const fetch = async (url, options) => {
     const body = JSON.parse(options.body);
-    if (url.endsWith("/lease")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(body)));
+    if (url.endsWith("/leases")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(body)));
     validateReceiptEnvelope(body);
     return Response.json({ accepted: true }, { status: 202 });
   };
@@ -29,7 +29,7 @@ test("control daemon reports fixed resource samples with the server identity", a
   const requests = [];
   const fetch = async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body), headers: options.headers });
-    if (url.endsWith("/lease")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(JSON.parse(options.body)), { extraLease: { commands: [] } }));
+    if (url.endsWith("/leases")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(JSON.parse(options.body)), { extraLease: { commands: [] } }));
     if (url.endsWith("/resources")) return Response.json({ accepted: 1 }, { status: 202 });
     throw new Error(`Unexpected request: ${url}`);
   };
@@ -58,7 +58,7 @@ test("control daemon reports an empty fleet so the server remains healthy", asyn
   const requests = [];
   const fetch = async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
-    if (url.endsWith("/lease")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(JSON.parse(options.body)), { extraLease: { commands: [] } }));
+    if (url.endsWith("/leases")) return Response.json(canonicalLease(validateLeaseRequestEnvelope(JSON.parse(options.body)), { extraLease: { commands: [] } }));
     if (url.endsWith("/resources")) return Response.json({ accepted: 0, sampleIds: [] }, { status: 202 });
     throw new Error(`Unexpected request: ${url}`);
   };

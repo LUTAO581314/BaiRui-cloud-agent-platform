@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   CONTROL_ERROR_CODES,
   validateControlError,
@@ -8,7 +8,7 @@ import {
   validateResourceReport,
   validateRuntimeHeartbeat
 } from "@bairui/contracts";
-import { verifyControlMutationSignature } from "../../../packages/security/control-mutation.mjs";
+import { signControlMutation, verifyControlMutationSignature } from "../../../packages/security/control-mutation.mjs";
 import { constantTokenMatch, json, readJson, readSignedJson } from "../http.mjs";
 
 const CONTROL_LAYERS = new Set(["core-runtime", "service-integration", "data-storage", "channel-bridge", "ui-exposure"]);
@@ -17,6 +17,14 @@ const TELEMETRY_SEVERITIES = new Set(["debug", "info", "warning", "error", "crit
 const RESOURCE_STATUSES = new Set(["running", "degraded", "offline", "unknown"]);
 const CONTAINER_RESOURCE_ROLES = new Set(["hermes", "hermes-dashboard", "runtime-boundary"]);
 const CONTAINER_RESOURCE_STATUSES = new Set(["running", "paused", "restarting", "exited", "dead", "created", "removing", "unknown"]);
+const INTERNAL_CONTROL_ERROR_MAP = Object.freeze({
+  invalid_schema: "verification_failed",
+  invalid_reference: "invalid_identifier",
+  invalid_digest: "invalid_identifier",
+  invalid_timestamp: "verification_failed",
+  invalid_sequence: "sequence_conflict",
+  invalid_cursor: "invalid_identifier"
+});
 
 function numericMetrics(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -86,19 +94,72 @@ function controlErrorSurface(body, errorCode, options = {}) {
   });
 }
 
+function wireControlErrorCode(error, fallback = "verification_failed") {
+  if (CONTROL_ERROR_CODES.includes(error?.code)) return error.code;
+  if (error?.code === "invalid_contract") {
+    const keyword = error.issues?.[0]?.keyword;
+    if (keyword === "required") return "missing_field";
+    if (keyword === "additionalProperties") return "unknown_field";
+  }
+  return INTERNAL_CONTROL_ERROR_MAP[error?.code] ?? fallback;
+}
+
 function matchingControlScope(left, right) {
   return ["organization_id", "user_id", "agent_id", "server_id", "request_id", "correlation_id"].every((field) => left[field] === right[field]);
+}
+
+function matchingLeasePlacement(lease, request) {
+  return lease.commands.every((command) => {
+    const placement = command.placement;
+    return placement?.organization_id === request.organization_id
+      && placement?.agent_id === request.agent_id
+      && placement?.server_id === request.server_id
+      && (!placement.user_id || placement.user_id === request.user_id);
+  });
+}
+
+function canonicalLeaseEnvelope(value, request, machine) {
+  if (value && !Array.isArray(value) && value.signature) return value;
+  const commands = Array.isArray(value) ? value : value?.commands;
+  if (!Array.isArray(commands)) throw new TypeError("Control Authority lease result must be an envelope or command array");
+  if (commands.length > 1) throw new TypeError("A canonical lease envelope may contain only one per-command lease identity");
+  const issuedMs = Date.now();
+  const issuedAt = new Date(issuedMs).toISOString();
+  const requestedExpiry = issuedMs + Math.max(15, Math.min(Number(request.lease_seconds) || 60, 300)) * 1000;
+  const commandExpiries = commands.map((command) => Date.parse(command.lease_expires_at)).filter(Number.isFinite);
+  const leaseExpiresAt = new Date(commandExpiries.length ? Math.min(requestedExpiry, ...commandExpiries) : requestedExpiry).toISOString();
+  const leaseId = typeof value?.lease_id === "string"
+    ? value.lease_id
+    : commands[0]?.lease_id ?? `lease_batch_${randomUUID()}`;
+  const responseIdempotencyKey = `lease_grant_${createHash("sha256").update(request.idempotency_key).digest("hex")}`;
+  return signControlMutation({
+    schema_version: "1.0",
+    organization_id: request.organization_id,
+    user_id: request.user_id,
+    agent_id: request.agent_id,
+    server_id: request.server_id,
+    request_id: request.request_id,
+    correlation_id: request.correlation_id,
+    idempotency_key: responseIdempotencyKey,
+    created_at: issuedAt,
+    revision: request.revision,
+    sequence: request.sequence + 1,
+    lease_id: leaseId,
+    lease_expires_at: leaseExpiresAt,
+    issued_at: issuedAt,
+    commands
+  }, { keyHash: machine.credential.keyHash, keyId: machine.machineId, signedAt: issuedAt });
 }
 
 export function createInternalControlRoutes(options) {
   const { repository, controlAuthority, authenticateMachine, agentIngestToken, publicSnapshot } = options;
   return async function routeInternalControl({ method, url, request, response }) {
-    const receiptMatch = url.pathname.match(/^\/api\/internal\/control-plane\/commands\/([^/]+)\/receipts$/);
-    const leaseRequest = method === "POST" && url.pathname === "/api/internal/control-plane/commands/lease";
+    const leaseRequest = method === "POST" && url.pathname === "/api/internal/control-plane/leases";
+    const receiptRequest = method === "POST" && url.pathname === "/api/internal/control-plane/receipts";
     const snapshotRequest = method === "POST" && url.pathname === "/api/internal/control-plane/snapshots";
     const heartbeatRequest = method === "POST" && url.pathname === "/api/internal/control-plane/heartbeats";
     const resourceRequest = method === "POST" && url.pathname === "/api/internal/control-plane/resources";
-    if (!leaseRequest && !(method === "POST" && receiptMatch) && !snapshotRequest && !heartbeatRequest && !resourceRequest) return false;
+    if (!leaseRequest && !receiptRequest && !snapshotRequest && !heartbeatRequest && !resourceRequest) return false;
 
     if (snapshotRequest) {
       const bearer = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
@@ -177,7 +238,7 @@ export function createInternalControlRoutes(options) {
     if (leaseRequest) {
       let requestEnvelope;
       try { requestEnvelope = validateLeaseRequestEnvelope(signed.body); }
-      catch { json(response, 400, controlErrorSurface(signed.body, "unknown_field")); return true; }
+      catch (error) { json(response, 400, controlErrorSurface(signed.body, wireControlErrorCode(error, "unknown_field"))); return true; }
       if (requestEnvelope.server_id !== machine.machineId) { json(response, 403, controlErrorSurface(requestEnvelope, "server_mismatch", { field: "/server_id" })); return true; }
       if (!verifyControlMutationSignature(requestEnvelope, { keyHash: machine.credential.keyHash, expectedKeyId: machine.machineId })) {
         json(response, 401, controlErrorSurface(requestEnvelope, "invalid_signature", { field: "/signature" }));
@@ -190,9 +251,17 @@ export function createInternalControlRoutes(options) {
         return true;
       }
       let lease;
-      try { lease = validateLeaseEnvelope(await controlAuthority.leaseCommands(requestEnvelope)); }
-      catch { json(response, 502, controlErrorSurface(requestEnvelope, "verification_failed", { retryable: true, ref: "hint:invalid-authority-lease" })); return true; }
-      if (!matchingControlScope(lease, requestEnvelope)) { json(response, 502, controlErrorSurface(requestEnvelope, "owner_mismatch", { ref: "hint:authority-lease-scope" })); return true; }
+      try {
+        const authorityLease = await controlAuthority.leaseCommands(requestEnvelope);
+        lease = validateLeaseEnvelope(canonicalLeaseEnvelope(authorityLease, requestEnvelope, machine));
+      }
+      catch (error) {
+        const statusCode = Number(error?.statusCode) || 502;
+        const errorCode = error?.code === "invalid_contract" ? "verification_failed" : wireControlErrorCode(error);
+        json(response, statusCode, controlErrorSurface(requestEnvelope, errorCode, { retryable: statusCode >= 500, ref: "hint:invalid-authority-lease" }));
+        return true;
+      }
+      if (!matchingControlScope(lease, requestEnvelope) || !matchingLeasePlacement(lease, requestEnvelope)) { json(response, 502, controlErrorSurface(requestEnvelope, "owner_mismatch", { ref: "hint:authority-lease-scope" })); return true; }
       if (!verifyControlMutationSignature(lease, { keyHash: machine.credential.keyHash, expectedKeyId: machine.machineId })) {
         json(response, 502, controlErrorSurface(requestEnvelope, "invalid_signature", { field: "/signature", ref: "hint:authority-lease-signature" }));
         return true;
@@ -203,9 +272,9 @@ export function createInternalControlRoutes(options) {
 
     let receipt;
     try { receipt = validateReceiptEnvelope(signed.body); }
-    catch { json(response, 400, controlErrorSurface(signed.body, "unknown_field")); return true; }
+    catch (error) { json(response, 400, controlErrorSurface(signed.body, wireControlErrorCode(error, "unknown_field"))); return true; }
     if (receipt.server_id !== machine.machineId) { json(response, 403, controlErrorSurface(receipt, "server_mismatch", { field: "/server_id" })); return true; }
-    if (receipt.command_id !== receiptMatch[1]) { json(response, 409, controlErrorSurface(receipt, "receipt_conflict", { field: "/command_id" })); return true; }
+    if (receipt.source_identity !== machine.machineId) { json(response, 403, controlErrorSurface(receipt, "server_mismatch", { field: "/source_identity" })); return true; }
     if (!verifyControlMutationSignature(receipt, { keyHash: machine.credential.keyHash, expectedKeyId: machine.machineId })) {
       json(response, 401, controlErrorSurface(receipt, "invalid_signature", { field: "/signature" }));
       return true;
@@ -218,7 +287,7 @@ export function createInternalControlRoutes(options) {
     }
     try { await controlAuthority.recordReceipt(receipt); }
     catch (error) {
-      const errorCode = CONTROL_ERROR_CODES.includes(error?.code) ? error.code : "verification_failed";
+      const errorCode = wireControlErrorCode(error);
       json(response, Number(error?.statusCode) || 409, controlErrorSurface(receipt, errorCode, { retryable: error?.retryable === true, ref: "hint:control-authority-receipt-rejected" }));
       return true;
     }

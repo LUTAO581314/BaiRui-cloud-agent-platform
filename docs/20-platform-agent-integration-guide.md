@@ -227,8 +227,8 @@ The Server Agent calls the cloud platform over outbound HTTPS:
 | --- | --- | --- |
 | `POST /api/internal/control-plane/heartbeats` | Agent Runtime credential | health, versions, component summaries, usage rollup |
 | `POST /api/internal/control-plane/resources` | Server credential | CPU, memory, storage, OS, container metadata |
-| `POST /api/internal/control-plane/commands/lease` | Server credential | lease approved operational commands |
-| `POST /api/internal/control-plane/commands/{id}/receipts` | Server credential | accepted, running, succeeded, failed evidence |
+| `POST /api/internal/control-plane/leases` | Server credential | lease approved operational commands |
+| `POST /api/internal/control-plane/receipts` | Server credential | accepted, running, completion-candidate, or failed evidence |
 | `POST /api/internal/control-plane/snapshots` | legacy ingest token during migration | compatibility snapshot only |
 
 Machine requests bind method, path, timestamp, nonce, and SHA-256 body hash.
@@ -252,9 +252,10 @@ runtime, shell, script, or SQL actions.
 4. Platform creates deployment, Agent-scoped config revision, four encrypted secrets,
    and a deployment.provision command.
 5. Server Agent leases the command and Supervisor starts the Runtime Boundary and Hermes.
-6. Server Agent returns accepted/running/succeeded receipts.
-7. Runtime stays starting until a healthy Agent heartbeat arrives.
-8. Platform changes the Agent to ready and enables chat, runs, jobs, skills, and memory sync.
+6. Server Agent returns accepted/running/completion-candidate receipts.
+7. Control Authority verifies the candidate against a newer matching Observation and emits final success.
+8. Runtime stays starting until a healthy Agent heartbeat arrives.
+9. Platform changes the Agent to ready and enables chat, runs, jobs, skills, and memory sync.
 ```
 
 An accepted HTTP request is not a successful deployment. The UI must use the

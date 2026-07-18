@@ -50,10 +50,17 @@ async function setup(controlAuthority) {
   return { server, baseUrl: `http://127.0.0.1:${server.address().port}` };
 }
 
+async function closeTestServer(server) {
+  server.closeAllConnections?.();
+  server.closeIdleConnections?.();
+  if (!server.listening) return;
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
 test("canonical control routes delegate only validated envelopes to the injected Authority", async (t) => {
   const calls = { leases: [], receipts: [] };
   const context = await setup({
-    async leaseCommands(request) { calls.leases.push(request); return canonicalLease(request); },
+    async leaseCommands(request) { calls.leases.push(request); return canonicalLease(request).commands; },
     async recordReceipt(receipt) { calls.receipts.push(receipt); }
   });
   t.after(() => context.server.close());
@@ -70,6 +77,30 @@ test("canonical control routes fail closed while C00-03 Authority is absent", as
   const context = await setup(undefined);
   t.after(() => context.server.close());
   await assert.rejects(() => leaseControlCommands(canonicalClientOptions({ platformUrl: context.baseUrl })), { code: "verification_failed", statusCode: 503 });
+});
+
+test("legacy command lease and receipt paths are not duplicate Authority entries", async (t) => {
+  const calls = { leases: 0, receipts: 0 };
+  const context = await setup({
+    async leaseCommands() { calls.leases += 1; return []; },
+    async recordReceipt() { calls.receipts += 1; }
+  });
+  t.after(() => context.server.close());
+  for (const path of [
+    "/api/internal/control-plane/commands/lease",
+    "/api/internal/control-plane/commands/receipts",
+    "/api/internal/control-plane/commands/command_a/receipts"
+  ]) {
+    const response = await signedMachinePost({
+      platformUrl: context.baseUrl,
+      machineId: CONTROL_SCOPE.serverId,
+      token: CONTROL_TOKEN,
+      path,
+      payload: {}
+    });
+    assert.equal(response.status, 404, path);
+  }
+  assert.deepEqual(calls, { leases: 0, receipts: 0 });
 });
 
 test("canonical route requires both transport HMAC and the embedded mutation signature", async (t) => {
@@ -96,7 +127,7 @@ test("canonical route requires both transport HMAC and the embedded mutation sig
     platformUrl: context.baseUrl,
     machineId: CONTROL_SCOPE.serverId,
     token: CONTROL_TOKEN,
-    path: "/api/internal/control-plane/commands/lease",
+    path: "/api/internal/control-plane/leases",
     payload: request
   });
   assert.equal(response.status, 401);
@@ -106,10 +137,11 @@ test("canonical route requires both transport HMAC and the embedded mutation sig
 test("Platform refuses Authority leases containing raw configuration or quarantined actions", async (t) => {
   for (const leaseOptions of [
     { extraCommand: { config: { document: { model: "secret" } } } },
+    { extraCommand: { approval_id: "approval_unexpected" } },
     { action: "config.apply-user", arguments: { config_revision_id: "config_a" } }
   ]) {
     const context = await setup({ async leaseCommands(request) { return canonicalLease(request, leaseOptions); }, async recordReceipt() {} });
     await assert.rejects(() => leaseControlCommands(canonicalClientOptions({ platformUrl: context.baseUrl })), { code: "verification_failed", statusCode: 502 });
-    await new Promise((resolve) => context.server.close(resolve));
+    await closeTestServer(context.server);
   }
 });
