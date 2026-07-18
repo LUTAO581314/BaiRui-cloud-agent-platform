@@ -49,6 +49,37 @@ must remain usable without horizontal scrolling.
 | Theme | upstream token system and theme switching | apply BaiRui brand/icon as an explicit overlay, not a replacement component library |
 | Mobile | drawer/scrim interaction and bounded dialogs | test at `390x844` and preserve touch targets and focus recovery |
 
+## Capability mapping
+
+| User capability | BaiLongma surface to reuse | BaiRui connection | Presentation rule |
+| --- | --- | --- | --- |
+| Initialization | native scene shell plus a focused onboarding dialog | Platform initialization BFF -> provision command -> Hermes setup | progressive steps; never put raw secrets in the graph |
+| Chat | `#chat-area`, `#chat-history`, `#chat-messages`, `#msg-input`, `#send-btn` | Agent-scoped session BFF -> Runtime stream -> Hermes SSE | the center remains the primary work surface |
+| Memory | `#graph`, node/link focus and context panel | PostgreSQL Obsidian notes -> memory projection -> Scene view | graph first; Markdown is an auxiliary inspector |
+| Skills and tools | native activity/console panel and right context surface | Hermes discovery/management operations through Platform BFF | show capability and state, not configuration keys |
+| Cron and background work | right context surface and workspace drawer | Agent-scoped jobs BFF -> Hermes Jobs operations | present as timelines and actions, not a database table |
+| Channels | context workspace and connection status surface | Channel Bridge inventory, pairing, delivery and receipt | show connection proof and recovery state |
+| Character cards | focused import/preview dialog using the existing Tavern adapter | Platform preview/import -> Agent identity and notes | untrusted prompts require explicit confirmation |
+| Settings | management workspace / Drawer | Platform settings, Hermes management allowlist and encrypted references | advanced terms are progressive disclosure |
+
+## User vocabulary
+
+| Technical object | Default user wording | Advanced diagnostic wording |
+| --- | --- | --- |
+| Agent | My Agent | Agent |
+| Runtime | Running engine | Runtime Boundary / Runtime |
+| Provider | Model service | Provider |
+| Authorization | Personal connection | Authorization reference |
+| Run | Task execution | Run |
+| Skill | Capability | Skill |
+| Artifact | Result or file | Artifact |
+| Scene | Current workspace view | Scene snapshot / patch |
+| Control Plane | Admin operations center | Bairui Control Plane |
+
+The default user shell does not expose database table names, raw operation IDs,
+server paths, keys or control-plane commands. Those names remain available in
+diagnostics and administrator tooling where they are needed for evidence.
+
 ## Three experience levels
 
 1. **Core scene**: graph, active Agent, current conversation, current run and
