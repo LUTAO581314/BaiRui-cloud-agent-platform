@@ -21,6 +21,7 @@ test("serves the upstream BaiLongma Brain UI with a Bairui overlay", () => {
   assert.match(html, /\/assets\/bairui-bailongma\.js/);
   assert.match(html, /\/assets\/bairui-workspace\.js/);
   assert.match(html, /\/assets\/bairui-workspace-conversations\.js/);
+  assert.match(html, /\/assets\/bairui-workspace-agents\.js/);
   assert.match(html, /\/assets\/bairui-workspace-usage\.js/);
   assert.match(html, /\/assets\/bairui-workspace-memory\.js/);
   assert.match(html, /\/assets\/bairui-workspace-skills\.js/);
@@ -85,8 +86,10 @@ test("browser adapter consumes native Hermes session SSE and does not use the le
 test("Bairui workspace exposes complete user views through Agent-scoped APIs", () => {
   const workspace = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace.js"), "utf8");
   const conversations = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-conversations.js"), "utf8");
+  const agents = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "web", "public", "bairui-workspace-agents.js"), "utf8");
   assert.match(conversations, /renderConversations/);
-  for (const view of ["agents", "memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
+  assert.match(agents, /renderAgents/);
+  for (const view of ["memory", "skills", "channels", "hotspots", "runs", "jobs", "usage", "settings"]) assert.match(workspace, new RegExp(`render${view[0].toUpperCase()}${view.slice(1)}`));
   for (const route of ["/memory-notes", "/memory-sync", "/skills", "/channels", "/hotspots", "/runs", "/jobs", "/usage"]) assert.match(workspace, new RegExp(route.replace("/", "\\/")));
   assert.match(workspace, /Hermes MEMORY\.md/);
   assert.match(workspace, /Hermes USER\.md/);

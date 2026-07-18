@@ -29,7 +29,7 @@ async function setup(options = {}) {
   const agent = await repository.createAgent({ id: "agent_a", organizationId: "org_a", ownerUserId: user.id, name: "Agent" });
   const runtime = await repository.createAgentRuntime({ id: "runtime_a", organizationId: "org_a", ownerUserId: user.id, agentId: agent.id, workspaceRef: "hermes:org_a:user_a:agent_a" });
   const { privateKey } = generateKeyPairSync("ed25519");
-  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope(providerEncryptionKey), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bairuiWorkspaceScript: "workspace-overlay", bairuiWorkspaceConversationsScript: "workspace-conversations-overlay", bairuiWorkspaceUsageScript: "workspace-usage-overlay", bairuiWorkspaceMemoryScript: "workspace-memory-overlay", bairuiWorkspaceSkillsScript: "workspace-skills-overlay", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
+  const server = createPlatformServer({ repository, sessionSecret, secureCookies: false, agentIngestToken: "agent-ingest-test-token", licensePrivateKey: privateKey, providerVault: new SecretEnvelope(providerEncryptionKey), styles: "", logo: Buffer.from("logo"), icon: Buffer.from("icon"), loginScript: "login", adminScript: "admin-only", bailongmaUi, bailongmaOverlayCss: "overlay-css", bailongmaOverlayScript: "overlay-script", bairuiWorkspaceScript: "workspace-overlay", bairuiWorkspaceConversationsScript: "workspace-conversations-overlay", bairuiWorkspaceAgentsScript: "workspace-agents-overlay", bairuiWorkspaceUsageScript: "workspace-usage-overlay", bairuiWorkspaceMemoryScript: "workspace-memory-overlay", bairuiWorkspaceSkillsScript: "workspace-skills-overlay", bailongmaSceneBootstrap: "export function bootstrapScene() {}", logger: { error() {} }, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -96,6 +96,7 @@ test("anonymous and ordinary users cannot access administrator data", async (t) 
   assert.equal((await fetch(`${context.baseUrl}/assets/bairui-workspace.js`)).status, 401);
   assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace.js`, { headers: { cookie } })).text(), "workspace-overlay");
   assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace-conversations.js`, { headers: { cookie } })).text(), "workspace-conversations-overlay");
+  assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace-agents.js`, { headers: { cookie } })).text(), "workspace-agents-overlay");
   assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace-usage.js`, { headers: { cookie } })).text(), "workspace-usage-overlay");
   assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace-memory.js`, { headers: { cookie } })).text(), "workspace-memory-overlay");
   assert.equal(await (await fetch(`${context.baseUrl}/assets/bairui-workspace-skills.js`, { headers: { cookie } })).text(), "workspace-skills-overlay");
