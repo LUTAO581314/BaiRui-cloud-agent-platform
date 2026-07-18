@@ -26,6 +26,7 @@ const required = [
   "apps/web/routes/user-runtime.mjs",
   "apps/web/routes/admin-control.mjs",
   "apps/web/routes/internal-channels.mjs",
+  "apps/web/routes/workspace-assets.mjs",
   "apps/channel-worker/server.mjs",
   "apps/web/server.mjs",
   "apps/web/views.mjs",
