@@ -105,7 +105,7 @@ test("U00-03 web chat crosses UI command, BFF, Runtime, storage, events and cont
 
   const sceneEvents = await fetch(`${agentBase}/scenes/brain/events?after=0`, { headers: { cookie: ownerCookie } });
   assert.equal(sceneEvents.status, 200);
-  assert.match(await readSseUntil(sceneEvents, "scene.patch"), /scene\.patch/);
+  assert.match(await readSseUntil(sceneEvents, "event: scene\n"), /event: scene\n/);
 
   const heartbeat = await fixture.repository.saveAgentHeartbeat({
     organizationId: scope.organization_id,
