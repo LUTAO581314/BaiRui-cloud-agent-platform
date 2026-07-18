@@ -556,7 +556,16 @@ export function createPlatformApp(options) {
     immutableImage: IMMUTABLE_IMAGE
   });
   const routeInternalChannels = createInternalChannelRoutes({ repository, providerVault, authenticateMachine });
-  const routeWorkspaceAssets = createWorkspaceAssetRoutes({ skillsScript: options.bairuiWorkspaceSkillsScript });
+  const routeWorkspaceAssets = createWorkspaceAssetRoutes({
+    authenticate: principalFor,
+    scripts: {
+      "bairui-workspace.js": options.bairuiWorkspaceScript,
+      "bairui-workspace-conversations.js": options.bairuiWorkspaceConversationsScript,
+      "bairui-workspace-usage.js": options.bairuiWorkspaceUsageScript,
+      "bairui-workspace-memory.js": options.bairuiWorkspaceMemoryScript,
+      "bairui-workspace-skills.js": options.bairuiWorkspaceSkillsScript
+    }
+  });
 
   return async function handle(request, response) {
     securityHeaders(response);
@@ -600,22 +609,7 @@ export function createPlatformApp(options) {
         response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
         return response.end(options.bailongmaOverlayScript);
       }
-      if (method === "GET" && url.pathname === "/assets/bairui-workspace.js") {
-        if (!options.bairuiWorkspaceScript) return json(response, 404, { error: "not_found" });
-        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.bairuiWorkspaceScript);
-      }
-      if (method === "GET" && url.pathname === "/assets/bairui-workspace-usage.js") {
-        if (!options.bairuiWorkspaceUsageScript) return json(response, 404, { error: "not_found" });
-        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.bairuiWorkspaceUsageScript);
-      }
-      if (method === "GET" && url.pathname === "/assets/bairui-workspace-memory.js") {
-        if (!options.bairuiWorkspaceMemoryScript) return json(response, 404, { error: "not_found" });
-        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" });
-        return response.end(options.bairuiWorkspaceMemoryScript);
-      }
-      if (await routeWorkspaceAssets({ method, url, response })) return;
+      if (await routeWorkspaceAssets({ method, url, request, response })) return;
       if (await routeInternalChannels({ method, url, request, response })) return;
 
       const principal = await principalFor(request);
