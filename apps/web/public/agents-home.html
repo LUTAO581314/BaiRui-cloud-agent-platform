@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BaiRui EdgeOne Makers · Agents 概览</title>
+<style>
+:root {
+  --tc-primary: #0052D9;
+  --tc-primary-hover: #0033b0;
+  --tc-primary-light: #E8F3FF;
+  --tc-primary-50: #F0F7FF;
+  --tc-accent: #305EF8;
+  --tc-accent-2: #722ED1;
+  --tc-gradient: linear-gradient(135deg, #0052D9 0%, #305EF8 50%, #722ED1 100%);
+  --tc-bg: #F5F7FA;
+  --tc-bg-2: #F2F3F5;
+  --tc-surface: #FFFFFF;
+  --tc-border: #E5E6EB;
+  --tc-border-2: #C9CDD4;
+  --tc-text: #1F2329;
+  --tc-text-2: #4E5969;
+  --tc-text-3: #86909C;
+  --tc-text-4: #C9CDD4;
+  --tc-success: #00B42A;
+  --tc-success-light: #E8FFEA;
+  --tc-warning: #FF7D00;
+  --tc-warning-light: #FFF7E8;
+  --tc-radius-sm: 4px;
+  --tc-radius: 6px;
+  --tc-radius-lg: 8px;
+  --tc-radius-xl: 12px;
+  --tc-shadow-sm: 0 1px 2px rgba(0,0,0,.04);
+  --tc-shadow: 0 2px 8px rgba(0,0,0,.06);
+  --tc-shadow-lg: 0 6px 24px rgba(0,0,0,.08);
+  --tc-header-h: 56px;
+  --tc-sidebar-w: 200px;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  line-height: 1.5715;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+
+/* Header */
+.tc-header{
+  height: var(--tc-header-h);
+  background: var(--tc-surface);
+  border-bottom: 1px solid var(--tc-border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  position: sticky; top: 0; z-index: 100;
+}
+.tc-header-brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px}
+.tc-header-brand .logo{
+  width:28px;height:28px;border-radius:6px;
+  background: linear-gradient(135deg,#0052D9,#722ED1);
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;
+}
+.tc-header-search{
+  flex:0 0 360px;margin:0 24px;
+}
+.tc-header-search input{
+  width:100%;height:36px;border:1px solid var(--tc-border);border-radius:var(--tc-radius);
+  padding:0 12px 0 36px;background:var(--tc-bg-2);font-size:13px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2386909C' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:10px center;
+}
+.tc-header-search input:focus{outline:none;border-color:var(--tc-primary);background:var(--tc-surface)}
+.tc-header-nav{display:flex;align-items:center;gap:4px;margin-left:auto}
+.tc-header-nav .nav-item{
+  padding:6px 10px;font-size:13px;color:var(--tc-text-2);
+  display:flex;align-items:center;gap:4px;border-radius:var(--tc-radius-sm);
+}
+.tc-header-nav .nav-item:hover{color:var(--tc-primary);background:var(--tc-primary-light)}
+.tc-header-right{display:flex;align-items:center;gap:8px;margin-left:24px}
+.tc-icon-btn{
+  width:32px;height:32px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:var(--tc-text-3);
+}
+.tc-icon-btn:hover{background:var(--tc-bg-2);color:var(--tc-text)}
+.tc-avatar{
+  width:32px;height:32px;border-radius:50%;
+  background:var(--tc-gradient);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;
+}
+
+/* Layout */
+.tc-layout{display:flex;height:calc(100vh - var(--tc-header-h))}
+.tc-sidebar{
+  width: var(--tc-sidebar-w);
+  background: var(--tc-surface);
+  border-right: 1px solid var(--tc-border);
+  overflow-y:auto;
+}
+.tc-sidebar-group{padding:12px 0}
+.tc-sidebar-group-title{
+  padding:4px 16px 8px;font-size:12px;color:var(--tc-text-3);font-weight:500;
+}
+.tc-sidebar-item{
+  padding:8px 16px;display:flex;align-items:center;gap:10px;font-size:13px;
+  color:var(--tc-text-2);cursor:pointer;border-left:2px solid transparent;
+}
+.tc-sidebar-item:hover{background:var(--tc-bg);color:var(--tc-text)}
+.tc-sidebar-item.active{
+  background:var(--tc-primary-50);color:var(--tc-primary);border-left-color:var(--tc-primary);font-weight:500;
+}
+.tc-sidebar-item svg{width:16px;height:16px;flex-shrink:0}
+.tc-sidebar-section-title{
+  padding:16px 16px 8px;font-size:11px;color:var(--tc-text-4);font-weight:600;letter-spacing:.5px;text-transform:uppercase;
+}
+
+.tc-main{flex:1;overflow-y:auto;padding:0}
+.tc-breadcrumb{
+  padding:12px 32px;font-size:13px;color:var(--tc-text-3);
+  display:flex;align-items:center;gap:6px;
+}
+.tc-breadcrumb .sep{color:var(--tc-text-4)}
+.tc-breadcrumb .current{color:var(--tc-text)}
+
+/* Page Header */
+.page-header{
+  padding: 16px 32px 0;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.page-title{font-size:20px;font-weight:600;color:var(--tc-text)}
+
+/* Main Tab Bar */
+.tabs-bar{
+  display:flex;border-bottom:1px solid var(--tc-border);
+  padding:0 32px;
+}
+.tabs-bar .tab{
+  padding:10px 16px;font-size:14px;color:var(--tc-text-2);cursor:pointer;
+  border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px;
+}
+.tabs-bar .tab:hover{color:var(--tc-text)}
+.tabs-bar .tab.active{color:var(--tc-primary);border-bottom-color:var(--tc-primary);font-weight:500}
+.tabs-bar .tab .badge-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--tc-danger);
+}
+
+/* Sub Tab Bar */
+.sub-tabs-bar{
+  display:flex;align-items:center;padding:12px 32px;gap:8px;
+  border-bottom:1px solid var(--tc-border);background:var(--tc-surface);
+}
+.sub-tab{
+  padding:6px 14px;font-size:13px;color:var(--tc-text-2);
+  border-radius:var(--tc-radius-sm);cursor:pointer;display:flex;align-items:center;gap:4px;
+}
+.sub-tab:hover{color:var(--tc-text);background:var(--tc-bg)}
+.sub-tab.active{color:var(--tc-primary);background:var(--tc-primary-light);font-weight:500}
+.sub-tab .dot{width:6px;height:6px;border-radius:50%;background:var(--tc-danger)}
+.sub-tabs-right{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:12px;color:var(--tc-text-3)}
+.sub-tabs-right a{color:var(--tc-primary)}
+.sub-tabs-right a:hover{text-decoration:underline}
+
+/* Content */
+.content{padding:32px}
+
+/* Hero Card */
+.hero-card{
+  background: var(--tc-surface);
+  border-radius: var(--tc-radius-xl);
+  padding: 40px;
+  border: 1px solid var(--tc-border);
+  margin-bottom: 24px;
+}
+.hero-header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.hero-title{font-size:24px;font-weight:600}
+.beta-tag{
+  display:inline-block;padding:2px 8px;font-size:11px;
+  background:var(--tc-warning-light);color:var(--tc-warning);
+  border-radius:10px;font-weight:500;
+}
+.hero-desc{color:var(--tc-text-2);font-size:14px;margin-bottom:24px;max-width:640px;line-height:1.7}
+
+/* Architecture Diagram */
+.arch-diagram{
+  display:flex;align-items:center;gap:0;margin:32px 0;padding:24px;
+  background:var(--tc-bg);border-radius:var(--tc-radius-lg);
+}
+.arch-center{
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:16px 24px;background:var(--tc-surface);border-radius:var(--tc-radius-lg);
+  border:2px dashed var(--tc-primary);min-width:160px;
+}
+.arch-center .icon{
+  width:48px;height:48px;border-radius:12px;
+  background:var(--tc-gradient);
+  display:flex;align-items:center;justify-content:center;color:#fff;
+}
+.arch-center .label{font-size:13px;font-weight:600;color:var(--tc-primary)}
+.arch-center .sub{font-size:11px;color:var(--tc-text-3)}
+.arch-arrow{
+  flex:1;height:2px;background:linear-gradient(90deg,var(--tc-primary),var(--tc-accent-2));
+  position:relative;margin:0 4px;
+}
+.arch-arrow::after{
+  content:'';position:absolute;right:-2px;top:-4px;
+  border:5px solid transparent;border-left-color:var(--tc-accent-2);
+}
+.arch-modules{display:flex;gap:12px;flex-wrap:wrap}
+.arch-module{
+  padding:12px 20px;background:var(--tc-surface);border-radius:var(--tc-radius-lg);
+  border:1px solid var(--tc-border);display:flex;align-items:center;gap:8px;
+  font-size:13px;color:var(--tc-text-2);
+}
+.arch-module .mini-icon{
+  width:24px;height:24px;border-radius:6px;background:var(--tc-primary-light);
+  display:flex;align-items:center;justify-content:center;color:var(--tc-primary);
+}
+
+/* Quick Start Tabs */
+.quick-start-tabs{
+  display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;
+}
+.quick-tab{
+  padding:8px 16px;font-size:13px;color:var(--tc-text-2);
+  border:1px solid var(--tc-border);border-radius:var(--tc-radius);
+  cursor:pointer;background:var(--tc-surface);
+  display:flex;align-items:center;gap:6px;
+}
+.quick-tab:hover{border-color:var(--tc-primary);color:var(--tc-primary)}
+.quick-tab.active{background:var(--tc-primary);color:#fff;border-color:var(--tc-primary)}
+
+/* Template Cards */
+.templates-title{font-size:16px;font-weight:600;margin-bottom:16px}
+.templates-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;
+}
+.template-card{
+  background:var(--tc-surface);border:1px solid var(--tc-border);
+  border-radius:var(--tc-radius-lg);padding:20px;cursor:pointer;
+  transition:box-shadow .2s,border-color .2s,transform .2s;
+}
+.template-card:hover{
+  box-shadow:var(--tc-shadow-lg);border-color:var(--tc-primary);transform:translateY(-2px);
+}
+.template-card-icon{
+  width:48px;height:48px;border-radius:10px;margin-bottom:12px;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;
+}
+.template-card-icon.g1{background:linear-gradient(135deg,#667eea,#764ba2)}
+.template-card-icon.g2{background:linear-gradient(135deg,#f093fb,#f5576c)}
+.template-card-icon.g3{background:linear-gradient(135deg,#4facfe,#00f2fe)}
+.template-card h3{font-size:14px;font-weight:600;margin-bottom:6px}
+.template-card p{font-size:12px;color:var(--tc-text-3);line-height:1.6}
+
+/* SVG Icon sizes */
+svg{width:16px;height:16px}
+.icon-20{width:20px;height:20px}
+.icon-24{width:24px;height:24px}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="tc-header">
+  <div class="tc-header-brand">
+    <div class="logo">BR</div>
+    <span>百瑞云</span>
+    <span style="color:var(--tc-text-4)">·</span>
+    <span>控制台</span>
+  </div>
+  <div class="tc-header-search">
+    <input type="text" placeholder="搜索云产品、资源与API">
+  </div>
+  <div class="tc-header-nav">
+    <div class="nav-item">集团账号</div>
+    <div class="nav-item">备案</div>
+    <div class="nav-item">工具</div>
+    <div class="nav-item">客服支持</div>
+    <div class="nav-item">试用</div>
+    <div class="nav-item">费用</div>
+  </div>
+  <div class="tc-header-right">
+    <div class="tc-icon-btn" title="通知">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    </div>
+    <div class="tc-icon-btn" title="帮助">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    </div>
+    <div class="tc-avatar">R</div>
+  </div>
+</header>
+
+<!-- Layout -->
+<div class="tc-layout">
+
+  <!-- Sidebar -->
+  <aside class="tc-sidebar">
+    <div class="tc-sidebar-section-title">EdgeOne</div>
+    <div class="tc-sidebar-group">
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        服务总览
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
+        数据分析
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        指标分析
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+        Web 安全分析
+      </div>
+    </div>
+    <div class="tc-sidebar-section-title">工具集</div>
+    <div class="tc-sidebar-group">
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        清除缓存
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        预热缓存
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        归属验证
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        诊断工具
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="22" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="14" x2="18" y2="14"/></svg>
+        IP 组
+      </div>
+      <div class="tc-sidebar-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        IP 归属查询
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="tc-main">
+    <div class="tc-breadcrumb">
+      <span>EdgeOne</span>
+      <span class="sep">·</span>
+      <span class="current">服务总览</span>
+    </div>
+
+    <div class="page-header">
+      <div class="page-title">服务总览</div>
+    </div>
+
+    <!-- Main Tabs: 网站安全加速 / Makers -->
+    <div class="tabs-bar">
+      <div class="tab">网站安全加速</div>
+      <div class="tab active">Makers</div>
+    </div>
+
+    <!-- Sub Tabs -->
+    <div class="sub-tabs-bar">
+      <div class="sub-tab">项目</div>
+      <div class="sub-tab active">Agents <span class="dot"></span></div>
+      <div class="sub-tab">Models</div>
+      <div class="sub-tab">存储</div>
+      <div class="sub-tab">设置</div>
+      <div class="sub-tabs-right">
+        <span>站点名称：</span>
+        <a href="#">default-pages-zone ▾</a>
+        <span style="color:var(--tc-text-4)">|</span>
+        <a href="#">使用文档</a>
+        <span style="color:var(--tc-text-4)">|</span>
+        <a href="#">开发者沟通群</a>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- Hero Card -->
+      <div class="hero-card">
+        <div class="hero-header">
+          <div class="hero-title">Makers Agents</div>
+          <span class="beta-tag">Beta</span>
+        </div>
+        <p class="hero-desc">
+          开箱即用的 Agent 开发平台，开发者专注业务逻辑，部署后即可获得 Agent 运行时、沙箱工具、对记忆、本地可调试的全链路跟踪与内盲模型完整能力。
+        </p>
+
+        <!-- Architecture Diagram -->
+        <div class="arch-diagram">
+          <div class="arch-center">
+            <div class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            </div>
+            <div class="label">Agent Runtime</div>
+            <div class="sub">运行时环境</div>
+          </div>
+          <div class="arch-arrow"></div>
+          <div class="arch-modules">
+            <div class="arch-module">
+              <div class="mini-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              </div>
+              Tools
+            </div>
+            <div class="arch-module">
+              <div class="mini-icon" style="background:#F7BA1E;color:#F7BA1E">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M12 2a2 2 0 0 0-2 2v2a2 2 0 0 0 4 0V4a2 2 0 0 0-2-2z"/><path d="M12 18a2 2 0 0 0-2 2v2a2 2 0 0 0 4 0v-2a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="4"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/></svg>
+              </div>
+              Memory
+            </div>
+            <div class="arch-module">
+              <div class="mini-icon" style="background:#13C2C2;color:#13C2C2">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              Traces
+            </div>
+            <div class="arch-module">
+              <div class="mini-icon" style="background:#722ED1;color:#722ED1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </div>
+              Models
+            </div>
+            <div class="arch-module" style="opacity:0.6">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Start Tabs -->
+        <div class="quick-start-tabs">
+          <div class="quick-tab active">快速开始</div>
+          <div class="quick-tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            对话助手
+          </div>
+          <div class="quick-tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            文件处理
+          </div>
+          <div class="quick-tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            内容生成
+          </div>
+          <div class="quick-tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            流程编排
+          </div>
+          <div class="quick-tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            定时任务
+          </div>
+        </div>
+      </div>
+
+      <!-- Templates -->
+      <div class="templates-title">推荐模板</div>
+      <div class="templates-grid">
+        <div class="template-card" onclick="location.href='project-detail.html'">
+          <div class="template-card-icon g1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <h3>OpenAI Agents 入门版</h3>
+          <p>基于 OpenAI Agents SDK 的快速入门模板，内置对话、工具调用、记忆等核心能力。</p>
+        </div>
+        <div class="template-card">
+          <div class="template-card-icon g2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>
+          </div>
+          <h3>Cloud Agent 入门版</h3>
+          <p>云端部署 Agent 模板，自动配置运行时环境，支持弹性伸缩和全球加速。</p>
+        </div>
+        <div class="template-card">
+          <div class="template-card-icon g3">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          </div>
+          <h3>Design Agent 入门版</h3>
+          <p>设计类 Agent 模板，支持生成图片、UI 设计辅助、品牌视觉生成等创意工作流。</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const parent = tab.parentElement;
+    parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+document.querySelectorAll('.sub-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const parent = tab.parentElement;
+    parent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+document.querySelectorAll('.quick-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const parent = tab.parentElement;
+    parent.querySelectorAll('.quick-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Sidebar active state
+document.querySelectorAll('.tc-sidebar-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.tc-sidebar-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+  });
+});
+</script>
+
+</body>
+</html>
