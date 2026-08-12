@@ -8,3 +8,4 @@ tmp/
 dist/
 coverage/
 *.log
+.agents/
