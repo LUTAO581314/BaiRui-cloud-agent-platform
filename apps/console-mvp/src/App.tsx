@@ -38,15 +38,15 @@ import {
   Terminal,
   TrendingDown,
   TrendingUp,
-  TriangleAlert,
   Users,
+  Wrench,
   X,
   Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-type NavKey = 'overview' | 'agents' | 'conversations' | 'deploy' | 'api' | 'control' | 'approvals' | 'observability' | 'organization' | 'license' | 'servers' | 'audit';
+type NavKey = 'overview' | 'agents' | 'conversations' | 'deploy' | 'api' | 'approvals' | 'observability' | 'knowledge' | 'tools' | 'skills' | 'roles';
 type WorkspaceTab = 'templates' | 'projects' | 'runs' | 'settings';
 type AgentStatus = 'running' | 'deploying' | 'initializing';
 type DashboardRange = 'today' | '7d' | '30d';
@@ -113,8 +113,8 @@ interface ApiConnectionDraft {
 
 const navGroups: { title: string; items: NavItem[] }[] = [
   { title: '工作台', items: [{ key: 'overview', label: '总览仪表盘', icon: LayoutDashboard }, { key: 'agents', label: '智能体 Agents', icon: Bot, badge: '4' }, { key: 'conversations', label: '会话管理', icon: MessageSquare }] },
-  { title: '开发与部署', items: [{ key: 'deploy', label: '部署发布', icon: PackagePlus }, { key: 'api', label: 'API 配置', icon: KeyRound, badge: '3' }, { key: 'control', label: '运维控制', icon: Settings }, { key: 'approvals', label: '审批中心', icon: ClipboardCheck, badge: '2', tone: 'danger' }, { key: 'observability', label: '可观测', icon: Activity }] },
-  { title: '平台管理', items: [{ key: 'organization', label: '组织成员', icon: Users }, { key: 'license', label: 'License 授权', icon: FileText }, { key: 'servers', label: '服务器', icon: Server, badge: '3', tone: 'warning' }, { key: 'audit', label: '审计日志', icon: ShieldCheck }] },
+  { title: '开发与部署', items: [{ key: 'deploy', label: '部署发布', icon: PackagePlus }, { key: 'api', label: 'API 配置', icon: KeyRound, badge: '3' }, { key: 'approvals', label: '审批中心', icon: ClipboardCheck, badge: '2', tone: 'danger' }, { key: 'observability', label: '可观测', icon: Activity }] },
+  { title: '资源库', items: [{ key: 'knowledge', label: '知识库', icon: Database }, { key: 'tools', label: '工具 Tools', icon: Wrench }, { key: 'skills', label: '技能 Skill', icon: Zap }, { key: 'roles', label: '角色卡 Role', icon: Sparkles }] },
 ];
 
 const agentMetrics: Metric[] = [
@@ -158,7 +158,6 @@ const templates: Template[] = [
   { name: '内容创作 Agent', description: '文案撰写、AIGC 配图、多语言翻译与 SEO 优化', tags: ['AIGC'], icon: FileCode2, color: 'orange' },
   { name: '代码审查助手', description: '接入 GitHub PR，自动扫漏洞 + 生成代码审查意见', tags: ['DevOps'], icon: Code2, color: 'green' },
   { name: 'HR 招聘助理', description: 'JD 发布、简历解析、自动邀约面试、候选人评分', tags: ['HR', 'RAG'], icon: Users, color: 'cyan' },
-  { name: '运维 SRE Copilot', description: '告警聚合分析、根因定位、runbook 自动化执行', tags: ['SRE', 'Tool'], icon: TriangleAlert, color: 'red' },
 ];
 
 const frameworks: Template[] = [
@@ -187,13 +186,12 @@ const pageCopy: Record<Exclude<NavKey, 'agents'>, { title: string; description: 
   conversations: { title: '会话管理', description: '统一检索智能体会话与执行记录。', icon: MessageSquare },
   deploy: { title: '部署发布', description: '管理环境、部署包与发布历史。', icon: PackagePlus },
   api: { title: 'API 配置', description: '管理模型连接、可用模型和验证状态。', icon: KeyRound },
-  control: { title: '运维控制', description: '执行平台控制指令与环境维护。', icon: Settings },
   approvals: { title: '审批中心', description: '处理高风险操作与发布审批。', icon: ClipboardCheck },
   observability: { title: '可观测', description: '查看调用链路、指标和异常告警。', icon: Activity },
-  organization: { title: '组织成员', description: '管理组织、成员和协作角色。', icon: Users },
-  license: { title: 'License 授权', description: '查看授权套餐与配额使用情况。', icon: FileText },
-  servers: { title: '服务器', description: '查看注册服务器和心跳状态。', icon: Server },
-  audit: { title: '审计日志', description: '追踪平台关键动作与访问事件。', icon: ShieldCheck },
+  knowledge: { title: '知识库', description: '管理 Agent 引用的知识库、文档与向量检索。', icon: Database },
+  tools: { title: '工具 Tools', description: '配置 Agent 可调用的外部工具与 MCP 连接。', icon: Wrench },
+  skills: { title: '技能 Skill', description: '启用或编排 Agent 的能力模块与技能包。', icon: Zap },
+  roles: { title: '角色卡 Role', description: '管理 Agent 的人设角色卡与行为约束。', icon: Sparkles },
 };
 
 export function App() {
@@ -261,7 +259,7 @@ function OverviewDashboard({ dashboardRange, modelConnectionState, onConfigureMo
 
 function AgentWorkspace({ activeTab, agents: visibleAgents, onCreate, onNotify, onQueryChange, onStatusChange, query, setActiveTab, status }: { activeTab: WorkspaceTab; agents: Agent[]; onCreate: () => void; onNotify: (message: string) => void; onQueryChange: (value: string) => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; setActiveTab: (tab: WorkspaceTab) => void; status: 'all' | AgentStatus }) {
   const tabs: { key: WorkspaceTab; label: string; badge?: string }[] = [{ key: 'templates', label: '快速开始', badge: '6' }, { key: 'projects', label: '我的项目', badge: '4' }, { key: 'runs', label: '运行记录' }, { key: 'settings', label: '接入配置' }];
-  return <><Breadcrumb items={['EdgeOne Makers', '智能体 Agents']} /><section className="page-heading"><div><p>工作台 / 智能体</p><h1>智能体管理</h1><span>查看项目运行状态、近期调用和待处理事项，并从这里创建新的智能体项目。</span></div><div className="heading-actions"><span>共 4 个项目</span><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></section><section className="metric-grid" aria-label="智能体指标">{agentMetrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section><section className="workspace-panel"><div className="tabs" role="tablist">{tabs.map((tab) => <button className={activeTab === tab.key ? 'active' : ''} type="button" key={tab.key} role="tab" aria-selected={activeTab === tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}{tab.badge ? <span>{tab.badge}</span> : null}</button>)}</div><div className="tab-content">{activeTab === 'templates' ? <TemplatePanel onCreate={onCreate} /> : null}{activeTab === 'projects' ? <AgentPanel agents={visibleAgents} onCreate={onCreate} onNotify={onNotify} onQueryChange={onQueryChange} onStatusChange={onStatusChange} query={query} status={status} /> : null}{activeTab === 'runs' ? <RunsPanel /> : null}{activeTab === 'settings' ? <SettingsPanel onNotify={onNotify} /> : null}</div></section>{activeTab === 'templates' ? <><ReferenceAlert onNotify={onNotify} /><ObservabilityPanels /></> : null}</>;
+  return <><Breadcrumb items={['EdgeOne Makers', '智能体 Agents']} /><section className="page-heading"><div><p>工作台 / 智能体</p><h1>智能体管理</h1><span>查看项目运行状态、近期调用和待处理事项，并从这里创建新的智能体项目。</span></div><div className="heading-actions"><span>共 4 个项目</span><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></section><section className="metric-grid" aria-label="智能体指标">{agentMetrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section><section className="workspace-panel"><div className="tabs" role="tablist">{tabs.map((tab) => <button className={activeTab === tab.key ? 'active' : ''} type="button" key={tab.key} role="tab" aria-selected={activeTab === tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}{tab.badge ? <span>{tab.badge}</span> : null}</button>)}</div><div className="tab-content">{activeTab === 'templates' ? <TemplatePanel onCreate={onCreate} /> : null}{activeTab === 'projects' ? <AgentPanel agents={visibleAgents} onCreate={onCreate} onNotify={onNotify} onQueryChange={onQueryChange} onStatusChange={onStatusChange} query={query} status={status} /> : null}{activeTab === 'runs' ? <RunsPanel /> : null}{activeTab === 'settings' ? <SettingsPanel onNotify={onNotify} /> : null}</div></section>{activeTab === 'templates' ? <><ObservabilityPanels /></> : null}</>;
 }
 
 function Breadcrumb({ items }: { items: string[] }) { return <nav className="breadcrumb" aria-label="面包屑">{items.map((item, index) => <span key={item}>{index ? <i>/</i> : null}<b className={index === items.length - 1 ? 'current' : ''}>{item}</b></span>)}</nav>; }
@@ -273,7 +271,6 @@ function TemplateSection({ action, heading, items, onCreate, variant }: { action
 function AgentPanel({ agents: visibleAgents, onCreate, onNotify, onQueryChange, onStatusChange, query, status }: { agents: Agent[]; onCreate: () => void; onNotify: (message: string) => void; onQueryChange: (value: string) => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; status: 'all' | AgentStatus }) { return <><div className="toolbar"><div className="toolbar-left"><label className="field-search"><Search /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索智能体名称、ID、渠道..." /></label><select value={status} onChange={(event) => onStatusChange(event.target.value as 'all' | AgentStatus)} aria-label="筛选智能体状态"><option value="all">全部状态</option><option value="running">运行中</option><option value="deploying">部署中</option><option value="initializing">初始化</option></select><select aria-label="筛选开发框架"><option>全部框架</option><option>OpenAI Agents</option><option>LangGraph</option><option>CrewAI</option></select></div><div className="toolbar-right"><button className="button secondary" type="button" onClick={() => onNotify('导入功能将在后端接入后开放。')}><Download />导入</button><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <AgentCard agent={agent} key={agent.id} onNotify={onNotify} />)}</div>{!visibleAgents.length ? <div className="empty-state"><Search /><strong>没有匹配的智能体</strong><span>调整搜索词或状态筛选后重试。</span></div> : null}</>; }
 function AgentCard({ agent, onNotify }: { agent: Agent; onNotify: (message: string) => void }) { const Icon = agent.icon; return <article className="agent-card"><header><div className="agent-info"><span className={`agent-icon ${agent.color}`}><Icon /></span><div><strong>{agent.name}<i>{agent.host}</i></strong><p>{agent.description}</p></div></div><span className={`status-pill ${agent.status}`}><b />{statusCopy[agent.status]}</span></header><div className="agent-body"><div className="agent-stats">{agent.stats.map((stat) => <div key={stat.label}><strong>{stat.value}</strong><span>{stat.label}</span></div>)}</div><footer><div className="channel-list">{agent.channels.map((channel) => <i key={channel}>{channel}</i>)}</div><div className="agent-actions"><button type="button" onClick={() => onNotify(`已打开 ${agent.name} 的运行观测。`)}><Eye />监控</button><button type="button" onClick={() => onNotify(`${agent.name} 的配置页将在完整版本提供。`)}><Settings />配置</button><button className="primary" type="button" onClick={() => onNotify(`已打开 ${agent.name} 的对话入口。`)}><MessageSquare />对话</button></div></footer></div></article>; }
 
-function ReferenceAlert({ onNotify }: { onNotify: (message: string) => void }) { return <section className="reference-alert"><span><TriangleAlert /></span><div><strong>检测到服务器 SRV-GZ-03 版本漂移</strong><p>期望版本 v0.1.0-rc.7，实际 v0.1.0-rc.6，建议尽快修复以避免功能缺失。最近心跳：2 小时前。</p></div><aside><button className="button primary" type="button" onClick={() => onNotify('修复请求已加入本地 mock 队列。')}>立即修复</button><button className="button secondary" type="button" onClick={() => onNotify('已标记为稍后处理。')}>稍后处理</button></aside></section>; }
 function ObservabilityPanels() { return <section className="chart-grid"><article className="chart-card"><header><strong><i className="blue-dot" />智能体调用趋势（近 7 日）</strong><span><b />请求数 <b className="muted-dot" />Token 消耗</span></header><div className="line-chart"><div className="chart-grid-lines" /><div className="chart-wave" /><div className="chart-wave secondary" /><footer><span>08-01</span><span>08-02</span><span>08-03</span><span>08-04</span><span>08-05</span><span>08-06</span><span>今日</span></footer></div></article><article className="chart-card model-chart"><header><strong><i className="violet-dot" />模型调用分布</strong></header><div><div className="ring"><span><strong>12.8K</strong><small>总调用次数</small></span></div><ul><li><i className="blue-dot" />DeepSeek V3 <b>42%</b></li><li><i className="violet-dot" />Claude 3.5 <b>31%</b></li><li><i className="green-dot" />GPT-4o <b>18%</b></li><li><i className="orange-dot" />其他模型 <b>9%</b></li></ul></div></article></section>; }
 
 function RunsPanel() { const runs = [['RUN_20260806_0012', '客服 Agent #1', '每日自动知识库同步', '定时任务', '2026-08-06 09:00', '2分14秒', '成功'], ['RUN_20260806_0011', '数据分析 Agent', 'SQL query: 销售月报', 'user@demo.com', '2026-08-06 08:42', '18秒', '成功'], ['RUN_20260805_0889', '助手 Agent', '工具调用: 发送邮件', '张三', '2026-08-05 18:20', '3秒', '工具异常'], ['RUN_20260805_0888', '客服 Agent #2', '初始化流程', '管理员', '2026-08-05 17:30', '-', '进行中 65%']]; return <div className="table-wrap"><table><thead><tr><th>运行 ID</th><th>智能体</th><th>任务</th><th>触发人</th><th>开始时间</th><th>耗时</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{runs.map((run) => <tr key={run[0]}>{run.map((cell, index) => <td className={index === 0 || index === 5 ? 'mono' : ''} key={`${run[0]}-${cell}`}>{index === 6 ? <span className={`status-pill ${cell === '成功' ? 'running' : cell.includes('进行') ? 'deploying' : 'initializing'}`}><b />{cell}</span> : cell}</td>)}<td><button className="table-button" type="button">Trace</button></td></tr>)}</tbody></table></div>; }
