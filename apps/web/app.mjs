@@ -379,7 +379,7 @@ export function createPlatformApp(options) {
   } = options;
   if (!repository) throw new TypeError("repository is required");
   if (!sessionSecret || sessionSecret.length < 32) throw new TypeError("sessionSecret must contain at least 32 characters");
-  if (!options.bailongmaUi) throw new TypeError("bailongmaUi is required; BaiLongma Brain UI is the only user frontend");
+  if (!options.bailongmaUi) console.warn("bailongmaUi is missing; API-only mode, /app routes will be unavailable");
   const runtimeStaleAfterMs = Math.max(30_000, Number(options.runtimeStaleAfterMs) || 120_000);
   const resourceStaleAfterMs = Math.max(30_000, Number(options.resourceStaleAfterMs) || 120_000);
   const readiness = options.readiness ?? (() => repository.readiness?.({ requiredMigration: options.requiredMigration }) ?? Promise.resolve({ ready: false, status: "readiness_unavailable" }));

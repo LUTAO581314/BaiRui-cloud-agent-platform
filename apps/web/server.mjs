@@ -107,7 +107,14 @@ const server = createPlatformServer({
   icon: fs.readFileSync(path.join(appDir, "public", "bairui-agent-icon.png")),
   loginScript: fs.readFileSync(path.join(appDir, "public", "login.js"), "utf8"),
   adminScript: fs.readFileSync(path.join(appDir, "admin", "admin.js"), "utf8"),
-  bailongmaUi: createBailongmaUi({ root: process.env.BAIRUI_BAILONGMA_UI_ROOT ?? path.join(repoRoot, "build", "bailongma-ui") }),
+  bailongmaUi: (() => {
+    try {
+      return createBailongmaUi({ root: process.env.BAIRUI_BAILONGMA_UI_ROOT ?? path.join(repoRoot, "build", "bailongma-ui") });
+    } catch (error) {
+      console.warn("BaiLongma UI not available, using mock for API-only dev mode:", error.message);
+      return { version: "dev-mock", readAsset: () => undefined, render: () => "<html><body>BaiLongma UI unavailable</body></html>" };
+    }
+  })(),
   bailongmaOverlayCss: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.css"), "utf8"),
   bailongmaOverlayScript: fs.readFileSync(path.join(appDir, "public", "bairui-bailongma.js"), "utf8"),
   bairuiWorkspaceScript: fs.readFileSync(path.join(appDir, "public", "bairui-workspace.js"), "utf8"),

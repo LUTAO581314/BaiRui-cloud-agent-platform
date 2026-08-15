@@ -391,12 +391,21 @@ export class MemoryPlatformRepository {
     return results;
   }
 
-  async listUsageRollups(organizationId, userId, agentId, limit = 1000) {
+  async listUsageRollups(organizationId, userId, agentId, options = {}) {
+    const { limit = 1000, from, to } = typeof options === 'number' ? { limit: options } : options;
     return this.#usageRollups
-      .filter((item) => (!organizationId || item.organizationId === organizationId) && (!userId || item.userId === userId) && (!agentId || item.agentId === agentId))
+      .filter((item) => {
+        if (organizationId && item.organizationId !== organizationId) return false;
+        if (userId && item.userId !== userId) return false;
+        if (agentId && item.agentId !== agentId) return false;
+        if (from && item.bucketStart < from) return false;
+        if (to && item.bucketStart > to) return false;
+        return true;
+      })
       .toReversed()
       .slice(0, Math.max(1, Math.min(Number(limit) || 1000, 5000)));
   }
+
 
   async requestAgentProvisioning(input) {
     const agent = this.#agents.get(input.agentId);
@@ -1285,8 +1294,27 @@ export class MemoryPlatformRepository {
     return this.#configRevisions.filter((item) => (!organizationId || item.organizationId === organizationId) && (!agentId || item.agentId === agentId)).toReversed();
   }
 
-  async listTelemetryEvents(organizationId, limit = 500) {
-    return this.#telemetryEvents.filter((item) => !organizationId || item.organizationId === organizationId).toReversed().slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  async listTelemetryEvents(organizationId, limit = 500, userId) {
+    return this.#telemetryEvents
+      .filter((item) => {
+        if (organizationId && item.organizationId !== organizationId) return false;
+        if (userId && item.userId !== userId) return false;
+        return true;
+      })
+      .toReversed()
+      .slice(0, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  }
+
+  async countConversations(organizationId, userId, { from, to } = {}) {
+    const items = this.#channelConversations.filter((item) => {
+      if (organizationId && item.organizationId !== organizationId) return false;
+      if (userId && item.userId !== userId) return false;
+      if (from && item.createdAt < from) return false;
+      if (to && item.createdAt > to) return false;
+      return true;
+    });
+    const agentIds = new Set(items.map((item) => item.agentId));
+    return { totalConversations: items.length, activeAgents: agentIds.size };
   }
 
   async listProviderChannels(organizationId) {
