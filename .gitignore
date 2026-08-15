@@ -9,3 +9,8 @@ dist/
 coverage/
 *.log
 .agents/
+output/
+.playwright-cli/
+
+docs/agents-home.html
+docs/platform-overview.html
