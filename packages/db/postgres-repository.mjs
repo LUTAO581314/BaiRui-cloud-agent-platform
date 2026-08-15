@@ -543,12 +543,14 @@ export class PostgresPlatformRepository {
     return results;
   }
 
-  async listUsageRollups(organizationId, userId, agentId, limit = 1000) {
+  async listUsageRollups(organizationId, userId, agentId, { limit = 1000, from, to } = {}) {
     const conditions = [];
     const values = [];
     if (organizationId) { values.push(organizationId); conditions.push(`organization_id=$${values.length}`); }
     if (userId) { values.push(userId); conditions.push(`user_id=$${values.length}`); }
     if (agentId) { values.push(agentId); conditions.push(`agent_id=$${values.length}`); }
+    if (from) { values.push(from); conditions.push(`bucket_start >= $${values.length}`); }
+    if (to) { values.push(to); conditions.push(`bucket_start <= $${values.length}`); }
     values.push(Math.max(1, Math.min(Number(limit) || 1000, 5000)));
     const { rows } = await this.pool.query(`SELECT * FROM usage_rollups${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY bucket_start DESC LIMIT $${values.length}`, values);
     return rows.map(mapUsageRollup);
@@ -1841,11 +1843,23 @@ export class PostgresPlatformRepository {
     return rows.map(mapConfigRevision);
   }
 
-  async listTelemetryEvents(organizationId, limit = 500) {
-    const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 2000));
-    const query = organizationId ? ["SELECT * FROM telemetry_events WHERE organization_id=$1 ORDER BY occurred_at DESC LIMIT $2", [organizationId, safeLimit]] : ["SELECT * FROM telemetry_events ORDER BY occurred_at DESC LIMIT $1", [safeLimit]];
-    const { rows } = await this.pool.query(...query);
+  async listTelemetryEvents(organizationId, limit = 500, userId) {
+    const conditions = ['organization_id=$1'];
+    const values = [organizationId];
+    if (userId) { values.push(userId); conditions.push(`user_id=$${values.length}`); }
+    values.push(Math.max(1, Math.min(Number(limit) || 500, 2000)));
+    const { rows } = await this.pool.query(`SELECT * FROM telemetry_events WHERE ${conditions.join(' AND ')} ORDER BY occurred_at DESC LIMIT $${values.length}`, values);
     return rows.map((row) => ({ id: row.id, organizationId: row.organization_id, userId: row.user_id, agentId: row.agent_id, runtimeId: row.runtime_id, layer: row.layer, componentId: row.component_id, eventType: row.event_type, severity: row.severity, traceId: row.trace_id, metrics: row.metrics, occurredAt: row.occurred_at?.toISOString?.() ?? row.occurred_at }));
+  }
+
+  async countConversations(organizationId, userId, { from, to } = {}) {
+    const conditions = ['organization_id=$1'];
+    const values = [organizationId];
+    if (userId) { values.push(userId); conditions.push(`user_id=$${values.length}`); }
+    if (from) { values.push(from); conditions.push(`created_at >= $${values.length}`); }
+    if (to) { values.push(to); conditions.push(`created_at <= $${values.length}`); }
+    const { rows } = await this.pool.query(`SELECT COUNT(DISTINCT id) AS total, COUNT(DISTINCT agent_id) AS active_agents FROM channel_conversations WHERE ${conditions.join(' AND ')}`, values);
+    return { totalConversations: Number(rows[0]?.total ?? 0), activeAgents: Number(rows[0]?.active_agents ?? 0) };
   }
 
   async listProviderChannels(organizationId) {

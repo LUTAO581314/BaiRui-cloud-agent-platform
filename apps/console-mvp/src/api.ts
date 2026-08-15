@@ -50,3 +50,44 @@ export async function fetchAgents(): Promise<Agent[]> {
     host: `agent-${item.id}.bairui.app`,
   }));
 }
+
+export interface UsageSummary {
+  totalCalls: number;
+  failedCalls: number;
+  successRate: number;
+  avgLatencyMs: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  totalConversations: number;
+  activeAgents: number;
+}
+
+export interface ModelSlice {
+  model: string;
+  calls: number;
+  share: number;
+}
+
+export interface UsageSeriesPoint {
+  bucketStart: string;
+  calls: number;
+  failedCalls: number;
+  avgLatencyMs: number;
+}
+
+export interface UsagePayload {
+  range: string;
+  updatedAt: string;
+  summary: UsageSummary;
+  modelBreakdown: ModelSlice[];
+  series: UsageSeriesPoint[];
+}
+
+export async function fetchUsage(range: 'today' | '7d' | '30d'): Promise<UsagePayload> {
+  const response = await fetch(`${API_BASE}/api/user/usage?range=${range}`, {
+    headers: { accept: 'application/json' },
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`usage request failed: ${response.status}`);
+  return (await response.json()) as UsagePayload;
+}

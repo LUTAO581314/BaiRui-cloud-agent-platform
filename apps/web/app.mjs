@@ -294,6 +294,41 @@ function usageSummary(rollups) {
   }), { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, runCount: 0, failedRunCount: 0, latencySumMs: 0 });
 }
 
+function aggregateModelBreakdown(rollups) {
+  const byModel = new Map();
+  let total = 0;
+  for (const r of rollups) {
+    const calls = r.runCount ?? 0;
+    total += calls;
+    byModel.set(r.model ?? 'unknown', (byModel.get(r.model ?? 'unknown') ?? 0) + calls);
+  }
+  return [...byModel.entries()].map(([model, calls]) => ({ model, calls, share: total ? calls / total : 0 }));
+}
+
+function aggregateSeries(rollups, range) {
+  const buckets = new Map();
+  for (const r of rollups) {
+    const key = r.bucketStart;
+    const cur = buckets.get(key) ?? { calls: 0, failedCalls: 0, latencySumMs: 0 };
+    cur.calls += r.runCount ?? 0;
+    cur.failedCalls += r.failedRunCount ?? 0;
+    cur.latencySumMs += r.latencySumMs ?? 0;
+    buckets.set(key, cur);
+  }
+  return [...buckets.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
+    .map(([bucketStart, v]) => ({ bucketStart, calls: v.calls, failedCalls: v.failedCalls, avgLatencyMs: v.calls ? v.latencySumMs / v.calls : 0 }));
+}
+
+function resolveRange(range) {
+  const to = new Date();
+  const from = new Date(to);
+  if (range === 'today') from.setHours(0, 0, 0, 0);
+  else if (range === '7d') from.setDate(from.getDate() - 7);
+  else if (range === '30d') from.setDate(from.getDate() - 30);
+  else from.setDate(from.getDate() - 7);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 function discoveryItems(value, keys) {
   if (Array.isArray(value)) return value;
   for (const key of keys) if (Array.isArray(value?.[key])) return value[key];
@@ -1005,6 +1040,31 @@ export function createPlatformApp(options) {
         const agent = await ownedAgent(principal, usageMatch[1]);
         const rollups = await repository.listUsageRollups(principal.organizationId, principal.userId, agent.id, url.searchParams.get("limit") ?? 1000);
         return json(response, 200, { agentId: agent.id, summary: usageSummary(rollups), rollups });
+      }
+
+      if (method === "GET" && url.pathname === "/api/user/usage") {
+        requirePermission(requireLogin(principal), PERMISSIONS.AGENT_READ, { organizationId: principal.organizationId, userId: principal.userId });
+        const range = url.searchParams.get("range") ?? "7d";
+        const { from, to } = resolveRange(range);
+        const rollups = await repository.listUsageRollups(principal.organizationId, principal.userId, undefined, { from, to, limit: 5000 });
+        const summary = usageSummary(rollups);
+        const sessions = await repository.countConversations(principal.organizationId, principal.userId, { from, to });
+        return json(response, 200, {
+          range,
+          updatedAt: new Date().toISOString(),
+          summary: {
+            totalCalls: summary.runCount,
+            failedCalls: summary.failedRunCount,
+            successRate: summary.runCount ? 1 - summary.failedRunCount / summary.runCount : 1,
+            avgLatencyMs: summary.runCount ? summary.latencySumMs / summary.runCount : 0,
+            totalTokens: summary.inputTokens + summary.outputTokens,
+            estimatedCostUsd: summary.estimatedCostUsd,
+            totalConversations: sessions.totalConversations,
+            activeAgents: sessions.activeAgents
+          },
+          modelBreakdown: aggregateModelBreakdown(rollups),
+          series: aggregateSeries(rollups, range)
+        });
       }
 
       if (method === "GET" && url.pathname === "/agent-profile") {
