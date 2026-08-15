@@ -41,16 +41,18 @@ import {
   TrendingUp,
   TriangleAlert,
   Users,
+  User,
   Wrench,
   X,
   Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { fetchAgents } from './api';
 
-type NavKey = 'overview' | 'agents' | 'conversations' | 'deploy' | 'api' | 'control' | 'approvals' | 'observability' | 'organization' | 'license' | 'servers' | 'audit';
+type NavKey = 'overview' | 'agents' | 'conversations' | 'deploy' | 'api' | 'approvals' | 'observability' | 'knowledge' | 'tools' | 'skills' | 'roles';
 type WorkspaceTab = 'templates' | 'projects' | 'runs' | 'settings';
-type AgentStatus = 'running' | 'deploying' | 'initializing';
+export type AgentStatus = 'running' | 'deploying' | 'initializing';
 type DashboardRange = 'today' | '7d' | '30d';
 type ModelConnectionState = 'unconfigured' | 'validating';
 type ApiConnectionStatus = 'verified' | 'pending' | 'disabled';
@@ -87,7 +89,7 @@ interface Template {
   color: 'blue' | 'violet' | 'cyan' | 'orange' | 'green' | 'red';
 }
 
-interface Agent {
+export interface Agent {
   id: string;
   name: string;
   description: string;
@@ -97,6 +99,7 @@ interface Agent {
   channels: string[];
   icon: LucideIcon;
   color: 'blue' | 'violet' | 'orange' | 'green';
+  host: string;
 }
 
 interface ApiConnection {
@@ -169,8 +172,8 @@ interface DeploymentRecord {
 
 const navGroups: { title: string; items: NavItem[] }[] = [
   { title: '工作台', items: [{ key: 'overview', label: '总览仪表盘', icon: LayoutDashboard }, { key: 'agents', label: '智能体 Agents', icon: Bot, badge: '4' }, { key: 'conversations', label: '会话管理', icon: MessageSquare }] },
-  { title: '开发与部署', items: [{ key: 'deploy', label: '部署发布', icon: PackagePlus }, { key: 'api', label: 'API 配置', icon: KeyRound, badge: '3' }, { key: 'control', label: '运维控制', icon: Settings }, { key: 'approvals', label: '审批中心', icon: ClipboardCheck, badge: '2', tone: 'danger' }, { key: 'observability', label: '可观测', icon: Activity }] },
-  { title: '平台管理', items: [{ key: 'organization', label: '组织成员', icon: Users }, { key: 'license', label: 'License 授权', icon: FileText }, { key: 'servers', label: '服务器', icon: Server, badge: '3', tone: 'warning' }, { key: 'audit', label: '审计日志', icon: ShieldCheck }] },
+  { title: '开发与部署', items: [{ key: 'deploy', label: '部署发布', icon: PackagePlus }, { key: 'api', label: 'API 配置', icon: KeyRound, badge: '3' }, { key: 'approvals', label: '审批中心', icon: ClipboardCheck, badge: '2', tone: 'danger' }, { key: 'observability', label: '可观测', icon: Activity }] },
+  { title: '资源库', items: [{ key: 'knowledge', label: '知识库', icon: Database }, { key: 'tools', label: '工具 Tools', icon: Wrench }, { key: 'skills', label: '技能 Skill', icon: Zap }, { key: 'roles', label: '角色卡 Role', icon: Sparkles }] },
 ];
 
 const agentMetrics: Metric[] = [
@@ -224,11 +227,11 @@ const frameworks: Template[] = [
   { name: 'Claude Tools', description: 'Anthropic 原生工具调用，长上下文稳定可靠', tags: ['Anthropic'], icon: Sparkles, color: 'violet' },
 ];
 
-const agents: Agent[] = [
-  { id: 'agent-cs-01', name: '客服 Agent #1', description: '接入飞书、微信、官网三个渠道，覆盖售前咨询与售后工单', status: 'running', model: 'DeepSeek V3', stats: [{ value: '24', label: '活跃会话' }, { value: '1.2K', label: '今日消息' }], channels: ['飞书', '微信', '官网'], icon: MessageSquare, color: 'blue' },
-  { id: 'agent-asst', name: '助手 Agent', description: '组织内知识库问答 + 日程/邮件工具，员工效率助手', status: 'running', model: 'Claude 3.5', stats: [{ value: '8', label: '活跃会话' }, { value: '326', label: '今日消息' }], channels: ['钉钉', '官网'], icon: Bot, color: 'violet' },
-  { id: 'agent-data', name: '数据分析 Agent', description: 'BI 场景，连接 ClickHouse + StarRocks，支持可视化输出', status: 'deploying', model: 'GPT-4o', stats: [{ value: '-', label: '活跃会话' }, { value: '-', label: '今日消息' }], channels: ['官网', 'API'], icon: Activity, color: 'orange' },
-  { id: 'agent-cs-02', name: '客服 Agent #2', description: '独立部署于客户 SRV-GZ-03，专属客户定制能力', status: 'initializing', model: 'Qwen Max', stats: [{ value: '-', label: '活跃会话' }, { value: '-', label: '今日消息' }], channels: ['微信'], icon: MessageSquare, color: 'green' },
+const MOCK_AGENTS: Agent[] = [
+  { id: 'agent-cs-01', name: '客服 Agent #1', description: '接入飞书、微信、官网三个渠道，覆盖售前咨询与售后工单', status: 'running', model: 'DeepSeek V3', stats: [{ value: '24', label: '活跃会话' }, { value: '1.2K', label: '今日消息' }], channels: ['飞书', '微信', '官网'], icon: MessageSquare, color: 'blue', host: 'agent-agent-cs-01.bairui.app' },
+  { id: 'agent-asst', name: '助手 Agent', description: '组织内知识库问答 + 日程/邮件工具，员工效率助手', status: 'running', model: 'Claude 3.5', stats: [{ value: '8', label: '活跃会话' }, { value: '326', label: '今日消息' }], channels: ['钉钉', '官网'], icon: Bot, color: 'violet', host: 'agent-agent-asst.bairui.app' },
+  { id: 'agent-data', name: '数据分析 Agent', description: 'BI 场景，连接 ClickHouse + StarRocks，支持可视化输出', status: 'deploying', model: 'GPT-4o', stats: [{ value: '-', label: '活跃会话' }, { value: '-', label: '今日消息' }], channels: ['官网', 'API'], icon: Activity, color: 'orange', host: 'agent-agent-data.bairui.app' },
+  { id: 'agent-cs-02', name: '客服 Agent #2', description: '独立部署于客户 SRV-GZ-03，专属客户定制能力', status: 'initializing', model: 'Qwen Max', stats: [{ value: '-', label: '活跃会话' }, { value: '-', label: '今日消息' }], channels: ['微信'], icon: MessageSquare, color: 'green', host: 'agent-agent-cs-02.bairui.app' },
 ];
 
 const initialApiConnections: ApiConnection[] = [
@@ -293,19 +296,21 @@ const conversationRoleCopy: Record<ConversationMessageRole, string> = { user: '�
 
 const ConsoleNavigationContext = createContext<{ goToAgents: () => void; goToDeployments: () => void; goToOverview: () => void; goToConversationOverview: () => void }>({ goToAgents: () => undefined, goToDeployments: () => undefined, goToOverview: () => undefined, goToConversationOverview: () => undefined });
 
+const AgentsContext = createContext<Agent[]>(MOCK_AGENTS);
+const useAgents = () => useContext(AgentsContext);
+
 const statusCopy: Record<AgentStatus, string> = { running: '运行中', deploying: '部署中', initializing: '初始化' };
 const pageCopy: Record<Exclude<NavKey, 'agents'>, { title: string; description: string; icon: LucideIcon }> = {
   overview: { title: '总览仪表盘', description: '查看平台运行状态、智能体健康与最近操作记录。', icon: LayoutDashboard },
   conversations: { title: '会话管理', description: '统一检索智能体会话与执行记录。', icon: MessageSquare },
   deploy: { title: '部署发布', description: '管理环境、部署包与发布历史。', icon: PackagePlus },
   api: { title: 'API 配置', description: '管理模型连接、可用模型和验证状态。', icon: KeyRound },
-  control: { title: '运维控制', description: '执行平台控制指令与环境维护。', icon: Settings },
   approvals: { title: '审批中心', description: '处理高风险操作与发布审批。', icon: ClipboardCheck },
   observability: { title: '可观测', description: '查看调用链路、指标和异常告警。', icon: Activity },
-  organization: { title: '组织成员', description: '管理组织、成员和协作角色。', icon: Users },
-  license: { title: 'License 授权', description: '查看授权套餐与配额使用情况。', icon: FileText },
-  servers: { title: '服务器', description: '查看注册服务器和心跳状态。', icon: Server },
-  audit: { title: '审计日志', description: '追踪平台关键动作与访问事件。', icon: ShieldCheck },
+  knowledge: { title: '知识库', description: '管理 Agent 引用的知识库、文档与向量检索。', icon: Database },
+  tools: { title: '工具 Tools', description: '配置 Agent 可调用的外部工具与 MCP 连接。', icon: Wrench },
+  skills: { title: '技能 Skill', description: '启用或编排 Agent 的能力模块与技能包。', icon: Zap },
+  roles: { title: '角色卡 Role', description: '管理 Agent 的人设角色卡与行为约束。', icon: Sparkles },
 };
 
 export function App() {
@@ -329,7 +334,22 @@ export function App() {
   const [conversationView, setConversationView] = useState<ConversationView>('overview');
   const [highlightedAgentId, setHighlightedAgentId] = useState<string | null>(null);
   const [agentView, setAgentView] = useState<AgentView>('workspace');
-  const [configuredAgentId, setConfiguredAgentId] = useState(agents[0].id);
+  const [agents, setAgents] = useState<Agent[]>(MOCK_AGENTS);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchAgents()
+      .then((data) => {
+        if (!cancelled && data.length > 0) setAgents(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setAgentsError(err instanceof Error ? err.message : '加载失败');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const [configuredAgentId, setConfiguredAgentId] = useState(MOCK_AGENTS[0].id);
   const [deployments, setDeployments] = useState<DeploymentRecord[]>(initialDeployments);
   const [deployView, setDeployView] = useState<DeployView>('list');
   const [activeDeploymentId, setActiveDeploymentId] = useState(initialDeployments[0].id);
@@ -377,7 +397,7 @@ export function App() {
     setDeployView('detail');
   }
 
-  return <ConsoleNavigationContext.Provider value={{ goToAgents: () => { setAgentView('workspace'); setActiveNav('agents'); }, goToDeployments: () => { setDeployView('list'); setActiveNav('deploy'); }, goToOverview: () => setActiveNav('overview'), goToConversationOverview: () => { setConversationView('overview'); setActiveNav('conversations'); } }}><div className="app-shell">
+  return <ConsoleNavigationContext.Provider value={{ goToAgents: () => { setAgentView('workspace'); setActiveNav('agents'); }, goToDeployments: () => { setDeployView('list'); setActiveNav('deploy'); }, goToOverview: () => setActiveNav('overview'), goToConversationOverview: () => { setConversationView('overview'); setActiveNav('conversations'); } }}><AgentsContext.Provider value={agents}><div className="app-shell">
     <Header onMenuClick={() => setSidebarOpen((value) => !value)} />
     <div className="workspace-shell">
       <Sidebar activeNav={activeNav} apiConnectionCount={apiConnections.length} isOpen={isSidebarOpen} onSelect={(key) => { setActiveNav(key); if (key === 'agents') setAgentView('workspace'); if (key === 'conversations') setConversationView('overview'); if (key === 'deploy') setDeployView('list'); setSidebarOpen(false); }} />
@@ -395,13 +415,13 @@ export function App() {
     {isModelDialogOpen ? <ModelConnectionDialog onClose={() => setModelDialogOpen(false)} onSubmit={() => { setModelDialogOpen(false); setModelConnectionState('validating'); notify('模型连接已提交，等待后端验证。'); }} /> : null}
     {isApiDialogOpen ? <ApiConnectionDialog onClose={() => setApiDialogOpen(false)} onSubmit={(draft) => { const newConnection: ApiConnection = { id: `conn-${Date.now()}`, ...draft, keyHint: '已提交，等待服务端保存', status: 'pending', lastValidated: '尚未验证', requests: '—' }; setApiConnections((items) => [newConnection, ...items]); setActiveApiConnectionId(newConnection.id); setApiDialogOpen(false); notify('连接已创建，等待后端验证。'); }} /> : null}
     {toast ? <div className="toast" role="status">{toast}</div> : null}
-  </div></ConsoleNavigationContext.Provider>;
+  </div></AgentsContext.Provider></ConsoleNavigationContext.Provider>;
 }
 
 function Header({ onMenuClick }: { onMenuClick: () => void }) {
   return <header className="topbar">
     <div className="brand-cluster"><button className="mobile-menu" type="button" title="展开导航" aria-label="展开导航" onClick={onMenuClick}><Menu /></button><a className="brand" href="#top"><span className="brand-mark">BR</span><span className="brand-name">百瑞云</span><span className="brand-divider" /><span className="brand-product">控制台</span></a><button className="product-switch" type="button"><Boxes />产品<ChevronDown /></button><nav className="top-nav" aria-label="主导航"><a className="active" href="#top">控制台</a><a href="#product">产品</a><a href="#solutions">解决方案</a><a href="#pricing">定价</a><a href="#docs">文档</a><a href="#developers">开发者</a></nav></div>
-    <div className="top-actions"><label className="global-search"><Search /><input aria-label="全局搜索" placeholder="搜索产品、文档、Agent 项目..." /></label><button className="region" type="button"><Globe2 />广州<ChevronDown /></button><button className="icon-button" type="button" title="消息" aria-label="消息"><Bell /><i /></button><button className="icon-button help" type="button" title="帮助" aria-label="帮助"><CircleHelp /></button><button className="icon-button ticket" type="button" title="工单" aria-label="工单"><FileText /></button><button className="account-menu" type="button" aria-label="打开账户菜单"><span><strong>管理员</strong><small>平台管理员</small></span><b>A</b></button></div>
+    <div className="top-actions"><label className="global-search"><Search /><input aria-label="全局搜索" placeholder="搜索产品、文档、Agent 项目..." /></label><button className="region" type="button"><Globe2 />广州<ChevronDown /></button><button className="icon-button" type="button" title="消息" aria-label="消息"><Bell /><i /></button><button className="icon-button help" type="button" title="帮助" aria-label="帮助"><CircleHelp /></button><button className="icon-button ticket" type="button" title="工单" aria-label="工单"><FileText /></button><button className="account-menu" type="button" aria-label="打开账户菜单"><span><strong>用户</strong><small>当前用户</small></span><User /></button></div>
   </header>;
 }
 
@@ -445,6 +465,7 @@ function SettingsPanel({ onNotify }: { onNotify: (message: string) => void }) { 
 const apiStatusCopy: Record<ApiConnectionStatus, string> = { verified: '已验证', pending: '待验证', disabled: '已停用' };
 
 function ConversationWorkspace({ activeConversationId, agentId, conversationPage, conversations, onBackToAgent, onBackToOverview, onCloseConversation, onNavigateAgent, onNotify, onOpenAgent, onPageChange, onQueryChange, onRangeChange, onSelectConversation, onStatusChange, query, range, status, view }: { activeConversationId: string; agentId: string; conversationPage: number; conversations: Conversation[]; onBackToAgent: () => void; onBackToOverview: () => void; onCloseConversation: (id: string) => void; onNavigateAgent: (id: string) => void; onNotify: (message: string) => void; onOpenAgent: (id: string) => void; onPageChange: (page: number) => void; onQueryChange: (value: string) => void; onRangeChange: (value: DashboardRange) => void; onSelectConversation: (id: string) => void; onStatusChange: (value: 'all' | ConversationStatus) => void; query: string; range: DashboardRange; status: 'all' | ConversationStatus; view: ConversationView }) {
+  const agents = useAgents();
   const rangeStart: Record<DashboardRange, number> = { today: new Date('2026-08-12T00:00:00').getTime(), '7d': new Date('2026-08-06T00:00:00').getTime(), '30d': new Date('2026-07-13T00:00:00').getTime() };
   const rangedConversations = useMemo(() => conversations.filter((conversation) => new Date(conversation.lastActiveAt).getTime() >= rangeStart[range]), [conversations, range]);
   const selectedAgent = agents.find((agent) => agent.id === agentId);
@@ -458,6 +479,7 @@ function ConversationWorkspace({ activeConversationId, agentId, conversationPage
 }
 
 function ConversationOverview({ conversations, onOpenAgent, onRangeChange, range }: { conversations: Conversation[]; onOpenAgent: (id: string) => void; onRangeChange: (range: DashboardRange) => void; range: DashboardRange }) {
+  const agents = useAgents();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | AgentStatus>('all');
   const summaries = agents.map((agent) => {
@@ -552,6 +574,7 @@ function AgentConfigPage({ agent, onCancel, onOpenDeployments, onSave }: { agent
 const deploymentStatusCopy: Record<DeploymentStatus, string> = { pending: '待发布', building: '构建中', published: '已发布', failed: '失败' };
 
 function DeploymentWorkspace({ activeDeploymentId, agentId, deployments, onBackToList, onConfigure, onCreateDeployment, onOpenDetail, onSelectAgent, view }: { activeDeploymentId: string; agentId: string; deployments: DeploymentRecord[]; onBackToList: () => void; onConfigure: (agent: Agent) => void; onCreateDeployment: (record: DeploymentRecord) => void; onOpenDetail: (id: string) => void; onSelectAgent: (id: string) => void; view: DeployView }) {
+  const agents = useAgents();
   const activeDeployment = deployments.find((item) => item.id === activeDeploymentId) ?? deployments[0];
   const makeNewRecord = (record: DeploymentRecord) => onCreateDeployment({ ...record, id: `dep-retry-${Date.now()}`, status: 'building', createdAt: '刚刚', duration: '进行中', trigger: record.status === 'pending' ? '确认发布' : record.status === 'failed' ? '重新触发构建' : '重新部署', summary: '正在构建当前提交与配置版本。' });
   if (view === 'detail') return <DeploymentDetail deployment={activeDeployment} onBack={onBackToList} onConfigure={() => onConfigure(agents.find((agent) => agent.id === activeDeployment.agentId) ?? agents[0])} onRetry={() => makeNewRecord(activeDeployment)} />;
@@ -559,6 +582,7 @@ function DeploymentWorkspace({ activeDeploymentId, agentId, deployments, onBackT
 }
 
 function DeploymentList({ agentId, deployments, onConfigure, onOpenDetail, onSelectAgent }: { agentId: string; deployments: DeploymentRecord[]; onConfigure: (agent: Agent) => void; onOpenDetail: (id: string) => void; onSelectAgent: (id: string) => void }) {
+  const agents = useAgents();
   const [status, setStatus] = useState<'all' | DeploymentStatus>('all');
   const [range, setRange] = useState<DashboardRange>('today');
   const visibleRecords = deployments.filter((record) => (agentId === 'all' || record.agentId === agentId) && (status === 'all' || record.status === status));
