@@ -170,6 +170,55 @@ interface DeploymentRecord {
   summary: string;
 }
 
+type TraceStatus = 'success' | 'error' | 'running';
+type AlertStatus = 'unhandled' | 'acknowledged' | 'resolved';
+
+interface TraceRecord {
+  id: string;
+  agentId: string;
+  agentName: string;
+  conversationId: string;
+  startedAt: string;
+  duration: string;
+  status: TraceStatus;
+  inputTokens: number;
+  outputTokens: number;
+  request: string;
+  response: string;
+  steps: { name: string; duration: string; status: 'success' | 'error' }[];
+}
+
+interface ObservableLog {
+  id: string;
+  time: string;
+  level: 'INFO' | 'WARN' | 'ERROR';
+  component: string;
+  event: string;
+  traceId: string;
+  agentId: string;
+}
+
+interface ObservableAlert {
+  id: string;
+  summary: string;
+  agentId: string;
+  agentName: string;
+  lastSeen: string;
+  status: AlertStatus;
+  traceId: string;
+}
+
+interface ObservabilitySummary {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  avgLatencyMs: number;
+  successRate: number;
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
 const navGroups: { title: string; items: NavItem[] }[] = [
   { title: '工作台', items: [{ key: 'overview', label: '总览仪表盘', icon: LayoutDashboard }, { key: 'agents', label: '智能体 Agents', icon: Bot, badge: '4' }, { key: 'conversations', label: '会话管理', icon: MessageSquare }] },
   { title: '开发与部署', items: [{ key: 'deploy', label: '部署发布', icon: PackagePlus }, { key: 'api', label: 'API 配置', icon: KeyRound, badge: '3' }, { key: 'approvals', label: '审批中心', icon: ClipboardCheck, badge: '2', tone: 'danger' }, { key: 'observability', label: '可观测', icon: Activity }] },
@@ -245,6 +294,54 @@ const initialDeployments: DeploymentRecord[] = [
   { id: 'dep-20260812-03', agentId: 'agent-asst', agentName: '助手 Agent', status: 'failed', sha: 'c712e4b', trigger: 'GitHub 推送', createdAt: '今天 09:36', version: 'v2.4', duration: '1 分 04 秒', summary: '构建校验未通过：邮件工具配置缺少授权范围。' },
   { id: 'dep-20260811-02', agentId: 'agent-data', agentName: '数据分析 Agent', status: 'pending', sha: 'b4e6d20', trigger: 'GitHub 推送', createdAt: '昨天 18:20', version: 'v1.3', duration: '—', summary: '等待确认发布到默认环境。' },
   { id: 'dep-20260811-01', agentId: 'agent-cs-02', agentName: '客服 Agent #2', status: 'building', sha: 'a29f5d6', trigger: '首次配置', createdAt: '昨天 16:42', version: 'v1.0', duration: '进行中', summary: '正在构建当前配置版本。' },
+];
+
+const observabilitySummaries: Record<DashboardRange, ObservabilitySummary> = {
+  today: { calls: 12800, inputTokens: 1124800, outputTokens: 717200, avgLatencyMs: 386, successRate: 0.992, p50: 248, p95: 820, p99: 1460 },
+  '7d': { calls: 72400, inputTokens: 6482000, outputTokens: 3920000, avgLatencyMs: 401, successRate: 0.989, p50: 256, p95: 886, p99: 1680 },
+  '30d': { calls: 298600, inputTokens: 26480000, outputTokens: 16520000, avgLatencyMs: 418, successRate: 0.987, p50: 274, p95: 942, p99: 1820 },
+};
+
+const observabilitySeries: Record<DashboardRange, { label: string; calls: number; latency: number; success: number }[]> = {
+  today: [
+    { label: '00:00', calls: 420, latency: 342, success: 0.989 }, { label: '04:00', calls: 560, latency: 368, success: 0.992 },
+    { label: '08:00', calls: 980, latency: 402, success: 0.994 }, { label: '12:00', calls: 1460, latency: 431, success: 0.991 },
+    { label: '16:00', calls: 1210, latency: 398, success: 0.993 }, { label: '20:00', calls: 860, latency: 374, success: 0.995 },
+  ],
+  '7d': [
+    { label: '08-10', calls: 8400, latency: 412, success: 0.986 }, { label: '08-11', calls: 9600, latency: 386, success: 0.991 },
+    { label: '08-12', calls: 11200, latency: 428, success: 0.989 }, { label: '08-13', calls: 13800, latency: 406, success: 0.992 },
+    { label: '08-14', calls: 12100, latency: 394, success: 0.991 }, { label: '08-15', calls: 10800, latency: 378, success: 0.993 },
+    { label: '今日', calls: 6500, latency: 365, success: 0.995 },
+  ],
+  '30d': [
+    { label: '07-18', calls: 32200, latency: 438, success: 0.982 }, { label: '07-23', calls: 41800, latency: 422, success: 0.986 },
+    { label: '07-28', calls: 46200, latency: 431, success: 0.987 }, { label: '08-02', calls: 51200, latency: 418, success: 0.989 },
+    { label: '08-07', calls: 46800, latency: 404, success: 0.991 }, { label: '08-12', calls: 39200, latency: 398, success: 0.992 },
+    { label: '今日', calls: 25200, latency: 386, success: 0.994 },
+  ],
+};
+
+const initialTraces: TraceRecord[] = [
+  { id: 'tr_01J3F8A9Q2M4', agentId: 'agent-cs-01', agentName: '客服 Agent #1', conversationId: 'conv_01J1Z8HQ3W6FJ9Q2ZK4M7R8T5A', startedAt: '今天 10:16:04', duration: '1.24s', status: 'success', inputTokens: 842, outputTokens: 368, request: '{\n  "messages": [{"role": "user", "content": "支持按部门检索吗？"}],\n  "model": "deepseek-chat",\n  "stream": true\n}', response: '{\n  "id": "chatcmpl_8c91",\n  "status": "completed",\n  "content": "支持，检索时可以绑定部门标签。"\n}', steps: [{ name: '路由与鉴权', duration: '42ms', status: 'success' }, { name: 'knowledge_base.search', duration: '286ms', status: 'success' }, { name: '模型响应', duration: '912ms', status: 'success' }] },
+  { id: 'tr_01J3F7C2M8K1', agentId: 'agent-data', agentName: '数据分析 Agent', conversationId: 'conv_01J1Z7ZP2F9M4N6Q8R3S5T7U9V', startedAt: '今天 10:12:08', duration: '18.04s', status: 'success', inputTokens: 1240, outputTokens: 612, request: '{\n  "messages": [{"role": "user", "content": "查询本月华南区域销售额"}],\n  "tools": ["analytics.query"]\n}', response: '{\n  "status": "completed",\n  "rows": 12,\n  "summary": "广州、深圳和佛山环比正增长"\n}', steps: [{ name: '路由与鉴权', duration: '38ms', status: 'success' }, { name: 'analytics.query', duration: '1.8s', status: 'success' }, { name: '模型响应', duration: '16.2s', status: 'success' }] },
+  { id: 'tr_01J3F5D8L2P0', agentId: 'agent-asst', agentName: '助手 Agent', conversationId: 'conv_01J1Z4A7B5C3D8E6F2G9H1J0K4', startedAt: '今天 08:04:12', duration: '3.12s', status: 'error', inputTokens: 620, outputTokens: 188, request: '{\n  "messages": [{"role": "user", "content": "生成本周周报并发送"}],\n  "tools": ["send_email"]\n}', response: '{\n  "status": "failed",\n  "error": {"code": "FORBIDDEN", "message": "工具授权不足"}\n}', steps: [{ name: '路由与鉴权', duration: '44ms', status: 'success' }, { name: 'send_email', duration: '1.1s', status: 'error' }, { name: '错误收敛', duration: '1.9s', status: 'error' }] },
+  { id: 'tr_01J3F4A7N6R9', agentId: 'agent-cs-02', agentName: '客服 Agent #2', conversationId: 'conv_01J1Z2K9L7M5N3P8Q6R4S0T1U2', startedAt: '昨天 17:31:14', duration: '5.02s', status: 'success', inputTokens: 512, outputTokens: 296, request: '{\n  "messages": [{"role": "user", "content": "QQ 和微信能共用一个 Agent 吗？"}]\n}', response: '{\n  "status": "completed",\n  "content": "可以，渠道凭据需要分别维护。"\n}', steps: [{ name: '路由与鉴权', duration: '31ms', status: 'success' }, { name: '模型响应', duration: '4.9s', status: 'success' }] },
+  { id: 'tr_01J3E9C4V7B2', agentId: 'agent-cs-01', agentName: '客服 Agent #1', conversationId: 'conv_01J1Z8HQ3W6FJ9Q2ZK4M7R8T5A', startedAt: '昨天 16:02:28', duration: '1.08s', status: 'running', inputTokens: 284, outputTokens: 0, request: '{\n  "messages": [{"role": "user", "content": "同步频率是什么？"}],\n  "stream": true\n}', response: '{\n  "status": "streaming"\n}', steps: [{ name: '路由与鉴权', duration: '35ms', status: 'success' }, { name: '模型响应', duration: '进行中', status: 'success' }] },
+];
+
+const initialObservableLogs: ObservableLog[] = [
+  { id: 'log-01', time: '今天 10:16:05', level: 'INFO', component: 'runtime', event: 'trace.completed', traceId: 'tr_01J3F8A9Q2M4', agentId: 'agent-cs-01' },
+  { id: 'log-02', time: '今天 10:12:26', level: 'INFO', component: 'tool', event: 'analytics.query.completed', traceId: 'tr_01J3F7C2M8K1', agentId: 'agent-data' },
+  { id: 'log-03', time: '今天 08:04:15', level: 'ERROR', component: 'tool', event: 'send_email.forbidden', traceId: 'tr_01J3F5D8L2P0', agentId: 'agent-asst' },
+  { id: 'log-04', time: '今天 08:04:15', level: 'WARN', component: 'runtime', event: 'trace.failed', traceId: 'tr_01J3F5D8L2P0', agentId: 'agent-asst' },
+  { id: 'log-05', time: '昨天 17:31:19', level: 'INFO', component: 'runtime', event: 'trace.completed', traceId: 'tr_01J3F4A7N6R9', agentId: 'agent-cs-02' },
+];
+
+const initialObservableAlerts: ObservableAlert[] = [
+  { id: 'alert-01', summary: 'send_email 工具连续失败，授权范围不足', agentId: 'agent-asst', agentName: '助手 Agent', lastSeen: '今天 08:04', status: 'unhandled', traceId: 'tr_01J3F5D8L2P0' },
+  { id: 'alert-02', summary: '数据分析 Agent P95 延迟超过 1 秒', agentId: 'agent-data', agentName: '数据分析 Agent', lastSeen: '昨天 18:20', status: 'acknowledged', traceId: 'tr_01J3F7C2M8K1' },
+  { id: 'alert-03', summary: '客服 Agent #2 调用成功率恢复正常', agentId: 'agent-cs-02', agentName: '客服 Agent #2', lastSeen: '昨天 17:32', status: 'resolved', traceId: 'tr_01J3F4A7N6R9' },
 ];
 
 const initialConversations: Conversation[] = [
@@ -336,19 +433,23 @@ export function App() {
   const [agentView, setAgentView] = useState<AgentView>('workspace');
   const [agents, setAgents] = useState<Agent[]>(MOCK_AGENTS);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [agentsLoadAttempt, setAgentsLoadAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
+    setAgentsError(null);
     fetchAgents()
       .then((data) => {
         if (!cancelled && data.length > 0) setAgents(data);
       })
       .catch((err) => {
-        if (!cancelled) setAgentsError(err instanceof Error ? err.message : '加载失败');
+        const message = err instanceof Error ? err.message : '加载失败';
+        console.error('[console-mvp] Agent 数据加载失败', err);
+        if (!cancelled) setAgentsError(message);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [agentsLoadAttempt]);
   const [configuredAgentId, setConfiguredAgentId] = useState(MOCK_AGENTS[0].id);
   const [deployments, setDeployments] = useState<DeploymentRecord[]>(initialDeployments);
   const [deployView, setDeployView] = useState<DeployView>('list');
@@ -356,7 +457,7 @@ export function App() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | AgentStatus>('all');
   const [toast, setToast] = useState('');
-  const filteredAgents = useMemo(() => agents.filter((agent) => (status === 'all' || agent.status === status) && (!query.trim() || `${agent.name} ${agent.description} ${agent.channels.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))), [query, status]);
+  const filteredAgents = useMemo(() => agents.filter((agent) => (status === 'all' || agent.status === status) && (!query.trim() || `${agent.name} ${agent.description} ${agent.channels.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))), [agents, query, status]);
 
   function notify(message: string) {
     setToast(message);
@@ -403,12 +504,13 @@ export function App() {
       <Sidebar activeNav={activeNav} apiConnectionCount={apiConnections.length} isOpen={isSidebarOpen} onSelect={(key) => { setActiveNav(key); if (key === 'agents') setAgentView('workspace'); if (key === 'conversations') setConversationView('overview'); if (key === 'deploy') setDeployView('list'); setSidebarOpen(false); }} />
       <main className="main-content">
         {activeNav === 'overview' ? <OverviewDashboard dashboardRange={dashboardRange} modelConnectionState={modelConnectionState} onConfigureModel={() => setModelDialogOpen(true)} onCreate={() => setCreateDialogOpen(true)} onNavigate={setActiveNav} onRangeChange={setDashboardRange} /> : null}
-        {activeNav === 'agents' && agentView === 'workspace' ? <AgentWorkspace activeTab={activeTab} agents={filteredAgents} highlightedAgentId={highlightedAgentId} onConfigure={openAgentConfig} onCreate={() => setCreateDialogOpen(true)} onManageConversations={openAgentConversations} onNotify={notify} onQueryChange={setQuery} onStatusChange={setStatus} query={query} setActiveTab={setActiveTab} status={status} /> : null}
+        {activeNav === 'agents' && agentView === 'workspace' ? <AgentWorkspace activeTab={activeTab} agents={filteredAgents} dataError={agentsError} highlightedAgentId={highlightedAgentId} onConfigure={openAgentConfig} onCreate={() => setCreateDialogOpen(true)} onManageConversations={openAgentConversations} onNotify={notify} onOpenObservability={() => setActiveNav('observability')} onQueryChange={setQuery} onRetryData={() => setAgentsLoadAttempt((value) => value + 1)} onStatusChange={setStatus} query={query} setActiveTab={setActiveTab} status={status} /> : null}
         {activeNav === 'agents' && agentView === 'config' ? <AgentConfigPage agent={agents.find((agent) => agent.id === configuredAgentId) ?? agents[0]} onCancel={() => setAgentView('workspace')} onOpenDeployments={openDeploymentsForAgent} onSave={(agent) => { setDeployments((items) => [{ id: `dep-config-${Date.now()}`, agentId: agent.id, agentName: agent.name, status: 'pending', sha: '本地草稿', trigger: '配置保存', createdAt: '刚刚', version: 'v1.9', duration: '—', summary: '配置版本已保存，等待确认发布。' }, ...items]); setAgentView('workspace'); notify('配置已保存，已生成 v1.9 待发布记录。'); }} /> : null}
         {activeNav === 'conversations' ? <ConversationWorkspace activeConversationId={activeConversationId} agentId={conversationAgentFilter} conversationPage={conversationPage} conversations={conversations} onBackToAgent={() => setConversationView('agent')} onBackToOverview={() => { setConversationView('overview'); setConversationPage(1); }} onCloseConversation={(id) => { setConversations((items) => items.map((item) => item.id === id ? { ...item, status: 'closed', lastActiveLabel: '刚刚', lastActiveAt: '2026-08-12T10:24:00', messages: [...item.messages, { id: `msg-close-${Date.now()}`, role: 'system', content: '会话已由管理员结束。', time: '2026-08-12 10:24:00' }] } : item)); notify('会话已结束。'); }} onNavigateAgent={returnToAgent} onNotify={notify} onOpenAgent={(id) => { setConversationAgentFilter(id); setConversationQuery(''); setConversationStatus('all'); setConversationPage(1); setConversationView('agent'); }} onPageChange={setConversationPage} onQueryChange={(value) => { setConversationQuery(value); setConversationPage(1); }} onRangeChange={(value) => { setConversationRange(value); setConversationPage(1); }} onSelectConversation={(id) => { setActiveConversationId(id); setConversationView('detail'); }} onStatusChange={(value) => { setConversationStatus(value); setConversationPage(1); }} query={conversationQuery} range={conversationRange} status={conversationStatus} view={conversationView} /> : null}
         {activeNav === 'api' ? <ApiConfigWorkspace activeConnectionId={activeApiConnectionId} connections={apiConnections} onAdd={() => setApiDialogOpen(true)} onNotify={notify} onSelect={setActiveApiConnectionId} onToggle={(id) => setApiConnections((items) => items.map((item) => item.id === id ? { ...item, status: item.status === 'disabled' ? 'pending' : 'disabled', lastValidated: item.status === 'disabled' ? '等待验证' : item.lastValidated } : item))} onValidate={(id) => setApiConnections((items) => items.map((item) => item.id === id ? { ...item, status: 'pending', lastValidated: '验证请求已提交' } : item))} /> : null}
         {activeNav === 'deploy' ? <DeploymentWorkspace activeDeploymentId={activeDeploymentId} agentId={configuredAgentId} deployments={deployments} onBackToList={() => setDeployView('list')} onConfigure={openAgentConfig} onCreateDeployment={createDeployment} onOpenDetail={(id) => { setActiveDeploymentId(id); setDeployView('detail'); }} onSelectAgent={setConfiguredAgentId} view={deployView} /> : null}
-        {activeNav !== 'overview' && activeNav !== 'agents' && activeNav !== 'conversations' && activeNav !== 'api' && activeNav !== 'deploy' ? <ScopePlaceholder keyName={activeNav} onReturn={() => setActiveNav('agents')} /> : null}
+        {activeNav === 'observability' ? <ObservabilityPage agents={agents} onNotify={notify} /> : null}
+        {activeNav !== 'overview' && activeNav !== 'agents' && activeNav !== 'conversations' && activeNav !== 'api' && activeNav !== 'deploy' && activeNav !== 'observability' ? <ScopePlaceholder keyName={activeNav} onReturn={() => setActiveNav('agents')} /> : null}
       </main>
     </div>
     {isCreateDialogOpen ? <CreateDialog onClose={() => setCreateDialogOpen(false)} onSubmit={() => { setCreateDialogOpen(false); notify('已提交：下一步配置模型'); }} /> : null}
@@ -432,16 +534,22 @@ function Sidebar({ activeNav, apiConnectionCount, isOpen, onSelect }: { activeNa
 function OverviewDashboard({ dashboardRange, modelConnectionState, onConfigureModel, onCreate, onNavigate, onRangeChange }: { dashboardRange: DashboardRange; modelConnectionState: ModelConnectionState; onConfigureModel: () => void; onCreate: () => void; onNavigate: (key: NavKey) => void; onRangeChange: (range: DashboardRange) => void }) {
   const isModelPending = modelConnectionState === 'validating';
   const [usage, setUsage] = useState<UsagePayload | null>(null);
-  const [usageError, setUsageError] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageLoadAttempt, setUsageLoadAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setUsageError(false);
+    setUsage(null);
+    setUsageError(null);
     fetchUsage(dashboardRange)
       .then((payload) => { if (!cancelled) setUsage(payload); })
-      .catch(() => { if (!cancelled) setUsageError(true); });
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : '用量接口请求失败';
+        console.error('[console-mvp] 用量数据加载失败', err);
+        if (!cancelled) setUsageError(message);
+      });
     return () => { cancelled = true; };
-  }, [dashboardRange]);
+  }, [dashboardRange, usageLoadAttempt]);
 
   const summary = usage?.summary;
   const metrics: Metric[] = summary ? [
@@ -459,7 +567,7 @@ function OverviewDashboard({ dashboardRange, modelConnectionState, onConfigureMo
   const ringGradient = modelBreakdown.length
     ? (() => { let acc = 0; const stops = modelBreakdown.map((slice, index) => { const start = acc * 100; acc += slice.share; const end = acc * 100; return `${ringColors[index % ringColors.length]} ${start.toFixed(1)}% ${end.toFixed(1)}%`; }); return `conic-gradient(${stops.join(', ')})`; })()
     : undefined;
-  const updatedLabel = usage?.updatedAt ? `数据更新于 ${new Date(usage.updatedAt).toLocaleString('zh-CN', { hour12: false })}` : '数据加载中…';
+  const updatedLabel = usageError ? `用量数据加载失败：${usageError}` : usage?.updatedAt ? `数据更新于 ${new Date(usage.updatedAt).toLocaleString('zh-CN', { hour12: false })}` : '数据加载中…';
   const activities = [
     { title: '会话调用完成', detail: summary ? `已完成 ${summary.totalCalls.toLocaleString()} 次模型响应，平均耗时 ${Math.round(summary.avgLatencyMs)}ms` : '正在加载用量数据', time: '实时', icon: MessageSquare, tone: 'blue' },
     { title: '调用趋势已更新', detail: `已同步${rangeLabels[dashboardRange]}的调用与延迟汇总`, time: '实时', icon: RefreshCw, tone: 'green' },
@@ -469,22 +577,93 @@ function OverviewDashboard({ dashboardRange, modelConnectionState, onConfigureMo
   return <><Breadcrumb items={['工作台', '总览仪表盘']} /><section className="page-heading overview-heading"><div><p>工作台 / 总览</p><h1>总览仪表盘</h1><span>汇总查看会话、调用表现和近期活动，详细 Agent 配置请前往智能体页面。</span></div><div className="heading-actions"><small>{usageError ? '用量数据加载失败，显示示例' : updatedLabel}</small><button className="button secondary" type="button" onClick={onConfigureModel}><KeyRound />模型连接</button><button className="button primary" type="button" onClick={onCreate}><Plus />创建 Agent</button></div></section><section className="overview-toolbar"><div className="range-switcher" aria-label="统计时间范围" role="tablist">{(Object.keys(rangeLabels) as DashboardRange[]).map((range) => <button className={dashboardRange === range ? 'active' : ''} type="button" key={range} role="tab" aria-selected={dashboardRange === range} onClick={() => onRangeChange(range)}>{rangeLabels[range]}</button>)}</div><span>所有指标按所选时间范围统计</span></section><section className={`connection-notice ${isModelPending ? 'pending' : ''}`}><span><KeyRound /></span><div><strong>{isModelPending ? '模型连接等待验证' : '完成模型连接后即可开始调用'}</strong><p>{isModelPending ? '本地配置草稿已提交；服务端接入后将返回最终验证结果。' : '设置 Provider、Base URL、模型和 API Key。密钥不会在浏览器中保存。'}</p></div><button className="button secondary" type="button" onClick={onConfigureModel}>{isModelPending ? '查看配置' : '开始配置'}<ChevronRight /></button></section><section className="metric-grid" aria-label="总览指标">{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section><section className="overview-main-grid"><article className="chart-card overview-trend"><header><strong><i className="blue-dot" />调用趋势</strong><span><b />调用量</span></header><div className="line-chart" aria-label={`${rangeLabels[dashboardRange]}调用量趋势`} role="img"><div className="chart-grid-lines" />{series.length ? <div className="chart-bars">{series.map((point) => <span key={point.bucketStart} style={{ height: `${Math.max(2, Math.round((point.calls / maxCalls) * 100))}%` }} title={`${point.bucketStart}：${point.calls} 次调用`} />)}</div> : <div className={`chart-wave range-${dashboardRange}`} />}<footer>{axisLabels.map((label) => <span key={label}>{label}</span>)}</footer></div></article><article className="chart-card model-chart"><header><strong><i className="violet-dot" />模型调用分布</strong><span>{rangeLabels[dashboardRange]}</span></header><div aria-label={modelBreakdown.length ? modelBreakdown.map((slice) => `${slice.model} 占 ${Math.round(slice.share * 100)}%`).join('，') : '暂无模型调用数据'} role="img"><div className="ring" style={ringGradient ? { background: ringGradient } : undefined}><span><strong>{summary ? summary.totalCalls.toLocaleString() : '—'}</strong><small>调用次数</small></span></div><ul aria-hidden="true">{modelBreakdown.length ? modelBreakdown.map((slice) => { const dotTone = slice.model.includes('DeepSeek') ? 'blue-dot' : slice.model.includes('Claude') ? 'violet-dot' : slice.model.includes('GPT') ? 'green-dot' : 'orange-dot'; return <li key={slice.model}><i className={dotTone} />{slice.model} <b>{Math.round(slice.share * 100)}%</b></li>; }) : <li><i className="orange-dot" />暂无数据 <b>—</b></li>}</ul></div></article></section><section className="overview-bottom-grid"><article className="activity-panel"><header><div><h2>最近活动</h2><p>仅展示当前工作区的聚合事件</p></div><button className="text-button" type="button" onClick={() => onNavigate('conversations')}>查看全部<ChevronRight /></button></header><ol>{activities.map((activity) => { const Icon = activity.icon; return <li key={activity.title}><span className={activity.tone}><Icon /></span><div><strong>{activity.title}</strong><p>{activity.detail}</p></div><time>{activity.time}</time></li>; })}</ol></article><article className="quick-actions-panel"><header><div><h2>快捷操作</h2><p>从总览进入常用工作流</p></div></header><div><button type="button" onClick={onCreate}><span><Plus /></span><strong>创建 Agent</strong><small>从模板或空白项目开始</small><ChevronRight /></button><button type="button" onClick={onConfigureModel}><span><KeyRound /></span><strong>配置模型连接</strong><small>管理模型服务与验证状态</small><ChevronRight /></button><button type="button" onClick={() => onNavigate('agents')}><span><Bot /></span><strong>进入智能体</strong><small>查看项目与详细配置</small><ChevronRight /></button></div></article></section></>;
 }
 
-function AgentWorkspace({ activeTab, agents: visibleAgents, highlightedAgentId, onConfigure, onCreate, onManageConversations, onNotify, onQueryChange, onStatusChange, query, setActiveTab, status }: { activeTab: WorkspaceTab; agents: Agent[]; highlightedAgentId: string | null; onConfigure: (agent: Agent) => void; onCreate: () => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void; onQueryChange: (value: string) => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; setActiveTab: (tab: WorkspaceTab) => void; status: 'all' | AgentStatus }) {
+function AgentWorkspace({ activeTab, agents: visibleAgents, dataError, highlightedAgentId, onConfigure, onCreate, onManageConversations, onNotify, onOpenObservability, onQueryChange, onRetryData, onStatusChange, query, setActiveTab, status }: { activeTab: WorkspaceTab; agents: Agent[]; dataError: string | null; highlightedAgentId: string | null; onConfigure: (agent: Agent) => void; onCreate: () => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void; onOpenObservability: () => void; onQueryChange: (value: string) => void; onRetryData: () => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; setActiveTab: (tab: WorkspaceTab) => void; status: 'all' | AgentStatus }) {
   const tabs: { key: WorkspaceTab; label: string; badge?: string }[] = [{ key: 'templates', label: '快速开始', badge: '6' }, { key: 'projects', label: '我的项目', badge: '4' }, { key: 'runs', label: '运行记录' }, { key: 'settings', label: '接入配置' }];
-  return <><Breadcrumb items={['工作台', '智能体 Agents']} /><section className="page-heading"><div><p>工作台 / 智能体</p><h1>智能体管理</h1><span>查看项目运行状态、近期调用和待处理事项，并从这里创建新的智能体项目。</span></div><div className="heading-actions"><span>共 4 个项目</span><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></section><section className="metric-grid" aria-label="智能体指标">{agentMetrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section><section className="workspace-panel"><div className="tabs" role="tablist">{tabs.map((tab) => <button className={activeTab === tab.key ? 'active' : ''} type="button" key={tab.key} role="tab" aria-selected={activeTab === tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}{tab.badge ? <span>{tab.badge}</span> : null}</button>)}</div><div className="tab-content">{activeTab === 'templates' ? <TemplatePanel onCreate={onCreate} /> : null}{activeTab === 'projects' ? <AgentPanel agents={visibleAgents} highlightedAgentId={highlightedAgentId} onConfigure={onConfigure} onCreate={onCreate} onManageConversations={onManageConversations} onNotify={onNotify} onQueryChange={onQueryChange} onStatusChange={onStatusChange} query={query} status={status} /> : null}{activeTab === 'runs' ? <RunsPanel /> : null}{activeTab === 'settings' ? <SettingsPanel onNotify={onNotify} /> : null}</div></section>{activeTab === 'templates' ? <><ReferenceAlert onNotify={onNotify} /><ObservabilityPanels /></> : null}</>;
+  return <><Breadcrumb items={['工作台', '智能体 Agents']} /><section className="page-heading"><div><p>工作台 / 智能体</p><h1>智能体管理</h1><span>查看项目运行状态、近期调用和待处理事项，并从这里创建新的智能体项目。</span></div><div className="heading-actions"><span>共 4 个项目</span><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></section>{dataError ? <ErrorState title="智能体数据加载失败" message="当前页面保留了本地示例数据，避免页面中断；修复接口后可以重试。" details={dataError} onRetry={onRetryData} /> : null}<section className="metric-grid" aria-label="智能体指标">{agentMetrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section><section className="workspace-panel"><div className="tabs" role="tablist">{tabs.map((tab) => <button className={activeTab === tab.key ? 'active' : ''} type="button" key={tab.key} role="tab" aria-selected={activeTab === tab.key} onClick={() => setActiveTab(tab.key)}>{tab.label}{tab.badge ? <span>{tab.badge}</span> : null}</button>)}</div><div className="tab-content">{activeTab === 'templates' ? <TemplatePanel onCreate={onCreate} /> : null}{activeTab === 'projects' ? <AgentPanel agents={visibleAgents} highlightedAgentId={highlightedAgentId} onConfigure={onConfigure} onCreate={onCreate} onManageConversations={onManageConversations} onNotify={onNotify} onOpenObservability={onOpenObservability} onQueryChange={onQueryChange} onStatusChange={onStatusChange} query={query} status={status} /> : null}{activeTab === 'runs' ? <RunsPanel /> : null}{activeTab === 'settings' ? <SettingsPanel onNotify={onNotify} /> : null}</div></section>{activeTab === 'templates' ? <ReferenceAlert onNotify={onNotify} /> : null}</>;
 }
 
 function Breadcrumb({ items }: { items: string[] }) { const { goToAgents, goToConversationOverview, goToDeployments, goToOverview } = useContext(ConsoleNavigationContext); return <nav className="breadcrumb" aria-label="面包屑">{items.map((item, index) => { const isCurrent = index === items.length - 1; const onClick = item === '工作台' ? goToOverview : item === '会话管理' ? goToConversationOverview : item === '智能体 Agents' ? goToAgents : item === '部署发布' ? goToDeployments : undefined; return <span key={item}>{index ? <i>/</i> : null}{onClick && !isCurrent ? <button type="button" onClick={onClick}>{item}</button> : <b className={isCurrent ? 'current' : ''}>{item}</b>}</span>; })}</nav>; }
 function MetricCard({ metric }: { metric: Metric }) { const Icon = metric.icon; const TrendIcon = metric.trendTone === 'up' ? TrendingUp : TrendingDown; return <article className={`metric-card ${metric.tone}`}><div className="metric-head"><span>{metric.label}</span><i><Icon /></i></div><strong>{metric.value}</strong><small><em className={metric.trendTone}><TrendIcon />{metric.trend}</em><span>{metric.comparison ?? '较上周同期'}</span></small></article>; }
+function ErrorState({ title, message, details, onRetry }: { title: string; message: string; details?: string | null; onRetry?: () => void }) { return <section className="inline-error-state" role="alert"><span className="inline-error-icon"><TriangleAlert /></span><div className="inline-error-copy"><strong>{title}</strong><p>{message}</p>{import.meta.env.DEV && details ? <details className="error-details"><summary>开发调试详情</summary><pre>{details}</pre></details> : null}</div>{onRetry ? <button className="button secondary" type="button" onClick={onRetry}><RefreshCw />重试</button> : null}</section>; }
 
 function TemplatePanel({ onCreate }: { onCreate: () => void }) { return <><TemplateSection heading="精选模板 · 一键启动" action="查看全部 120+ 模板" items={templates} onCreate={onCreate} /><TemplateSection heading="按框架分类" items={frameworks} onCreate={onCreate} variant="framework" /></>; }
 function TemplateSection({ action, heading, items, onCreate, variant }: { action?: string; heading: string; items: Template[]; onCreate: () => void; variant?: 'framework' }) { return <section className={`template-section ${variant ?? ''}`}><div className="section-heading"><h2>{heading}</h2>{action ? <button className="text-button" type="button" onClick={() => onCreate()}>{action}<ChevronRight /></button> : null}</div><div className="template-grid">{items.map((template) => { const Icon = template.icon; return <button className="template-card" key={template.name} type="button" onClick={onCreate}><span className={`template-icon ${template.color}`}><Icon /></span><strong>{template.name}</strong><p>{template.description}</p><span className="template-meta">{template.tags.map((tag) => <i key={tag}>{tag}</i>)}</span></button>; })}</div></section>; }
 
-function AgentPanel({ agents: visibleAgents, highlightedAgentId, onConfigure, onCreate, onManageConversations, onNotify, onQueryChange, onStatusChange, query, status }: { agents: Agent[]; highlightedAgentId: string | null; onConfigure: (agent: Agent) => void; onCreate: () => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void; onQueryChange: (value: string) => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; status: 'all' | AgentStatus }) { return <><div className="toolbar"><div className="toolbar-left"><label className="field-search"><Search /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索智能体名称、ID、渠道..." /></label><select value={status} onChange={(event) => onStatusChange(event.target.value as 'all' | AgentStatus)} aria-label="筛选智能体状态"><option value="all">全部状态</option><option value="running">运行中</option><option value="deploying">部署中</option><option value="initializing">初始化</option></select><select aria-label="筛选开发框架"><option>全部框架</option><option>OpenAI Agents</option><option>LangGraph</option><option>CrewAI</option></select></div><div className="toolbar-right"><button className="button secondary" type="button" onClick={() => onNotify('导入功能将在后端接入后开放。')}><Download />导入</button><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <AgentCard agent={agent} highlighted={agent.id === highlightedAgentId} key={agent.id} onConfigure={onConfigure} onManageConversations={onManageConversations} onNotify={onNotify} />)}</div>{!visibleAgents.length ? <div className="empty-state"><Search /><strong>没有匹配的智能体</strong><span>调整搜索词或状态筛选后重试。</span></div> : null}</>; }
-function AgentCard({ agent, highlighted, onConfigure, onManageConversations, onNotify }: { agent: Agent; highlighted: boolean; onConfigure: (agent: Agent) => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void }) { const Icon = agent.icon; const openChat = () => { const agentName = new URLSearchParams({ agent: agent.name }); window.open(`/agent-chat.html?${agentName.toString()}`, '_blank', 'noopener,noreferrer'); }; return <article className={`agent-card ${highlighted ? 'highlighted' : ''}`}><header><div className="agent-info"><span className={`agent-icon ${agent.color}`}><Icon /></span><div><strong>{agent.name}</strong><p>{agent.description}</p></div></div><span className={`status-pill ${agent.status}`}><b />{statusCopy[agent.status]}</span></header><div className="agent-body"><div className="agent-stats">{agent.stats.map((stat) => <div key={stat.label}><strong>{stat.value}</strong><span>{stat.label}</span></div>)}<div><strong>{agent.model}</strong><span>当前模型</span></div></div><footer><div className="channel-list">{agent.channels.map((channel) => <i key={channel}>{channel}</i>)}</div><div className="agent-actions"><button type="button" onClick={() => onNotify(`已打开 ${agent.name} 的运行观测。`)}><Eye />监控</button><button type="button" onClick={() => onConfigure(agent)}><Settings />配置</button><button type="button" onClick={() => onManageConversations(agent)}><MessageSquare />会话管理</button><button type="button" onClick={openChat}><MessageSquare />对话</button></div></footer></div></article>; }
+function AgentPanel({ agents: visibleAgents, highlightedAgentId, onConfigure, onCreate, onManageConversations, onNotify, onOpenObservability, onQueryChange, onStatusChange, query, status }: { agents: Agent[]; highlightedAgentId: string | null; onConfigure: (agent: Agent) => void; onCreate: () => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void; onOpenObservability: () => void; onQueryChange: (value: string) => void; onStatusChange: (value: 'all' | AgentStatus) => void; query: string; status: 'all' | AgentStatus }) { return <><div className="toolbar"><div className="toolbar-left"><label className="field-search"><Search /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索智能体名称、ID、渠道..." /></label><select value={status} onChange={(event) => onStatusChange(event.target.value as 'all' | AgentStatus)} aria-label="筛选智能体状态"><option value="all">全部状态</option><option value="running">运行中</option><option value="deploying">部署中</option><option value="initializing">初始化</option></select><select aria-label="筛选开发框架"><option>全部框架</option><option>OpenAI Agents</option><option>LangGraph</option><option>CrewAI</option></select></div><div className="toolbar-right"><button className="button secondary" type="button" onClick={() => onNotify('导入功能将在后端接入后开放。')}><Download />导入</button><button className="button primary" type="button" onClick={onCreate}><Plus />新建 Agent 项目</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <AgentCard agent={agent} highlighted={agent.id === highlightedAgentId} key={agent.id} onConfigure={onConfigure} onManageConversations={onManageConversations} onNotify={onNotify} onOpenObservability={onOpenObservability} />)}</div>{!visibleAgents.length ? <div className="empty-state"><Search /><strong>没有匹配的智能体</strong><span>调整搜索词或状态筛选后重试。</span></div> : null}</>; }
+function AgentCard({ agent, highlighted, onConfigure, onManageConversations, onNotify, onOpenObservability }: { agent: Agent; highlighted: boolean; onConfigure: (agent: Agent) => void; onManageConversations: (agent: Agent) => void; onNotify: (message: string) => void; onOpenObservability: () => void }) { const Icon = agent.icon; const openChat = () => { const agentName = new URLSearchParams({ agent: agent.name }); window.open(`/agent-chat.html?${agentName.toString()}`, '_blank', 'noopener,noreferrer'); }; return <article className={`agent-card ${highlighted ? 'highlighted' : ''}`}><header><div className="agent-info"><span className={`agent-icon ${agent.color}`}><Icon /></span><div><strong>{agent.name}</strong><p>{agent.description}</p></div></div><span className={`status-pill ${agent.status}`}><b />{statusCopy[agent.status]}</span></header><div className="agent-body"><div className="agent-stats">{agent.stats.map((stat) => <div key={stat.label}><strong>{stat.value}</strong><span>{stat.label}</span></div>)}<div><strong>{agent.model}</strong><span>当前模型</span></div></div><footer><div className="channel-list">{agent.channels.map((channel) => <i key={channel}>{channel}</i>)}</div><div className="agent-actions"><button type="button" onClick={onOpenObservability}><Eye />监控</button><button type="button" onClick={() => onConfigure(agent)}><Settings />配置</button><button type="button" onClick={() => onManageConversations(agent)}><MessageSquare />会话管理</button><button type="button" onClick={openChat}><MessageSquare />对话</button></div></footer></div></article>; }
 
 function ReferenceAlert({ onNotify }: { onNotify: (message: string) => void }) { return <section className="reference-alert"><span><TriangleAlert /></span><div><strong>检测到服务器 SRV-GZ-03 版本漂移</strong><p>期望版本 v0.1.0-rc.7，实际 v0.1.0-rc.6，建议尽快修复以避免功能缺失。最近心跳：2 小时前。</p></div><aside><button className="button primary" type="button" onClick={() => onNotify('修复请求已加入本地 mock 队列。')}>立即修复</button><button className="button secondary" type="button" onClick={() => onNotify('已标记为稍后处理。')}>稍后处理</button></aside></section>; }
-function ObservabilityPanels() { return <section className="chart-grid"><article className="chart-card"><header><strong><i className="blue-dot" />智能体调用趋势（近 7 日）</strong><span><b />请求数 <b className="muted-dot" />Token 消耗</span></header><div className="line-chart"><div className="chart-grid-lines" /><div className="chart-wave" /><div className="chart-wave secondary" /><footer><span>08-01</span><span>08-02</span><span>08-03</span><span>08-04</span><span>08-05</span><span>08-06</span><span>今日</span></footer></div></article><article className="chart-card model-chart"><header><strong><i className="violet-dot" />模型调用分布</strong></header><div><div className="ring"><span><strong>12.8K</strong><small>总调用次数</small></span></div><ul><li><i className="blue-dot" />DeepSeek V3 <b>42%</b></li><li><i className="violet-dot" />Claude 3.5 <b>31%</b></li><li><i className="green-dot" />GPT-4o <b>18%</b></li><li><i className="orange-dot" />其他模型 <b>9%</b></li></ul></div></article></section>; }
+function formatTokenCount(value: number) {
+  return value.toLocaleString('zh-CN');
+}
+
+function ObservabilityPage({ agents, onNotify }: { agents: Agent[]; onNotify: (message: string) => void }) {
+  const [range, setRange] = useState<DashboardRange>('today');
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [lastUpdated, setLastUpdated] = useState('刚刚');
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState(initialObservableAlerts);
+  const summaryBase = observabilitySummaries[range];
+  const agentFactor = agentFilter === 'all' ? 1 : 0.42;
+  const summary: ObservabilitySummary = {
+    ...summaryBase,
+    calls: Math.round(summaryBase.calls * agentFactor),
+    inputTokens: Math.round(summaryBase.inputTokens * agentFactor),
+    outputTokens: Math.round(summaryBase.outputTokens * agentFactor),
+    avgLatencyMs: agentFilter === 'all' ? summaryBase.avgLatencyMs : Math.max(1, summaryBase.avgLatencyMs - 34),
+  };
+  const search = query.trim().toLocaleLowerCase();
+  const matchesSearch = (value: string) => !search || value.toLocaleLowerCase().includes(search);
+  const visibleTraces = initialTraces.filter((trace) => (agentFilter === 'all' || trace.agentId === agentFilter) && matchesSearch(`${trace.id} ${trace.conversationId} ${trace.agentName}`));
+  const visibleLogs = initialObservableLogs.filter((log) => (agentFilter === 'all' || log.agentId === agentFilter) && matchesSearch(`${log.traceId} ${log.event} ${log.component}`));
+  const visibleAlerts = alerts.filter((alert) => (agentFilter === 'all' || alert.agentId === agentFilter) && matchesSearch(`${alert.traceId} ${alert.summary} ${alert.agentName}`));
+  const selectedTrace = initialTraces.find((trace) => trace.id === selectedTraceId);
+  const series = observabilitySeries[range].map((point) => ({ ...point, calls: Math.max(1, Math.round(point.calls * agentFactor)), latency: Math.max(1, point.latency + (agentFilter === 'all' ? 0 : -26)) }));
+  const maxCalls = Math.max(...series.map((point) => point.calls), 1);
+  const metricCards: Metric[] = [
+    { label: '请求调用量', value: summary.calls.toLocaleString(), trend: '—', trendTone: 'up', tone: 'blue', icon: Zap, comparison: rangeLabels[range] },
+    { label: '平均响应延迟', value: `${summary.avgLatencyMs}ms`, trend: '—', trendTone: 'up', tone: 'green', icon: Gauge, comparison: rangeLabels[range] },
+    { label: '最终响应成功率', value: `${(summary.successRate * 100).toFixed(1)}%`, trend: '—', trendTone: 'up', tone: 'orange', icon: CheckCircle2, comparison: rangeLabels[range] },
+  ];
+  const copyTraceId = (traceId: string) => {
+    void navigator.clipboard.writeText(traceId).then(() => onNotify('Trace ID 已复制。')).catch(() => onNotify('当前环境无法访问剪贴板。'));
+  };
+  const acknowledgeAlert = (alertId: string) => {
+    setAlerts((items) => items.map((alert) => alert.id === alertId ? { ...alert, status: 'acknowledged' } : alert));
+    onNotify('告警已标记为已确认。');
+  };
+  const alertStatusCopy: Record<AlertStatus, string> = { unhandled: '未处理', acknowledged: '已确认', resolved: '已恢复' };
+  const traceStatusCopy: Record<TraceStatus, string> = { success: '成功', error: '异常', running: '进行中' };
+
+  return <>
+    <Breadcrumb items={['工作台', '可观测']} />
+    <section className="page-heading observability-heading">
+      <div><p>工作台 / 可观测</p><h1>诊断工作台</h1><span>围绕当前账号下的 Agent，查看请求性能、Trace、脱敏日志与异常告警。</span></div>
+      <div className="heading-actions"><small>最后更新：{lastUpdated}</small><button className="button secondary" type="button" onClick={() => { setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false })); onNotify('可观测数据已刷新。'); }}><RefreshCw />手动刷新</button></div>
+    </section>
+    <section className="observability-source-notice"><span><TriangleAlert /></span><div><strong>当前使用本地示例数据</strong><p>真实可观测接口尚未接入；页面字段、筛选和详情交互已按接口契约预留。仅展示当前账号 Agent 的数据。</p></div></section>
+    <section className="observability-toolbar" aria-label="可观测筛选">
+      <div className="range-switcher" role="tablist" aria-label="统计时间范围">{(Object.keys(rangeLabels) as DashboardRange[]).map((item) => <button className={range === item ? 'active' : ''} type="button" key={item} role="tab" aria-selected={range === item} onClick={() => setRange(item)}>{rangeLabels[item]}</button>)}</div>
+      <select aria-label="筛选 Agent" value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}><option value="all">全部 Agent</option>{agents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name}</option>)}</select>
+      <label className="field-search observability-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Trace ID 或会话 ID" aria-label="搜索 Trace ID 或会话 ID" /></label>
+    </section>
+    <section className="observability-metric-layout">
+      <div className="metric-grid observability-metric-grid" aria-label="性能指标">{metricCards.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</div>
+      <article className="observability-token-card"><header><div><span className="section-kicker">Token 用量</span><h2>{formatTokenCount(summary.inputTokens + summary.outputTokens)}</h2></div><span className="token-icon"><Zap /></span></header><div className="token-breakdown"><div><span>输入 Token</span><strong>{formatTokenCount(summary.inputTokens)}</strong></div><div><span>输出 Token</span><strong>{formatTokenCount(summary.outputTokens)}</strong></div></div><small>总量按当前筛选范围聚合</small></article>
+    </section>
+    <section className="observability-content-grid">
+      <article className="observability-panel observability-trend-panel"><header><div><h2>调用趋势</h2><p>请求量、平均延迟与最终响应成功率</p></div><span className="panel-meta">{rangeLabels[range]} · {agentFilter === 'all' ? '全部 Agent' : agents.find((agent) => agent.id === agentFilter)?.name}</span></header><div className="trend-legend"><span><i className="legend-blue" />请求量</span><span><i className="legend-orange" />平均延迟</span><span><i className="legend-green" />成功率</span></div><div className="observability-chart"><div className="chart-grid-lines" /><div className="observability-bars">{series.map((point) => <div className="observability-bar-group" key={point.label}><div className="observability-bar calls" style={{ height: `${Math.max(4, (point.calls / maxCalls) * 100)}%` }} title={`${point.label} 请求 ${point.calls}`} /><div className="observability-bar latency" style={{ height: `${Math.max(4, (point.latency / Math.max(...series.map((item) => item.latency))) * 100)}%` }} title={`${point.label} 延迟 ${point.latency}ms`} /><div className="observability-bar success" style={{ height: `${Math.max(4, ((point.success - 0.97) / 0.03) * 100)}%` }} title={`${point.label} 成功率 ${(point.success * 100).toFixed(1)}%`} /><span>{point.label}</span></div>)}</div><footer><span>P50 {summary.p50}ms</span><span>P95 {summary.p95}ms</span><span>P99 {summary.p99}ms</span></footer></div></article>
+      <article className="observability-panel percentile-panel"><header><div><h2>延迟分位值</h2><p>定位长尾请求</p></div><Gauge /></header><div className="percentile-list"><div><span>P50</span><strong>{summary.p50}ms</strong><i style={{ width: `${Math.min(100, summary.p50 / summary.p99 * 100)}%` }} /></div><div><span>P95</span><strong>{summary.p95}ms</strong><i style={{ width: `${Math.min(100, summary.p95 / summary.p99 * 100)}%` }} /></div><div><span>P99</span><strong>{summary.p99}ms</strong><i style={{ width: '100%' }} /></div></div><small>延迟从请求开始计算至完整响应结束</small></article>
+    </section>
+    <section className="observability-panel observability-table-panel"><header><div><h2>最近 Trace</h2><p>点击记录查看完整请求、响应与步骤耗时</p></div><span className="panel-meta">{visibleTraces.length} 条记录</span></header><div className="table-wrap"><table className="observability-table"><thead><tr><th>Trace ID</th><th>Agent</th><th>会话</th><th>开始时间</th><th>耗时</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visibleTraces.map((trace) => <tr key={trace.id} onClick={() => setSelectedTraceId(trace.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedTraceId(trace.id); }}><td><button className="table-link mono" type="button" onClick={(event) => { event.stopPropagation(); copyTraceId(trace.id); }}>{trace.id}<Copy /></button></td><td><strong>{trace.agentName}</strong><small className="mono">{trace.agentId}</small></td><td className="mono">{trace.conversationId.slice(0, 16)}…</td><td>{trace.startedAt}</td><td className="mono">{trace.duration}</td><td><span className={`trace-status ${trace.status}`}><i />{traceStatusCopy[trace.status]}</span></td><td><ChevronRight /></td></tr>)}</tbody></table>{!visibleTraces.length ? <div className="observability-empty"><Search /><strong>没有匹配的 Trace</strong><span>请调整 Agent 或 Trace / 会话 ID 搜索条件。</span></div> : null}</div></section>
+    <section className="observability-lower-grid">
+      <article className="observability-panel logs-panel"><header><div><h2>脱敏日志</h2><p>仅展示当前账号 Agent 的结构化运行事件</p></div><span className="panel-meta">{visibleLogs.length} 条</span></header><div className="log-list">{visibleLogs.map((log) => <div className="log-row" key={log.id}><time>{log.time}</time><span className={`log-level ${log.level.toLocaleLowerCase()}`}>{log.level}</span><strong>{log.component}</strong><span className="log-event">{log.event}</span><button className="table-link mono" type="button" onClick={() => copyTraceId(log.traceId)}>{log.traceId}<Copy /></button></div>)}{!visibleLogs.length ? <div className="observability-empty compact"><Search /><span>没有匹配的日志</span></div> : null}</div></article>
+      <article className="observability-panel alerts-panel"><header><div><h2>异常告警</h2><p>只展示告警，不支持创建规则</p></div><span className="panel-meta">{visibleAlerts.length} 条</span></header><div className="alert-list">{visibleAlerts.map((alert) => <div className="alert-row" key={alert.id}><span className={`alert-icon ${alert.status}`}><TriangleAlert /></span><div><strong>{alert.summary}</strong><p>{alert.agentName} · 最近发生 {alert.lastSeen}</p><button className="table-link mono" type="button" onClick={() => setSelectedTraceId(alert.traceId)}>{alert.traceId}<ChevronRight /></button></div><div className="alert-actions"><span className={`alert-status ${alert.status}`}>{alertStatusCopy[alert.status]}</span>{alert.status === 'unhandled' ? <button className="text-button" type="button" onClick={() => acknowledgeAlert(alert.id)}>确认</button> : null}</div></div>)}{!visibleAlerts.length ? <div className="observability-empty compact"><Search /><span>没有匹配的告警</span></div> : null}</div></article>
+    </section>
+    {selectedTrace ? <div className="trace-drawer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTraceId(null); }}><aside className="trace-drawer" aria-label="Trace 详情"><header><div><span className={`trace-status ${selectedTrace.status}`}><i />{traceStatusCopy[selectedTrace.status]}</span><h2>Trace 详情</h2><p className="mono">{selectedTrace.id}</p></div><button className="icon-button" type="button" title="关闭 Trace 详情" aria-label="关闭 Trace 详情" onClick={() => setSelectedTraceId(null)}><X /></button></header><div className="trace-drawer-body"><dl className="trace-meta"><div><dt>所属 Agent</dt><dd>{selectedTrace.agentName}</dd></div><div><dt>会话 ID</dt><dd className="mono">{selectedTrace.conversationId}</dd></div><div><dt>开始时间</dt><dd>{selectedTrace.startedAt}</dd></div><div><dt>完整耗时</dt><dd>{selectedTrace.duration}</dd></div><div><dt>输入 Token</dt><dd>{formatTokenCount(selectedTrace.inputTokens)}</dd></div><div><dt>输出 Token</dt><dd>{formatTokenCount(selectedTrace.outputTokens)}</dd></div></dl><section className="trace-steps"><h3>执行步骤</h3>{selectedTrace.steps.map((step) => <div key={step.name}><span className={step.status}><i />{step.status === 'success' ? '完成' : '异常'}</span><strong>{step.name}</strong><small>{step.duration}</small></div>)}</section><section className="trace-payload"><header><h3>请求参数</h3><button className="table-link" type="button" onClick={() => onNotify('请求参数已复制。')}><Copy />复制</button></header><pre>{selectedTrace.request}</pre></section><section className="trace-payload"><header><h3>响应内容</h3><button className="table-link" type="button" onClick={() => onNotify('响应内容已复制。')}><Copy />复制</button></header><pre>{selectedTrace.response}</pre></section><p className="trace-security-note"><ShieldCheck />敏感字段由服务端统一脱敏；此详情不展示 API Key、Token 或密码。</p></div></aside></div> : null}
+  </>;
+}
 
 function RunsPanel() { const runs = [['RUN_20260806_0012', '客服 Agent #1', '每日自动知识库同步', '定时任务', '2026-08-06 09:00', '2分14秒', '成功'], ['RUN_20260806_0011', '数据分析 Agent', 'SQL query: 销售月报', 'user@demo.com', '2026-08-06 08:42', '18秒', '成功'], ['RUN_20260805_0889', '助手 Agent', '工具调用: 发送邮件', '张三', '2026-08-05 18:20', '3秒', '工具异常'], ['RUN_20260805_0888', '客服 Agent #2', '初始化流程', '管理员', '2026-08-05 17:30', '-', '进行中 65%']]; return <div className="table-wrap"><table><thead><tr><th>运行 ID</th><th>智能体</th><th>任务</th><th>触发人</th><th>开始时间</th><th>耗时</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{runs.map((run) => <tr key={run[0]}>{run.map((cell, index) => <td className={index === 0 || index === 5 ? 'mono' : ''} key={`${run[0]}-${cell}`}>{index === 6 ? <span className={`status-pill ${cell === '成功' ? 'running' : cell.includes('进行') ? 'deploying' : 'initializing'}`}><b />{cell}</span> : cell}</td>)}<td><button className="table-button" type="button">Trace</button></td></tr>)}</tbody></table></div>; }
 function SettingsPanel({ onNotify }: { onNotify: (message: string) => void }) { return <div className="settings-grid"><article className="setting-card"><header><span><Cloud /></span><div><h2>模型网关 API Key</h2><p>管理模型提供商与接入凭证。</p></div></header><dl><div><dt>sk-****a1b2</dt><dd>DeepSeek</dd><dd><span className="status-pill running"><b />启用</span></dd></div><div><dt>sk-****c3d4</dt><dd>Anthropic</dd><dd><span className="status-pill running"><b />启用</span></dd></div></dl><button className="button primary" type="button" onClick={() => onNotify('新增密钥仅作前端演示。')}>新增密钥</button></article><article className="setting-card"><header><span className="violet"><GitBranch /></span><div><h2>GitHub 推送部署</h2><p>连接仓库，自动构建并发布 Agent。</p></div></header><dl><div><dt>仓库地址</dt><dd className="mono">agents-workspace</dd></div><div><dt>默认分支</dt><dd>main</dd></div></dl><button className="button secondary" type="button" onClick={() => onNotify('GitHub 连接仅作前端演示。')}>管理配置</button></article></div>; }
