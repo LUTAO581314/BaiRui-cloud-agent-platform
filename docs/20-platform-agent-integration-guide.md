@@ -1,8 +1,13 @@
 # BaiRui Cloud Platform And Agent Integration Guide
 
+> **架构演进（2026-08）**：Agent 运行本体已从自研 Hermes 切换为开源双引擎
+> **pi-agent + deepseek-harness**（见 `27-agent-runtime-template-strategy.md`）。
+> 本文的集成契约**不变**：其中 "Hermes Runtime Core" 由引擎适配层承担，
+> "Hermes public API" 由适配层统一接口替代；系统角色表中的职责边界继续适用。
+
 This is the implementation handoff for the team building the BaiRui Cloud
 Agent Platform. It defines how the cloud platform connects to each user-owned
-`bairui-agent` without taking over Hermes execution or exposing Agent secrets
+agent instance without taking over agent execution or exposing Agent secrets
 to the browser or administrator console.
 
 ## 1. System roles

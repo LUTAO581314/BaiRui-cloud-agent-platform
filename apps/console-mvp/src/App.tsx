@@ -261,19 +261,19 @@ const rangeAxisLabels: Record<DashboardRange, string[]> = {
 };
 
 const templates: Template[] = [
-  { name: '客服助手', description: '多轮对话 + 工单流转，自动转接人工，支持企业知识库检索', tags: ['RAG', '多渠道'], icon: MessageSquare, color: 'blue' },
-  { name: '数据分析 Copilot', description: '连接 MySQL / ClickHouse，自然语言生成 SQL 与图表', tags: ['SQL', 'Tool'], icon: Activity, color: 'violet' },
-  { name: '内容创作 Agent', description: '文案撰写、AIGC 配图、多语言翻译与 SEO 优化', tags: ['AIGC'], icon: FileCode2, color: 'orange' },
-  { name: '代码审查助手', description: '接入 GitHub PR，自动扫漏洞 + 生成代码审查意见', tags: ['DevOps'], icon: Code2, color: 'green' },
-  { name: 'HR 招聘助理', description: 'JD 发布、简历解析、自动邀约面试、候选人评分', tags: ['HR', 'RAG'], icon: Users, color: 'cyan' },
-  { name: '运维 SRE Copilot', description: '告警聚合分析、根因定位、runbook 自动化执行', tags: ['SRE', 'Tool'], icon: TriangleAlert, color: 'red' },
+  { name: '客服助手', description: 'DeepSeek Harness 对话型，多轮对话 + 工单流转，自动转接人工，支持企业知识库检索', tags: ['dsh', 'RAG'], icon: MessageSquare, color: 'blue' },
+  { name: '数据分析 Copilot', description: '连接 MySQL / ClickHouse，自然语言生成 SQL 与图表，pi 原语驱动', tags: ['pi', 'SQL'], icon: Activity, color: 'violet' },
+  { name: '内容创作 Agent', description: '文案撰写、AIGC 配图、多语言翻译与 SEO 优化', tags: ['dsh', 'AIGC'], icon: FileCode2, color: 'orange' },
+  { name: '代码审查助手', description: '接入 GitHub PR，自动扫漏洞 + 生成代码审查意见，pi 沙箱执行', tags: ['pi', 'DevOps'], icon: Code2, color: 'green' },
+  { name: 'HR 招聘助理', description: 'JD 发布、简历解析、自动邀约面试、候选人评分', tags: ['dsh', 'RAG'], icon: Users, color: 'cyan' },
+  { name: '运维 SRE Copilot', description: '告警聚合分析、根因定位、runbook 自动化执行', tags: ['pi', 'SRE'], icon: TriangleAlert, color: 'red' },
 ];
 
 const frameworks: Template[] = [
-  { name: 'OpenAI Agents SDK', description: '官方 Agents SDK，function calling + handoff 原生支持', tags: ['官方'], icon: Bot, color: 'green' },
-  { name: 'LangGraph', description: '图编排循环工作流，支持状态持久化与人机协同', tags: ['Python', 'TS'], icon: GitBranch, color: 'blue' },
-  { name: 'CrewAI', description: '角色扮演多 Agent 协作，process + task 建模', tags: ['Python'], icon: Users, color: 'orange' },
-  { name: 'Claude Tools', description: 'Anthropic 原生工具调用，长上下文稳定可靠', tags: ['Anthropic'], icon: Sparkles, color: 'violet' },
+  { name: 'DeepSeek Harness', description: 'DeepSeek 开源 Agent Harness，一切皆插件，preset 模板一键组合', tags: ['运行本体'], icon: Bot, color: 'green' },
+  { name: 'pi-agent', description: '工具原语型 Agent 运行时，read / write / edit / bash 核心工具', tags: ['运行本体'], icon: Terminal, color: 'blue' },
+  { name: 'OpenAI Agents SDK', description: '官方 Agents SDK，function calling + handoff 原生支持', tags: ['开发框架'], icon: Sparkles, color: 'violet' },
+  { name: 'LangGraph', description: '图编排循环工作流，支持状态持久化与人机协同', tags: ['开发框架'], icon: GitBranch, color: 'orange' },
 ];
 
 const MOCK_AGENTS: Agent[] = [

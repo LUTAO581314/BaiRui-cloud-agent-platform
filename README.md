@@ -7,14 +7,17 @@ It is aligned with the framework defined in
 
 - five business layers in the agent framework;
 - one cross-cutting Bairui Control Plane;
-- Hermes Agent as the Core Runtime Layer;
-- Bairui Runtime Boundary as the platform adapter around Hermes;
-- OpenClaw as a service integration candidate/reference;
+- open-source agent runtimes (`pi-agent` and `deepseek-harness`) as the
+  runtime layer, driven by an agent template system;
+- Bairui Runtime Boundary as the platform adapter around the agent runtimes;
 - BaiLongma as a channel and UI reference.
 
-This repository does not own the Hermes runtime. It owns the cloud platform,
-customer delivery, license, deployment, server-agent, and platform-to-control
-plane contracts.
+This repository does not own the agent runtimes (pi-agent, deepseek-harness,
+or the legacy Hermes). It owns the cloud platform, agent templates, customer
+delivery, license, deployment, server-agent, and platform-to-control plane
+contracts. See
+[`docs/27-agent-runtime-template-strategy.md`](docs/27-agent-runtime-template-strategy.md)
+for the runtime engine and agent template design.
 
 The cross-team implementation contract is documented in
 `docs/20-platform-agent-integration-guide.md`. Platform work must preserve its
@@ -59,10 +62,10 @@ identity, data-plane, control-plane, memory, and administrator boundaries.
 
 ```mermaid
 flowchart LR
-  Platform["BaiRui Cloud Agent Platform<br/>website, console, license, deployment, support"]
+  Platform["BaiRui Cloud Agent Platform<br/>website, console, templates, license, deployment, support"]
   CP["Bairui Control Plane<br/>desired state, operations, health, tests, releases"]
-  Boundary["Bairui Runtime Boundary<br/>platform adapter around Hermes"]
-  Hermes["Hermes Runtime Core<br/>agent runtime"]
+  Boundary["Bairui Runtime Boundary<br/>engine adapter around agent runtimes"]
+  Engine["Agent Runtimes<br/>pi-agent / deepseek-harness"]
   ServerAgent["Customer Server Agent<br/>outbound observation and approved operations"]
   Customer["Customer Server / VM"]
 
@@ -71,8 +74,8 @@ flowchart LR
   ServerAgent -->|"observations, command evidence, acceptance metadata"| Platform
   Platform -->|"platform heartbeat ingestion"| CP
   CP -->|"release gates, dependency inventory, readiness state"| Platform
-  Platform -->|"tenant, license, workspace, deployment config"| Boundary
-  Boundary --> Hermes
+  Platform -->|"tenant, license, workspace, template manifest"| Boundary
+  Boundary -->|"spawn / health / route per agent_id"| Engine
 ```
 
 ## Current Deployable Boundaries
@@ -125,7 +128,7 @@ and preserves the previous release for rollback:
 curl -fsSL https://github.com/LUTAO581314/BaiRui-cloud-agent-platform/releases/download/v0.1.0-rc.7/install.sh | sudo bash -s -- --domain agent.example.com
 ```
 
-The release manifest binds Platform, Runtime, Hermes, PostgreSQL and Caddy by
+The release manifest binds Platform, Runtime, the agent engine images, PostgreSQL and Caddy by
 digest. Source checkout and `docker compose --build` are development paths and
 must not be used as production release evidence. See
 [`distribution/README.md`](distribution/README.md) for the distribution model
@@ -148,8 +151,8 @@ Run the full release flow:
 BAIRUI_LICENSE_PRIVATE_KEY="<protected PEM>" npm run delivery:release -- --organization-id=org_demo --license-id=lic_demo --server-id=srv_demo --platform-url=https://platform.example.com --plan=business --expires-at=2030-01-01T00:00:00.000Z --out=./tmp/delivery/org_demo-srv_demo
 ```
 
-Run customer-server acceptance after Hermes and server-agent environment files
-are installed:
+Run customer-server acceptance after the agent engine and server-agent
+environment files are installed:
 
 ```sh
 npm run server-agent:acceptance

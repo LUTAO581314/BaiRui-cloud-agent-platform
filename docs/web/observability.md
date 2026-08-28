@@ -46,4 +46,4 @@
 
 ## 参考与安全
 
-信息架构参考 `docs/platform-overview(优化版).html` 的“全链路可观测”页面，以及 `docs/HERMES_FRONTEND_CAPABILITY_MAP.md` 中的用户侧 `usage`、`diagnostics`、`redacted logs` 和 `health summaries` 范围。所有视觉实现遵循 `apps/console-mvp/DESIGN.md`，图标统一使用 Lucide Icons。
+信息架构参考 `docs/platform-overview(优化版).html` 的"全链路可观测"页面，以及用户侧 `usage`、`diagnostics`、`redacted logs` 和 `health summaries` 范围。所有视觉实现遵循 `apps/console-mvp/DESIGN.md`，图标统一使用 Lucide Icons。
